@@ -100,12 +100,15 @@ export const ImageVariationGallery: React.FC<ImageVariationGalleryProps> = ({
       {variations.length > 1 && (
         <div>
           <p className="text-sm font-medium mb-3">All Variations ({variations.length})</p>
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 gap-4">
+          <div
+            className="flex gap-4 overflow-x-auto snap-x snap-mandatory pb-2 sm:grid sm:grid-cols-3 sm:overflow-x-visible sm:snap-none sm:pb-0"
+            style={{ WebkitOverflowScrolling: 'touch' }}
+          >
             {variations.map((variation, index) => (
               <Card
                 key={variation.id}
                 className={cn(
-                  'cursor-pointer transition-all hover:shadow-md',
+                  'cursor-pointer transition-all hover:shadow-md shrink-0 w-[45%] snap-center sm:w-auto sm:shrink',
                   selectedVariation === variation.id && 'ring-2 ring-primary ring-offset-2'
                 )}
                 onClick={() => setSelectedVariation(variation.id)}

@@ -27,6 +27,9 @@ pytest-asyncio>=0.23.6
 Pillow
 stripe
 httpx==0.28.1
+google-api-python-client
+google-auth
+pydantic[email]
 
 # --- Landing Page Animation Packages (Frontend - managed by npm, not pip) ---
 # These are JavaScript packages defined in package.json:

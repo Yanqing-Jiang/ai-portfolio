@@ -167,9 +167,10 @@ interface SuggestionPopupProps {
     isVisible: boolean;
     onSelect: (text: string) => void;
     onClose: () => void;
+    isMobile?: boolean;
 }
 
-function SuggestionPopup({ isVisible, onSelect, onClose }: SuggestionPopupProps) {
+function SuggestionPopup({ isVisible, onSelect, onClose, isMobile = false }: SuggestionPopupProps) {
     return (
         <AnimatePresence>
             {isVisible && (
@@ -178,7 +179,10 @@ function SuggestionPopup({ isVisible, onSelect, onClose }: SuggestionPopupProps)
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     exit={{ opacity: 0, y: 20, scale: 0.95 }}
                     transition={{ type: 'spring', stiffness: 400, damping: 30 }}
-                    className="absolute bottom-full left-0 right-0 mb-3 p-4 rounded-2xl"
+                    className={isMobile
+                        ? "fixed bottom-0 left-0 right-0 p-4 rounded-t-2xl z-50 pb-[env(safe-area-inset-bottom,16px)]"
+                        : "absolute bottom-full left-0 right-0 mb-3 p-4 rounded-2xl"
+                    }
                     style={{
                         backgroundColor: theme.colors.bg.secondary,
                         border: `1px solid ${theme.colors.border.medium}`,
@@ -984,7 +988,7 @@ export function GenerativeUIPage(): React.ReactElement {
 
                 {/* Main Content - Split Screen */}
 
-                <div className="relative z-10 flex flex-col min-h-screen overflow-hidden">
+                <div className="relative z-10 flex flex-col min-h-[100dvh] overflow-hidden">
                     {showA2UISeoSummary && (
                         <section className="px-4 sm:px-8 pt-10 pb-6 max-w-6xl mx-auto space-y-4 text-slate-100">
                             <div className="flex flex-wrap items-start gap-4 justify-between">
@@ -1175,65 +1179,69 @@ export function GenerativeUIPage(): React.ReactElement {
 
                                             <div className="absolute inset-0 pointer-events-none overflow-hidden">
 
-                                                {/* Gradient Orbs */}
+                                                {/* Gradient Orbs — reduced on mobile */}
 
-                                                <motion.div
+                                                {!isMobile && (
+                                                    <>
+                                                        <motion.div
 
-                                                    className="absolute top-1/4 left-1/4 w-[500px] h-[500px] rounded-full"
+                                                            className="absolute top-1/4 left-1/4 w-[500px] h-[500px] rounded-full"
 
-                                                    animate={{
+                                                            animate={{
 
-                                                        x: [0, 50, 0, -50, 0],
+                                                                x: [0, 50, 0, -50, 0],
 
-                                                        y: [0, -30, 0, 30, 0],
+                                                                y: [0, -30, 0, 30, 0],
 
-                                                        scale: [1, 1.1, 1, 0.9, 1],
+                                                                scale: [1, 1.1, 1, 0.9, 1],
 
-                                                    }}
+                                                            }}
 
-                                                    transition={{ duration: 20, repeat: Infinity, ease: "easeInOut" }}
+                                                            transition={{ duration: 20, repeat: Infinity, ease: "easeInOut" }}
 
-                                                    style={{
+                                                            style={{
 
-                                                        background: 'radial-gradient(circle, rgba(244, 63, 94, 0.15) 0%, transparent 70%)',
+                                                                background: 'radial-gradient(circle, rgba(244, 63, 94, 0.15) 0%, transparent 70%)',
 
-                                                        filter: 'blur(80px)',
+                                                                filter: 'blur(80px)',
 
-                                                    }}
+                                                            }}
 
-                                                />
+                                                        />
 
-                                                <motion.div
+                                                        <motion.div
 
-                                                    className="absolute bottom-1/4 right-1/4 w-[400px] h-[400px] rounded-full"
+                                                            className="absolute bottom-1/4 right-1/4 w-[400px] h-[400px] rounded-full"
 
-                                                    animate={{
+                                                            animate={{
 
-                                                        x: [0, -40, 0, 40, 0],
+                                                                x: [0, -40, 0, 40, 0],
 
-                                                        y: [0, 40, 0, -40, 0],
+                                                                y: [0, 40, 0, -40, 0],
 
-                                                        scale: [1, 0.9, 1, 1.1, 1],
+                                                                scale: [1, 0.9, 1, 1.1, 1],
 
-                                                    }}
+                                                            }}
 
-                                                    transition={{ duration: 15, repeat: Infinity, ease: "easeInOut" }}
+                                                            transition={{ duration: 15, repeat: Infinity, ease: "easeInOut" }}
 
-                                                    style={{
+                                                            style={{
 
-                                                        background: 'radial-gradient(circle, rgba(245, 158, 11, 0.12) 0%, transparent 70%)',
+                                                                background: 'radial-gradient(circle, rgba(245, 158, 11, 0.12) 0%, transparent 70%)',
 
-                                                        filter: 'blur(60px)',
+                                                                filter: 'blur(60px)',
 
-                                                    }}
+                                                            }}
 
-                                                />
+                                                        />
+                                                    </>
+                                                )}
 
 
 
-                                                {/* Floating Particles */}
+                                                {/* Floating Particles — fewer on mobile */}
 
-                                                {[...Array(12)].map((_, i) => (
+                                                {[...Array(isMobile ? 4 : 12)].map((_, i) => (
 
                                                     <motion.div
 
@@ -1528,6 +1536,20 @@ export function GenerativeUIPage(): React.ReactElement {
                                                                                 });
                                                                             }}
                                                                             onMouseLeave={() => setActiveTooltip(null)}
+                                                                            onClick={(e) => {
+                                                                                // Tap-to-toggle for touch devices
+                                                                                if (activeTooltip?.content === tag.desc) {
+                                                                                    setActiveTooltip(null);
+                                                                                } else {
+                                                                                    const rect = e.currentTarget.getBoundingClientRect();
+                                                                                    setActiveTooltip({
+                                                                                        x: rect.left + rect.width / 2,
+                                                                                        y: rect.top,
+                                                                                        content: tag.desc,
+                                                                                        color: tag.color
+                                                                                    });
+                                                                                }
+                                                                            }}
                                                                             className={`inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-sm font-medium border transition-all cursor-default whitespace-nowrap ${colors.bg} ${colors.text} ${colors.border} ${colors.hoverBg} ${colors.hoverBorder}`}
                                                                         >
                                                                             {tag.label}
@@ -2576,7 +2598,7 @@ export function GenerativeUIPage(): React.ReactElement {
                     {/* Chat Input Area (30%) */}
                     <div
                         className="flex-shrink-0 p-4 sm:p-6"
-                        style={{ minHeight: '200px', maxHeight: '45%' }}
+                        style={{ minHeight: isMobile ? '120px' : '200px', maxHeight: isMobile ? '35%' : '45%' }}
                     >
                         <div
                             className="h-full rounded-2xl p-4 sm:p-6 flex flex-col relative"
@@ -2586,11 +2608,12 @@ export function GenerativeUIPage(): React.ReactElement {
                                 backdropFilter: 'blur(16px)',
                             }}
                         >
-                            {/* Suggestion Popup */}
+                            {/* Suggestion Popup — renders as bottom sheet on mobile */}
                             <SuggestionPopup
                                 isVisible={showSuggestions && !question}
                                 onSelect={handleSuggestion}
                                 onClose={() => setShowSuggestions(false)}
+                                isMobile={isMobile}
                             />
 
                             {/* Input Row */}

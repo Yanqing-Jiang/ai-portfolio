@@ -498,20 +498,26 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
         {/* Assistant message */}
         {!isUser && (
           <div className="space-y-4">
-            {/* Agent Process Flow (Inline) */}
+            {/* Agent Process Flow (Inline) — collapsible on mobile */}
             {processNodes && processNodes.length > 0 && (
-              <ProcessPanel
-                mode="inline"
-                isStreaming={!!isStreaming}
-                processNodes={processNodes}
-                processEdges={processEdges || []}
-                activeAgent={activeAgent || null}
-                agentMode={agentMode || 'single'}
-                skillInfo={skillInfo}
-                debugLogs={debugLogs || []}
-                runId={runId}
-                permissionState={permissionState}
-              />
+              <details className="group" open>
+                <summary className="sm:hidden cursor-pointer text-xs text-blue-400 font-medium py-1 list-none flex items-center gap-1">
+                  <span className="group-open:rotate-90 transition-transform">▶</span>
+                  Show agent process ({processNodes.length} steps)
+                </summary>
+                <ProcessPanel
+                  mode="inline"
+                  isStreaming={!!isStreaming}
+                  processNodes={processNodes}
+                  processEdges={processEdges || []}
+                  activeAgent={activeAgent || null}
+                  agentMode={agentMode || 'single'}
+                  skillInfo={skillInfo}
+                  debugLogs={debugLogs || []}
+                  runId={runId}
+                  permissionState={permissionState}
+                />
+              </details>
             )}
 
             {/* TradingView Widget */}

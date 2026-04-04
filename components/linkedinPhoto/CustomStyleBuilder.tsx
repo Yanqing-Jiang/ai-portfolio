@@ -170,12 +170,12 @@ export const CustomStyleBuilder: React.FC<CustomStyleBuilderProps> = ({
   };
 
   return (
-    <div className="space-y-8 p-6 bg-gray-50 rounded-xl border border-gray-200">
+    <div className="space-y-8 p-6 bg-muted/50 rounded-xl border border-border">
       <div className="text-center mb-4">
-        <h3 className="text-lg font-semibold text-gray-900 mb-1">
+        <h3 className="text-lg font-semibold text-foreground mb-1">
           Customize Your Professional Headshot
         </h3>
-        <p className="text-sm text-gray-600">
+        <p className="text-sm text-muted-foreground">
           Select options below to guide the style (all optional)
         </p>
       </div>
@@ -183,8 +183,8 @@ export const CustomStyleBuilder: React.FC<CustomStyleBuilderProps> = ({
       {/* Clothing Style Section */}
       <div className="space-y-3">
         <div className="flex items-center gap-2">
-          <Shirt className="w-5 h-5 text-gray-700" />
-          <h4 className="font-semibold text-gray-900">Clothing Style</h4>
+          <Shirt className="w-5 h-5 text-muted-foreground" />
+          <h4 className="font-semibold text-foreground">Clothing Style</h4>
           {params.clothing && (
             <button
               onClick={() => onChange({ ...params, clothing: null })}
@@ -211,8 +211,8 @@ export const CustomStyleBuilder: React.FC<CustomStyleBuilderProps> = ({
       {/* Expression Section */}
       <div className="space-y-3">
         <div className="flex items-center gap-2">
-          <Smile className="w-5 h-5 text-gray-700" />
-          <h4 className="font-semibold text-gray-900">Expression</h4>
+          <Smile className="w-5 h-5 text-muted-foreground" />
+          <h4 className="font-semibold text-foreground">Expression</h4>
           {params.expression && (
             <button
               onClick={() => onChange({ ...params, expression: null })}
@@ -239,8 +239,8 @@ export const CustomStyleBuilder: React.FC<CustomStyleBuilderProps> = ({
       {/* Background Section */}
       <div className="space-y-3">
         <div className="flex items-center gap-2">
-          <Image className="w-5 h-5 text-gray-700" />
-          <h4 className="font-semibold text-gray-900">Background</h4>
+          <Image className="w-5 h-5 text-muted-foreground" />
+          <h4 className="font-semibold text-foreground">Background</h4>
           {params.background && (
             <button
               onClick={() => onChange({ ...params, background: null })}
@@ -267,8 +267,8 @@ export const CustomStyleBuilder: React.FC<CustomStyleBuilderProps> = ({
       {/* Pose Section */}
       <div className="space-y-3">
         <div className="flex items-center gap-2">
-          <User className="w-5 h-5 text-gray-700" />
-          <h4 className="font-semibold text-gray-900">Pose</h4>
+          <User className="w-5 h-5 text-muted-foreground" />
+          <h4 className="font-semibold text-foreground">Pose</h4>
           {params.pose && (
             <button
               onClick={() => onChange({ ...params, pose: null })}

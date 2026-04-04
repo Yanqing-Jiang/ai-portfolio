@@ -13,6 +13,7 @@ import Sidebar from './components/SidebarV2';
 import ProjectView from './components/ProjectView';
 import LandingPageFlow from './components/LandingPageFlow';
 import { GenerativeUIPage } from './components/generativeUiDashboard';
+import { ConsultingPage } from './components/consulting/ConsultingPage';
 
 import { PROJECT_DATA } from './constants';
 import type { Project } from './types';
@@ -132,7 +133,7 @@ const Layout: React.FC = () => {
   };
 
   return (
-    <div className="flex h-screen bg-[#010208] text-white font-sans overflow-hidden">
+    <div className="flex h-[100dvh] bg-[#010208] text-white font-sans overflow-hidden">
       <Sidebar
         isSidebarOpen={isSidebarOpen}
         projectData={PROJECT_DATA}
@@ -142,7 +143,8 @@ const Layout: React.FC = () => {
       />
 
       <div className="relative flex-1 flex flex-col min-w-0 transition-all duration-500 ease-in-out">
-        {/* Sidebar toggle button - responsive positioning */}
+        {/* Sidebar toggle button - hidden on /consult page */}
+        {location.pathname !== '/consult' && (
         <button
           onClick={() => {
             setIsSidebarOpen(!isSidebarOpen);
@@ -158,10 +160,11 @@ const Layout: React.FC = () => {
                      ${isSidebarOpen ? 'left-[19rem] sm:left-[23rem] md:left-[19rem]' : 'left-6'}`}
         >
           {isSidebarOpen ? <ChevronLeftIcon /> : <ChevronRightIcon />}
-        </button>
+        </button>)
+}
 
         {/* Sidebar hint tooltip with premium animated arrow - shows once */}
-        {showSidebarHint && !isSidebarOpen && (
+        {showSidebarHint && !isSidebarOpen && location.pathname !== '/consult' && (
           <div className="fixed top-4 left-[64px] z-50 flex items-center gap-4 animate-fade-in pointer-events-none">
             {/* Premium Stylish Arrow */}
             <div className="relative flex items-center animate-bounce-horizontal">
@@ -209,6 +212,7 @@ const Layout: React.FC = () => {
 
 
             <Route path="/project/:projectId" element={<ProjectRoute />} />
+            <Route path="/consult" element={<ConsultingPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
 

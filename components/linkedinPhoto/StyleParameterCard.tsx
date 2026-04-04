@@ -32,8 +32,8 @@ export const StyleParameterCard: React.FC<StyleParameterCardProps> = ({
         focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2
         ${
           selected
-            ? 'border-blue-500 bg-blue-50 shadow-sm'
-            : 'border-gray-200 bg-white hover:border-gray-300'
+            ? 'border-blue-500 bg-blue-50 dark:bg-blue-950 shadow-sm'
+            : 'border-border bg-card hover:border-muted-foreground/30'
         }
       `}
       type="button"
@@ -53,14 +53,14 @@ export const StyleParameterCard: React.FC<StyleParameterCardProps> = ({
 
       {/* Title */}
       <div className={`font-semibold text-sm mb-1 text-center ${
-        selected ? 'text-blue-700' : 'text-gray-900'
+        selected ? 'text-blue-700 dark:text-blue-300' : 'text-foreground'
       }`}>
         {title}
       </div>
 
       {/* Description */}
       <div className={`text-xs text-center ${
-        selected ? 'text-blue-600' : 'text-gray-500'
+        selected ? 'text-blue-600 dark:text-blue-400' : 'text-muted-foreground'
       }`}>
         {description}
       </div>

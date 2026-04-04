@@ -1,10 +1,10 @@
 import asyncio
 import logging
-from typing import Any, Dict, List, Tuple, Optional
+from typing import Any, Dict, List, Literal, Tuple, Optional
 from fastapi import FastAPI, Request, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, Response, JSONResponse, FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr, Field
 from pathlib import Path
 import os
 from dotenv import load_dotenv
@@ -56,6 +56,58 @@ PAYPAL_CLIENT_SECRET = os.getenv("PAYPAL_CLIENT_SECRET")
 PAYPAL_WEBHOOK_ID = os.getenv("PAYPAL_WEBHOOK_ID")
 PAYPAL_ENV = os.getenv("PAYPAL_ENV", "sandbox").lower()
 PAYPAL_TOKEN_UNITS = int(os.getenv("PAYPAL_TOKEN_UNITS", "100"))
+
+# Booking / consulting configuration
+STRIPE_PRICE_30MIN = os.getenv("STRIPE_PRICE_30MIN", "")
+STRIPE_PRICE_60MIN = os.getenv("STRIPE_PRICE_60MIN", "")
+STRIPE_BOOKING_WEBHOOK_SECRET = os.getenv("STRIPE_BOOKING_WEBHOOK_SECRET", "")
+SITE_ORIGIN = os.getenv("SITE_ORIGIN", "https://yanqing.app")
+SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL", "")
+BOOKING_PRICE_MAP = {
+    "30": STRIPE_PRICE_30MIN,
+    "60": STRIPE_PRICE_60MIN,
+}
+BOOKING_AMOUNT_CENTS = {
+    "30": 5000,   # $50
+    "60": 9000,   # $90
+}
+
+from calendar_service import get_available_slots, create_booking_event
+from telegram_service import send_booking_notification
+
+# Booking DB pool (shares SUPABASE_DB_URL with token_store)
+_booking_pool: Optional[Any] = None
+_booking_pool_lock = asyncio.Lock()
+
+
+async def _get_booking_pool():
+    """Get or create the asyncpg connection pool for bookings table."""
+    global _booking_pool
+    if _booking_pool is not None:
+        return _booking_pool
+    if not SUPABASE_DB_URL:
+        logger.warning("[BOOKING] SUPABASE_DB_URL not configured — booking persistence disabled")
+        return None
+    async with _booking_pool_lock:
+        if _booking_pool is not None:
+            return _booking_pool
+        try:
+            import asyncpg
+            import ssl as _ssl
+            ssl_ctx = _ssl.create_default_context()
+            _booking_pool = await asyncpg.create_pool(
+                SUPABASE_DB_URL,
+                min_size=1,
+                max_size=5,
+                ssl=ssl_ctx,
+                statement_cache_size=0,  # pgbouncer compatibility
+            )
+            logger.info("[BOOKING] Database pool initialized")
+            return _booking_pool
+        except Exception as exc:
+            logger.error("[BOOKING] Database pool creation failed: %s", exc)
+            return None
+
 
 def _extract_user_uuid(identifier: str) -> Optional[str]:
     if identifier.startswith("user:"):
@@ -369,6 +421,26 @@ class TokenSpendRequest(BaseModel):
     amount: int
     reference_id: Optional[str] = None
     source: Optional[str] = None
+
+
+# Booking / consulting models
+class BookingCheckoutRequest(BaseModel):
+    session_type: Literal["30", "60"]
+    slot_start: str  # ISO 8601 with timezone
+    name: str = Field(..., min_length=1, max_length=100)
+    email: EmailStr
+    notes: Optional[str] = Field(None, max_length=500)
+
+
+class BookingSlot(BaseModel):
+    start: str
+    end: str
+
+
+class BookingSlotsResponse(BaseModel):
+    slots: list[BookingSlot]
+    timezone: str
+
 
 # In-memory chat sessions storage
 chat_sessions = {}
@@ -1605,6 +1677,446 @@ async def analytics_memory_clarify_endpoint(answer: ClarifyAnswerModel, _: None 
     except Exception as e:
         logger.error(f"[ANALYTICS_MEMORY] Clarification handling failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# Booking / Consulting Endpoints
+# ---------------------------------------------------------------------------
+# NOTE: Rate limiting needed on /api/booking/slots (30 req/min) and
+# /api/booking/checkout (5 req/min). Add when rate_limiter supports
+# endpoint-specific limits without auth.
+
+# SQL for bookings table (run once in Supabase SQL editor):
+# ----------------------------------------------------------------
+# CREATE TABLE bookings (
+#     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+#     stripe_session_id TEXT UNIQUE NOT NULL,
+#     stripe_event_id TEXT,
+#     session_type TEXT NOT NULL CHECK (session_type IN ('30', '60')),
+#     slot_start TIMESTAMPTZ NOT NULL,
+#     slot_end TIMESTAMPTZ NOT NULL,
+#     client_name TEXT NOT NULL,
+#     client_email TEXT NOT NULL,
+#     notes TEXT,
+#     status TEXT NOT NULL DEFAULT 'hold' CHECK (status IN (
+#         'hold', 'confirmed', 'calendar_failed', 'expired', 'cancelled', 'refunded'
+#     )),
+#     calendar_event_id TEXT,
+#     meet_link TEXT,
+#     amount_cents INTEGER NOT NULL,
+#     created_at TIMESTAMPTZ DEFAULT NOW(),
+#     updated_at TIMESTAMPTZ DEFAULT NOW(),
+#     UNIQUE(slot_start) WHERE (status IN ('hold', 'confirmed'))
+# );
+# CREATE INDEX idx_bookings_slot ON bookings (slot_start, status);
+# CREATE INDEX idx_bookings_stripe ON bookings (stripe_session_id);
+# ----------------------------------------------------------------
+
+
+@app.get("/api/booking/slots")
+async def get_booking_slots(date: str, session_type: str = "30"):
+    """Return available booking slots for a given date.
+
+    Queries Google Calendar freebusy API and checks Supabase bookings table
+    for existing holds/confirmed bookings. Returns available 30-min slot
+    boundaries.
+
+    Query param `date`: YYYY-MM-DD format.
+    Query param `session_type`: '30' or '60' (default '30').
+    """
+    from datetime import date as date_type
+    from calendar_service import BOOKING_TIMEZONE
+
+    if session_type not in ("30", "60"):
+        raise HTTPException(status_code=400, detail="session_type must be '30' or '60'.")
+
+    # Parse date
+    try:
+        target_date = date_type.fromisoformat(date)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD.")
+
+    # Don't allow booking too far in the future (90 days) or in the past
+    today = date_type.today()
+    if target_date < today:
+        raise HTTPException(status_code=400, detail="Cannot book dates in the past.")
+    if (target_date - today).days > 90:
+        raise HTTPException(status_code=400, detail="Cannot book more than 90 days in advance.")
+
+    # Get slots from Google Calendar
+    try:
+        slots = await get_available_slots(target_date, session_type)
+    except Exception as exc:
+        logger.error("[BOOKING] Failed to get available slots: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to retrieve availability.")
+
+    # Filter out slots that have holds or confirmed bookings in Supabase
+    pool = await _get_booking_pool()
+    if pool is not None:
+        try:
+            # Expire stale holds first (lazy cleanup)
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    UPDATE bookings
+                    SET status = 'expired', updated_at = NOW()
+                    WHERE status = 'hold'
+                      AND created_at < NOW() - INTERVAL '30 minutes'
+                    """
+                )
+
+                # Get all held/confirmed slot_starts for this date
+                from zoneinfo import ZoneInfo
+                tz = ZoneInfo(BOOKING_TIMEZONE)
+                day_start = _DateTime(
+                    target_date.year, target_date.month, target_date.day,
+                    0, 0, 0, tzinfo=tz,
+                )
+                day_end = _DateTime(
+                    target_date.year, target_date.month, target_date.day,
+                    23, 59, 59, tzinfo=tz,
+                )
+                rows = await conn.fetch(
+                    """
+                    SELECT slot_start, slot_end
+                    FROM bookings
+                    WHERE status IN ('hold', 'confirmed')
+                      AND slot_start >= $1
+                      AND slot_start <= $2
+                    """,
+                    day_start, day_end,
+                )
+
+                booked_starts = set()
+                for row in rows:
+                    booked_starts.add(row["slot_start"].isoformat())
+
+                # Remove slots whose start time matches a booked slot
+                slots = [
+                    s for s in slots
+                    if s["start"] not in booked_starts
+                ]
+        except Exception as exc:
+            logger.error("[BOOKING] DB slot check failed (returning calendar-only slots): %s", exc)
+
+    return BookingSlotsResponse(
+        slots=[BookingSlot(**s) for s in slots],
+        timezone=BOOKING_TIMEZONE,
+    )
+
+
+@app.post("/api/booking/checkout")
+async def create_booking_checkout(req: BookingCheckoutRequest):
+    """Create a Stripe Checkout Session for a consulting booking.
+
+    Server-side pricing: maps session_type to Stripe Price ID.
+    Revalidates slot availability before creating hold.
+    Inserts hold row into Supabase bookings table.
+    Returns Stripe Checkout redirect URL.
+    """
+    if stripe is None or not STRIPE_SECRET_KEY:
+        raise HTTPException(status_code=503, detail="Stripe payments not configured.")
+
+    price_id = BOOKING_PRICE_MAP.get(req.session_type)
+    if not price_id:
+        raise HTTPException(status_code=503, detail=f"Stripe price not configured for {req.session_type}min sessions.")
+
+    amount_cents = BOOKING_AMOUNT_CENTS.get(req.session_type, 0)
+
+    # Parse and validate slot_start
+    try:
+        slot_start = _DateTime.fromisoformat(req.slot_start)
+        if slot_start.tzinfo is None:
+            raise ValueError("Timezone required")
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid slot_start: {exc}")
+
+    # Validate slot is in the future
+    if slot_start <= _DateTime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="Cannot book a slot in the past.")
+
+    # Compute slot_end
+    duration_minutes = 30 if req.session_type == "30" else 60
+    from datetime import timedelta
+    slot_end = slot_start + timedelta(minutes=duration_minutes)
+
+    # Generate booking ID
+    booking_id = str(uuid.uuid4())
+
+    # Insert hold row into Supabase (with conflict check)
+    pool = await _get_booking_pool()
+    stripe_session_id_placeholder = f"pending_{booking_id}"
+
+    if pool is not None:
+        try:
+            async with pool.acquire() as conn:
+                # Expire stale holds first
+                await conn.execute(
+                    """
+                    UPDATE bookings
+                    SET status = 'expired', updated_at = NOW()
+                    WHERE status = 'hold'
+                      AND created_at < NOW() - INTERVAL '30 minutes'
+                    """
+                )
+
+                # Attempt insert — the partial unique index on (slot_start)
+                # WHERE status IN ('hold', 'confirmed') prevents double-booking
+                try:
+                    await conn.execute(
+                        """
+                        INSERT INTO bookings (
+                            id, stripe_session_id, session_type,
+                            slot_start, slot_end, client_name, client_email,
+                            notes, status, amount_cents
+                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'hold', $9)
+                        """,
+                        uuid.UUID(booking_id),
+                        stripe_session_id_placeholder,
+                        req.session_type,
+                        slot_start,
+                        slot_end,
+                        req.name,
+                        req.email,
+                        req.notes,
+                        amount_cents,
+                    )
+                except Exception as db_exc:
+                    # Likely unique constraint violation — slot already taken
+                    logger.warning("[BOOKING] Slot conflict: %s", db_exc)
+                    raise HTTPException(
+                        status_code=409,
+                        detail="This time slot is no longer available. Please choose another.",
+                    )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.error("[BOOKING] DB insert failed: %s", exc)
+            raise HTTPException(status_code=500, detail="Booking system error. Please try again.")
+    else:
+        logger.warning("[BOOKING] No database — proceeding without hold (dev mode)")
+
+    # Create Stripe Checkout Session
+    try:
+        session = stripe.checkout.Session.create(
+            mode="payment",
+            line_items=[{"price": price_id, "quantity": 1}],
+            expires_at=int(time.time()) + 1800,  # 30 minutes
+            metadata={
+                "booking_id": booking_id,
+                "session_type": req.session_type,
+                "slot_start": req.slot_start,
+                "client_name": req.name,
+                "client_email": req.email,
+            },
+            customer_email=req.email,
+            success_url=f"{SITE_ORIGIN}/consult?status=success&session_id={{CHECKOUT_SESSION_ID}}",
+            cancel_url=f"{SITE_ORIGIN}/consult?cancelled=true",
+        )
+    except Exception as exc:
+        logger.error("[BOOKING] Stripe session creation failed: %s", exc)
+        # Clean up hold if Stripe fails
+        if pool is not None:
+            try:
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        "UPDATE bookings SET status = 'expired', updated_at = NOW() WHERE id = $1",
+                        uuid.UUID(booking_id),
+                    )
+            except Exception:
+                pass
+        raise HTTPException(status_code=500, detail="Payment session creation failed.")
+
+    # Update hold with actual Stripe session ID
+    if pool is not None:
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    UPDATE bookings
+                    SET stripe_session_id = $1, updated_at = NOW()
+                    WHERE id = $2
+                    """,
+                    session.id,
+                    uuid.UUID(booking_id),
+                )
+        except Exception as exc:
+            logger.error("[BOOKING] Failed to update stripe_session_id: %s", exc)
+
+    return JSONResponse(content={"url": session.url})
+
+
+@app.post("/api/booking/webhook")
+async def booking_webhook(request: Request):
+    """Handle Stripe webhook events for booking payments.
+
+    Verifies Stripe signature with STRIPE_BOOKING_WEBHOOK_SECRET.
+    Checks idempotency via stripe_event_id.
+    Transitions hold -> confirmed, creates calendar event, sends Telegram notification.
+    """
+    if stripe is None or not STRIPE_BOOKING_WEBHOOK_SECRET:
+        raise HTTPException(status_code=503, detail="Booking webhook not configured.")
+
+    payload = await request.body()
+    sig_header = request.headers.get("Stripe-Signature")
+    if sig_header is None:
+        raise HTTPException(status_code=400, detail="Missing Stripe-Signature header.")
+
+    try:
+        event = stripe.Webhook.construct_event(payload, sig_header, STRIPE_BOOKING_WEBHOOK_SECRET)
+    except Exception as exc:
+        logger.error("[BOOKING] Invalid webhook signature: %s", exc)
+        raise HTTPException(status_code=400, detail=f"Invalid Stripe webhook: {exc}") from exc
+
+    if event["type"] != "checkout.session.completed":
+        # We only care about completed checkouts for bookings
+        return JSONResponse(content={"received": True})
+
+    session_data = event["data"]["object"]
+    stripe_session_id = session_data.get("id", "")
+    event_id = event.get("id", "")
+    metadata = session_data.get("metadata") or {}
+    booking_id = metadata.get("booking_id", "")
+    session_type = metadata.get("session_type", "30")
+    slot_start_str = metadata.get("slot_start", "")
+    client_name = metadata.get("client_name", "")
+    client_email = metadata.get("client_email", "")
+
+    pool = await _get_booking_pool()
+    if pool is None:
+        logger.error("[BOOKING] No database — cannot process webhook")
+        return JSONResponse(content={"received": True})
+
+    async with pool.acquire() as conn:
+        # Idempotency check: if this event was already processed, return 200
+        existing = await conn.fetchrow(
+            "SELECT id, status FROM bookings WHERE stripe_event_id = $1",
+            event_id,
+        )
+        if existing is not None:
+            logger.info("[BOOKING] Duplicate webhook event %s — already processed", event_id)
+            return JSONResponse(content={"received": True})
+
+        # Find the booking by stripe_session_id
+        booking = await conn.fetchrow(
+            "SELECT id, status, client_name, client_email, session_type, slot_start, notes FROM bookings WHERE stripe_session_id = $1",
+            stripe_session_id,
+        )
+
+        if booking is None:
+            # Booking might have been created with pending_ prefix; try by booking_id
+            if booking_id:
+                try:
+                    booking = await conn.fetchrow(
+                        "SELECT id, status, client_name, client_email, session_type, slot_start, notes FROM bookings WHERE id = $1",
+                        uuid.UUID(booking_id),
+                    )
+                except Exception:
+                    pass
+
+        if booking is None:
+            logger.error("[BOOKING] No booking found for session %s / booking %s", stripe_session_id, booking_id)
+            return JSONResponse(content={"received": True})
+
+        # Transition hold -> confirmed
+        new_status = "confirmed"
+        calendar_event_id = None
+        meet_link = None
+
+        # Try to create calendar event
+        try:
+            slot_dt = booking["slot_start"]
+            if isinstance(slot_dt, str):
+                slot_dt = _DateTime.fromisoformat(slot_dt)
+
+            cal_result = await create_booking_event(
+                session_type=booking["session_type"],
+                slot_start=slot_dt,
+                name=booking["client_name"],
+                email=booking["client_email"],
+                notes=booking.get("notes"),
+            )
+            calendar_event_id = cal_result.get("event_id")
+            meet_link = cal_result.get("meet_link")
+            logger.info("[BOOKING] Calendar event created: %s", calendar_event_id)
+        except Exception as exc:
+            logger.error("[BOOKING] Calendar event creation failed: %s", exc)
+            new_status = "calendar_failed"
+
+        # Update booking status
+        await conn.execute(
+            """
+            UPDATE bookings
+            SET status = $1,
+                stripe_event_id = $2,
+                calendar_event_id = $3,
+                meet_link = $4,
+                updated_at = NOW()
+            WHERE id = $5
+            """,
+            new_status,
+            event_id,
+            calendar_event_id,
+            meet_link,
+            booking["id"],
+        )
+
+    # Send Telegram notification (fire-and-forget)
+    try:
+        await send_booking_notification(
+            name=client_name or booking["client_name"],
+            email=client_email or booking["client_email"],
+            session_type=session_type or booking["session_type"],
+            slot_start=slot_start_str or str(booking["slot_start"]),
+        )
+    except Exception as exc:
+        logger.error("[BOOKING] Telegram notification failed (non-blocking): %s", exc)
+
+    return JSONResponse(content={"received": True})
+
+
+@app.get("/api/booking/confirmation/{stripe_session_id}")
+async def get_booking_confirmation(stripe_session_id: str):
+    """Return booking details for the confirmation page.
+
+    Frontend polls this after Stripe redirect until status != 'hold'.
+    """
+    pool = await _get_booking_pool()
+    if pool is None:
+        raise HTTPException(status_code=503, detail="Booking system not available.")
+
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT
+                id, stripe_session_id, session_type,
+                slot_start, slot_end, client_name, client_email,
+                notes, status, calendar_event_id, meet_link,
+                amount_cents, created_at
+            FROM bookings
+            WHERE stripe_session_id = $1
+            """,
+            stripe_session_id,
+        )
+
+    if row is None:
+        raise HTTPException(status_code=404, detail="Booking not found.")
+
+    return JSONResponse(content={
+        "id": str(row["id"]),
+        "stripe_session_id": row["stripe_session_id"],
+        "session_type": row["session_type"],
+        "slot_start": row["slot_start"].isoformat() if row["slot_start"] else None,
+        "slot_end": row["slot_end"].isoformat() if row["slot_end"] else None,
+        "client_name": row["client_name"],
+        "client_email": row["client_email"],
+        "notes": row["notes"],
+        "status": row["status"],
+        "calendar_event_id": row["calendar_event_id"],
+        "meet_link": row["meet_link"],
+        "amount_cents": row["amount_cents"],
+        "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+    })
 
 
 if __name__ == "__main__":

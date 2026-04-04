@@ -361,6 +361,10 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/h
           tips: data.tips || [],
           processingMs: data.processing_ms || 0,
         });
+        // Auto-scroll scorecard into view on mobile
+        setTimeout(() => {
+          document.querySelector('[data-scorecard]')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }, 100);
       } else {
         console.warn('Photo analysis failed:', response.status);
       }
@@ -827,7 +831,7 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/h
                   <input
                     ref={fileInputRef}
                     type="file"
-                    accept="image/jpeg,image/png"
+                    accept="image/jpeg,image/png,image/*"
                     onChange={handleInputChange}
                     aria-label="Upload photo"
                     className="hidden"
@@ -878,6 +882,7 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/h
                       </div>
                       {/* AI Quality Scorecard */}
                       {analysisResult && (
+                        <div data-scorecard>
                         <PhotoScorecard
                           scores={analysisResult.scores}
                           tips={analysisResult.tips}
@@ -891,13 +896,15 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/h
                             }
                           }}
                         />
+                        </div>
                       )}
                     </div>
                   ) : (
                     <div className="text-center space-y-4">
                       <Upload className="w-14 h-14 mx-auto text-muted-foreground" />
                       <div className="space-y-1">
-                        <p className="font-semibold text-base">Drop your photo here or click to browse</p>
+                        <p className="font-semibold text-base hidden sm:block">Drop your photo here or click to browse</p>
+                        <p className="font-semibold text-base sm:hidden">Tap to take a photo or choose from gallery</p>
                         <p className="text-sm text-muted-foreground">JPEG or PNG, max 8 MB</p>
                       </div>
                     </div>

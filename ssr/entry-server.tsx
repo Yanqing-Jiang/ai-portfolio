@@ -13,6 +13,7 @@ export interface RenderResult {
 
 export const getRoutes = (): string[] => [
   '/',
+  '/consult',
   ...PROJECT_DATA.flatMap((year) => year.projects.map((project) => `/project/${project.id}`)),
 ];
 
@@ -46,6 +47,11 @@ export const getSitemapEntries = (): { pages: SitemapUrl[]; projects: SitemapUrl
       lastModified: toIsoDate(LANDING_SEO.updatedTime),
       changefreq: 'weekly',
       priority: 1.0,
+    },
+    {
+      loc: `${SITE_BASE_URL}/consult`,
+      changefreq: 'monthly',
+      priority: 0.9,
     },
   ];
 

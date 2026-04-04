@@ -108,6 +108,16 @@ const AgentModeToggle: React.FC<{
   onModeChange: (mode: 'single' | 'multi') => void;
 }> = ({ agentMode, onModeChange }) => {
   const [hoveredMode, setHoveredMode] = useState<'single' | 'multi' | null>(null);
+  const [supportsHover, setSupportsHover] = useState(false);
+
+  useEffect(() => {
+    setSupportsHover(window.matchMedia('(hover: hover)').matches);
+  }, []);
+
+  const handleTooltipToggle = (mode: 'single' | 'multi') => {
+    if (supportsHover) return; // hover devices use onMouseEnter/Leave
+    setHoveredMode((prev) => (prev === mode ? null : mode));
+  };
 
   const singleAgentTraits = [
     { icon: '🔗', text: 'Linear Thought Process' },
@@ -153,14 +163,15 @@ const AgentModeToggle: React.FC<{
           transition={{ type: 'spring', stiffness: 300, damping: 30 }}
         />
 
-        {/* Single Agent Button with hover wrapper */}
+        {/* Single Agent Button with hover/tap wrapper */}
         <div
           className="relative"
-          onMouseEnter={() => setHoveredMode('single')}
-          onMouseLeave={() => setHoveredMode(null)}
+          onMouseEnter={() => supportsHover && setHoveredMode('single')}
+          onMouseLeave={() => supportsHover && setHoveredMode(null)}
+          onClick={() => handleTooltipToggle('single')}
         >
           <motion.button
-            className="relative z-10 flex items-center gap-2 px-5 py-3 rounded-xl transition-colors"
+            className="relative z-10 flex items-center gap-2 px-5 py-3 min-h-[44px] rounded-xl transition-colors"
             onClick={() => onModeChange('single')}
             whileTap={{ scale: 0.98 }}
           >
@@ -226,14 +237,15 @@ const AgentModeToggle: React.FC<{
           </AnimatePresence>
         </div>
 
-        {/* Multi-Agent Button with hover wrapper */}
+        {/* Multi-Agent Button with hover/tap wrapper */}
         <div
           className="relative"
-          onMouseEnter={() => setHoveredMode('multi')}
-          onMouseLeave={() => setHoveredMode(null)}
+          onMouseEnter={() => supportsHover && setHoveredMode('multi')}
+          onMouseLeave={() => supportsHover && setHoveredMode(null)}
+          onClick={() => handleTooltipToggle('multi')}
         >
           <motion.button
-            className="relative z-10 flex items-center gap-2 px-5 py-3 rounded-xl transition-colors"
+            className="relative z-10 flex items-center gap-2 px-5 py-3 min-h-[44px] rounded-xl transition-colors"
             onClick={() => onModeChange('multi')}
             whileTap={{ scale: 0.98 }}
           >
@@ -313,7 +325,8 @@ const WelcomeScreen: React.FC<{
   onSuggestionClick: (prompt: string) => void;
   agentMode: 'single' | 'multi';
   onModeChange: (mode: 'single' | 'multi') => void;
-}> = ({ onSuggestionClick, agentMode, onModeChange }) => {
+  isMobile?: boolean;
+}> = ({ onSuggestionClick, agentMode, onModeChange, isMobile = false }) => {
   const suggestions = [
     {
       icon: '✨',
@@ -358,10 +371,14 @@ const WelcomeScreen: React.FC<{
     >
       {/* Background Effects */}
       <div className="absolute inset-0 bg-gradient-to-b from-gray-900 via-gray-900 to-black" />
-      <GlowOrb color="rgba(59, 130, 246, 0.3)" size={400} position={{ x: '10%', y: '20%' }} />
-      <GlowOrb color="rgba(139, 92, 246, 0.25)" size={300} position={{ x: '70%', y: '60%' }} delay={2} />
-      <GlowOrb color="rgba(245, 158, 11, 0.2)" size={250} position={{ x: '80%', y: '10%' }} delay={4} />
-      <ParticleField />
+      {!isMobile && (
+        <>
+          <GlowOrb color="rgba(59, 130, 246, 0.3)" size={400} position={{ x: '10%', y: '20%' }} />
+          <GlowOrb color="rgba(139, 92, 246, 0.25)" size={300} position={{ x: '70%', y: '60%' }} delay={2} />
+          <GlowOrb color="rgba(245, 158, 11, 0.2)" size={250} position={{ x: '80%', y: '10%' }} delay={4} />
+          <ParticleField />
+        </>
+      )}
 
       {/* Content */}
       <div className="relative z-10 max-w-4xl w-full mx-auto flex flex-col items-center">
@@ -380,7 +397,7 @@ const WelcomeScreen: React.FC<{
             className="relative inline-block shrink-0"
           >
             <motion.div
-              className="w-24 h-24 rounded-3xl mx-auto flex items-center justify-center text-5xl relative overflow-hidden"
+              className="w-16 h-16 sm:w-24 sm:h-24 rounded-3xl mx-auto flex items-center justify-center text-3xl sm:text-5xl relative overflow-hidden"
               style={{
                 background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.3) 0%, rgba(139, 92, 246, 0.3) 50%, rgba(245, 158, 11, 0.3) 100%)',
                 border: '1px solid rgba(255, 255, 255, 0.2)',
@@ -408,12 +425,12 @@ const WelcomeScreen: React.FC<{
 
           {/* Title - Premium "Next Gen Analytics / Agent + Skills.md" style */}
           <div className="text-left md:text-left text-center">
-            <h1 className="text-5xl md:text-7xl font-bold tracking-tight">
+            <h1 className="text-3xl sm:text-5xl md:text-7xl font-bold tracking-tight">
               <span className="bg-gradient-to-r from-white via-blue-100 to-white bg-clip-text text-transparent">
                 Next Gen Analytics
               </span>
               <br />
-              <span className="bg-gradient-to-r from-blue-400 via-purple-400 to-amber-400 bg-clip-text text-transparent text-4xl md:text-5xl block mt-2 pb-2">
+              <span className="bg-gradient-to-r from-blue-400 via-purple-400 to-amber-400 bg-clip-text text-transparent text-2xl sm:text-4xl md:text-5xl block mt-2 pb-2">
                 Agent + Skills.md
               </span>
             </h1>
@@ -421,7 +438,7 @@ const WelcomeScreen: React.FC<{
         </motion.div>
 
         {/* Rolling Feature Ticker (New Badge Style) */}
-        <div className="w-full overflow-hidden mb-12 relative">
+        <div className="w-full overflow-hidden mb-6 sm:mb-12 relative">
           <div className="absolute inset-y-0 left-0 w-20 bg-gradient-to-r from-gray-900 to-transparent z-20 pointer-events-none" />
           <div className="absolute inset-y-0 right-0 w-20 bg-gradient-to-l from-gray-900 to-transparent z-20 pointer-events-none" />
           <motion.div
@@ -486,7 +503,7 @@ const WelcomeScreen: React.FC<{
                   </p>
                 </div>
                 <motion.span
-                  className="text-lg opacity-0 group-hover:opacity-100 transition-opacity text-blue-400"
+                  className="text-lg opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity text-blue-400"
                 >
                   →
                 </motion.span>
@@ -750,6 +767,7 @@ const ConversationalAnalyticsPage: React.FC = () => {
               onSuggestionClick={handleSuggestionClick}
               agentMode={agentMode}
               onModeChange={setAgentMode}
+              isMobile={isMobile}
             />
           ) : (
             <motion.div
