@@ -349,8 +349,12 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/h
       const formData = new FormData();
       formData.append('photo', file);
 
+      // Include auth headers so signed-in users get higher rate limits
+      const authHeaders = await authService.getAuthHeaders();
+
       const response = await fetch(`${backendBaseRef.current}/api/headshot-studio/analyze`, {
         method: 'POST',
+        headers: authHeaders,
         body: formData,
       });
 
@@ -365,10 +369,14 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/h
         setTimeout(() => {
           document.querySelector('[data-scorecard]')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         }, 100);
+      } else if (response.status === 429) {
+        setError('Analysis rate limit exceeded. Please try again in a few minutes.');
       } else {
+        setError('Photo analysis is temporarily unavailable. Please try again.');
         console.warn('Photo analysis failed:', response.status);
       }
     } catch (err) {
+      setError('Could not connect to the analysis service. Please try again.');
       console.warn('Photo analysis error:', err);
     } finally {
       setIsAnalyzing(false);
