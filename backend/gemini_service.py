@@ -65,11 +65,11 @@ if GEMINI_API_KEY:
 
 class GeminiChatService:
     def __init__(self):
-        # Use the latest Gemini 2.5 Flash model as per current best practices
+        # Use the latest Gemini 3.1 Flash-Lite model
         self.model = None
         if GEMINI_API_KEY and _get_client_cls() is not None:
             _genai_configure(api_key=GEMINI_API_KEY)
-            self.model = _GenerativeModel('gemini-2.5-flash')
+            self.model = _GenerativeModel('gemini-3.1-flash-lite-preview')
         self.chats = {}  # Store chat sessions by session_id
     
     def create_chat(self, session_id: str, system_instruction: str = None) -> str:
@@ -153,7 +153,7 @@ class GeminiChatService:
             full_response = ""
             chunk_count = 0
             print(f"Starting Gemini response streaming for session {session_id}")  # Debug log
-            model_name = getattr(self.model, 'model_name', 'gemini-2.5-flash') if self.model else 'gemini-2.5-flash'
+            model_name = getattr(self.model, 'model_name', 'gemini-3.1-flash-lite-preview') if self.model else 'gemini-3.1-flash-lite-preview'
             for chunk_text in _generate_content_stream(
                 model=model_name,
                 contents=history_texts,
@@ -200,7 +200,7 @@ class GeminiChatService:
                 if isinstance(text, str) and text:
                     history_texts.append(text)
 
-            model_name = getattr(self.model, 'model_name', 'gemini-2.5-flash') if self.model else 'gemini-2.5-flash'
+            model_name = getattr(self.model, 'model_name', 'gemini-3.1-flash-lite-preview') if self.model else 'gemini-3.1-flash-lite-preview'
             resp = _GenerativeModel(model_name, {"temperature": 0.7, "top_p": 0.8, "top_k": 40, "max_output_tokens": 8192}).generate_content(contents=history_texts)
             text = (resp or {}).get('text') if isinstance(resp, dict) else None
 
@@ -252,7 +252,7 @@ class GeminiChatService:
         }
 
         try:
-            response = _GenerativeModel(getattr(self.model, 'model_name', 'gemini-2.5-flash') if self.model else 'gemini-2.5-flash', generation_config).generate_content(
+            response = _GenerativeModel(getattr(self.model, 'model_name', 'gemini-3.1-flash-lite-preview') if self.model else 'gemini-3.1-flash-lite-preview', generation_config).generate_content(
                 contents=prompt,
                 tools=[{"google_search": {}}],
             )
@@ -273,7 +273,7 @@ class GeminiChatService:
             text_output = "\n".join(parts)
 
         if not text_output:
-            return {"summary": "", "sources": [], "model": getattr(self.model, 'model_name', 'gemini-2.5-flash')}
+            return {"summary": "", "sources": [], "model": getattr(self.model, 'model_name', 'gemini-3.1-flash-lite-preview')}
 
         try:
             data = json.loads(text_output)
@@ -289,7 +289,7 @@ class GeminiChatService:
         else:
             data["sources"] = []
 
-        data.setdefault("model", getattr(self.model, 'model_name', 'gemini-2.5-flash'))
+        data.setdefault("model", getattr(self.model, 'model_name', 'gemini-3.1-flash-lite-preview'))
         return data
 
 # --- Inline shim for google-genai (local to this module) ---

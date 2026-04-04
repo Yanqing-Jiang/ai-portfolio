@@ -82,7 +82,7 @@ except ImportError:  # pragma: no cover - shim fallback when Gemini absent
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_MODEL = os.getenv("GEMINI_REVISION_MODEL", "gemini-2.5-flash")
+_DEFAULT_MODEL = os.getenv("GEMINI_REVISION_MODEL", "gemini-3.1-flash-lite-preview")
 _GENERATION_CONFIG: Dict[str, Any] = {
     "temperature": float(os.getenv("GEMINI_REVISION_TEMPERATURE", "0.2")),
     "top_p": 0.8,
