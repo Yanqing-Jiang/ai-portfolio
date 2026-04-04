@@ -1,6 +1,9 @@
+import logging
+import time
+from collections import defaultdict
 from typing import Dict
 
-from fastapi import APIRouter, File, Form, UploadFile, Request, HTTPException
+from fastapi import APIRouter, File, Form, UploadFile, Request, HTTPException, status
 
 try:
     from rate_limiter import smart_rate_limit, RateLimitScope, who_am_i, redis_pool, is_superuser
@@ -9,6 +12,8 @@ except ImportError:  # pragma: no cover - support module execution
 from .schemas import LinkedInPhotoResponse, PhotoAnalysisResponse
 from .service import LinkedInPhotoService
 from .fixed_prompts import load_fixed_prompts
+
+logger = logging.getLogger(__name__)
 
 # --- Function/Class Map ---
 # Function: list_linkedin_prompts — called by frontend preset loader; returns canonical style prompts.
@@ -23,6 +28,33 @@ router = APIRouter(prefix="/api/headshot-studio", tags=["headshot-studio"])
 service = LinkedInPhotoService()
 LINKEDIN_PROMPT_WEIGHT = 10
 LINKEDIN_CREDIT_LIMIT = 2
+
+# Dedicated rate limiter for the FREE analyze endpoint — 10 requests/hour per IP.
+# Uses 429 (not 401) so guests never see a sign-in prompt for free features.
+ANALYZE_LIMIT = 10
+ANALYZE_WINDOW = 3600  # 1 hour in seconds
+_analyze_buckets: Dict[str, list] = defaultdict(list)
+
+
+async def _analyze_rate_limit(request: Request) -> None:
+    """Per-IP sliding-window rate limiter for the free analyze endpoint."""
+    client_ip = request.client.host if request.client else "unknown"
+    now = time.monotonic()
+    bucket = _analyze_buckets[client_ip]
+
+    # Evict expired entries
+    cutoff = now - ANALYZE_WINDOW
+    _analyze_buckets[client_ip] = bucket = [t for t in bucket if t > cutoff]
+
+    if len(bucket) >= ANALYZE_LIMIT:
+        logger.info("Analyze rate limit hit for IP %s (%d/%d)", client_ip, len(bucket), ANALYZE_LIMIT)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Analysis rate limit exceeded. Max {ANALYZE_LIMIT} per hour.",
+            headers={"Retry-After": str(ANALYZE_WINDOW)},
+        )
+
+    bucket.append(now)
 LINKEDIN_FOLLOW_URL = "https://www.linkedin.com/in/jiangyanqing/"
 
 _in_memory_credits: Dict[str, int] = {}
@@ -125,7 +157,7 @@ async def analyze_photo(
     This powers the AI Quality Scorecard feature, providing scores for lighting,
     angle, background, expression, and overall professional readiness.
     """
-    await smart_rate_limit(request, scope=RateLimitScope.GLOBAL, weight=2)
+    await _analyze_rate_limit(request)
     return await service.analyze_photo(photo)
 
 
