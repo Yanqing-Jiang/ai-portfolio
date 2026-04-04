@@ -14,7 +14,7 @@ interface StepIndicatorProps {
 
 export const StepIndicator: React.FC<StepIndicatorProps> = ({ steps, currentStep }) => {
   return (
-    <div className="w-full py-8">
+    <div className="w-full py-4 sm:py-8">
       <div className="flex items-center justify-between max-w-2xl mx-auto">
         {steps.map((step, index) => {
           const isCompleted = step.number < currentStep;

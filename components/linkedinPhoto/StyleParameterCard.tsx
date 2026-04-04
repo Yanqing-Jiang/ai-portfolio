@@ -27,7 +27,7 @@ export const StyleParameterCard: React.FC<StyleParameterCardProps> = ({
     <button
       onClick={onClick}
       className={`
-        relative flex flex-col items-center p-4 rounded-xl border-2 transition-all
+        relative flex flex-col items-center p-2.5 sm:p-4 rounded-lg sm:rounded-xl border sm:border-2 transition-all
         hover:shadow-md hover:scale-[1.02] active:scale-[0.98]
         focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2
         ${
@@ -47,7 +47,7 @@ export const StyleParameterCard: React.FC<StyleParameterCardProps> = ({
       )}
 
       {/* Icon */}
-      <div className="text-3xl mb-2">
+      <div className="text-2xl sm:text-3xl mb-1 sm:mb-2">
         {typeof icon === 'string' ? icon : icon}
       </div>
 

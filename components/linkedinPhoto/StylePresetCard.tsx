@@ -68,9 +68,9 @@ export const StylePresetCard: React.FC<StylePresetCardProps> = ({ preset, isSele
       )}
       onClick={disabled ? undefined : onClick}
     >
-      <CardContent className="p-4">
+      <CardContent className="p-3 sm:p-4">
         <div
-          className="w-full h-24 rounded-md mb-3"
+          className="w-full h-16 sm:h-24 rounded-md mb-2 sm:mb-3"
           style={{
             background: `linear-gradient(135deg, ${preset.gradientFrom} 0%, ${preset.gradientTo} 100%)`,
           }}

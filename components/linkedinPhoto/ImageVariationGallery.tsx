@@ -35,7 +35,7 @@ export const ImageVariationGallery: React.FC<ImageVariationGalleryProps> = ({
     <div className="space-y-6">
       {/* Main Display */}
       <Card>
-        <CardContent className="p-6">
+        <CardContent className="p-3 sm:p-6">
           {compareMode && originalImage ? (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>

@@ -88,10 +88,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
 
     try {
       const result = await authService.signInWithGitHub()
-      if (!result.success) {
+      if (result.success) {
+        setMessage('Signed in successfully!')
+        setTimeout(() => { onSuccess?.(); onClose() }, 1000)
+      } else {
         setError(result.error || 'GitHub sign-in failed')
       }
-      // Note: If successful, OAuth will redirect automatically
     } catch (err) {
       setError('An unexpected error occurred with GitHub sign-in')
     } finally {
@@ -106,10 +108,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
 
     try {
       const result = await authService.signInWithGoogle()
-      if (!result.success) {
+      if (result.success) {
+        setMessage('Signed in successfully!')
+        setTimeout(() => { onSuccess?.(); onClose() }, 1000)
+      } else {
         setError(result.error || 'Google sign-in failed')
       }
-      // Note: If successful, OAuth will redirect automatically
     } catch (err) {
       setError('An unexpected error occurred with Google sign-in')
     } finally {

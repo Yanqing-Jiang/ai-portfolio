@@ -13,6 +13,8 @@ export interface VariationRequestOptions {
 interface VariationControlsProps {
   disabled?: boolean;
   isSubmitting?: boolean;
+  /** Use 'embedded' when wrapped in an external container (e.g. <details>) to avoid double-box */
+  variant?: 'default' | 'embedded';
   onCreateVariation: (options: VariationRequestOptions) => Promise<void> | void;
 }
 
@@ -49,6 +51,7 @@ const PROP_OPTIONS = [
 export const VariationControls: React.FC<VariationControlsProps> = ({
   disabled = false,
   isSubmitting = false,
+  variant = 'default',
   onCreateVariation,
 }) => {
   const [background, setBackground] = useState<string>('original');
@@ -95,21 +98,23 @@ export const VariationControls: React.FC<VariationControlsProps> = ({
   const isControlDisabled = disabled || isSubmitting;
 
   return (
-    <div className="rounded-2xl border border-border/40 bg-secondary/40 p-6 shadow-inner shadow-black/30">
-      <div className="flex items-start gap-3 text-foreground">
-        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/15 text-primary">
-          <Wand2 className="h-5 w-5" />
+    <div className={variant === 'embedded' ? 'p-0' : 'rounded-2xl border border-border/40 bg-secondary/40 p-6 shadow-inner shadow-black/30'}>
+      {variant !== 'embedded' && (
+        <div className="flex items-start gap-3 text-foreground">
+          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/15 text-primary">
+            <Wand2 className="h-5 w-5" />
+          </div>
+          <div className="space-y-1">
+            <p className="text-base font-semibold">Guided Variation Builder</p>
+            <p className="text-sm text-muted-foreground">
+              Iterate like a creative director—tweak the background, expression, pose, or props to request a new
+              single portrait from the latest prompt.
+            </p>
+          </div>
         </div>
-        <div className="space-y-1">
-          <p className="text-base font-semibold">Guided Variation Builder</p>
-          <p className="text-sm text-muted-foreground">
-            Iterate like a creative director—tweak the background, expression, pose, or props to request a new
-            single portrait from the latest prompt.
-          </p>
-        </div>
-      </div>
+      )}
 
-      <form className="mt-6 space-y-6" onSubmit={handleSubmit}>
+      <form className={variant === 'embedded' ? 'space-y-6' : 'mt-6 space-y-6'} onSubmit={handleSubmit}>
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <label className="space-y-2 text-sm">
             <span className="font-medium text-muted-foreground">Background</span>

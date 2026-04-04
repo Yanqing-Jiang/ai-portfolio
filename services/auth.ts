@@ -132,18 +132,18 @@ class AuthService {
     }
   }
 
-  async signInWithGitHub() {
+  async signInWithPopup(provider: 'github' | 'google'): Promise<{ success: boolean; error?: string }> {
     try {
       this.updateState({ ...this.currentState, loading: true, error: null })
-      
-      // Get the correct redirect URL based on environment
-      const redirectTo = this.getRedirectUrl()
-      
+
+      const callbackUrl = `${window.location.origin}/auth/callback`
+
       const { data, error } = await supabase.auth.signInWithOAuth({
-        provider: 'github',
+        provider,
         options: {
-          redirectTo
-        }
+          skipBrowserRedirect: true,
+          redirectTo: callbackUrl,
+        },
       })
 
       if (error) {
@@ -151,8 +151,81 @@ class AuthService {
         return { success: false, error: error.message }
       }
 
-      // OAuth will redirect, so we don't need to update state here
-      return { success: true }
+      if (!data?.url) {
+        this.updateState({ ...this.currentState, loading: false })
+        return { success: false, error: 'No OAuth URL returned' }
+      }
+
+      // Register listener BEFORE opening popup to avoid race condition
+      const authPromise = new Promise<{ success: boolean; error?: string }>((resolve) => {
+        let cleaned = false
+        const cleanup = () => {
+          if (cleaned) return
+          cleaned = true
+          window.removeEventListener('message', handleMessage)
+          clearInterval(popupPollId)
+          clearTimeout(timeoutId)
+        }
+
+        const handleMessage = (event: MessageEvent) => {
+          if (event.origin !== window.location.origin) return
+          if (event.data?.type !== 'supabase-auth-complete') return
+
+          cleanup()
+          supabase.auth.getSession().then(({ data: { session } }) => {
+            this.updateState({
+              user: session?.user || null,
+              loading: false,
+              error: null,
+            })
+            resolve({ success: !!session, error: session ? undefined : 'Session not established' })
+          })
+        }
+
+        window.addEventListener('message', handleMessage)
+
+        // Poll for popup closed (user dismissed it)
+        let popupPollId: ReturnType<typeof setInterval>
+        const startPolling = (popupRef: Window) => {
+          popupPollId = setInterval(() => {
+            if (popupRef.closed) {
+              cleanup()
+              this.updateState({ ...this.currentState, loading: false })
+              resolve({ success: false, error: 'Sign-in window was closed' })
+            }
+          }, 500)
+        }
+
+        // Timeout after 5 minutes
+        const timeoutId = setTimeout(() => {
+          cleanup()
+          this.updateState({ ...this.currentState, loading: false })
+          resolve({ success: false, error: 'Sign-in timed out' })
+        }, 300000)
+
+        // Open popup after listener is ready
+        const popup = window.open(data.url, 'supabase-auth', 'width=500,height=700,left=200,top=100')
+
+        if (!popup || popup.closed) {
+          // Popup blocked — fall back to redirect
+          cleanup()
+          const redirectTo = this.getRedirectUrl()
+          supabase.auth.signInWithOAuth({ provider, options: { redirectTo } }).then(({ error: fbError }) => {
+            if (fbError) {
+              this.updateState({ ...this.currentState, loading: false, error: fbError.message })
+              resolve({ success: false, error: fbError.message })
+            } else {
+              // Redirect will navigate away — resolve as pending
+              resolve({ success: true })
+            }
+          })
+          return
+        }
+
+        startPolling(popup)
+      })
+
+      return authPromise
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error'
       this.updateState({ ...this.currentState, loading: false, error: errorMessage })
@@ -160,32 +233,12 @@ class AuthService {
     }
   }
 
+  async signInWithGitHub() {
+    return this.signInWithPopup('github')
+  }
+
   async signInWithGoogle() {
-    try {
-      this.updateState({ ...this.currentState, loading: true, error: null })
-      
-      // Get the correct redirect URL based on environment
-      const redirectTo = this.getRedirectUrl()
-      
-      const { data, error } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: {
-          redirectTo
-        }
-      })
-
-      if (error) {
-        this.updateState({ ...this.currentState, loading: false, error: error.message })
-        return { success: false, error: error.message }
-      }
-
-      // OAuth will redirect, so we don't need to update state here
-      return { success: true }
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
-      this.updateState({ ...this.currentState, loading: false, error: errorMessage })
-      return { success: false, error: errorMessage }
-    }
+    return this.signInWithPopup('google')
   }
 
   private getRedirectUrl(): string {

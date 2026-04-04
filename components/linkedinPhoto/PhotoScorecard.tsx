@@ -153,12 +153,16 @@ export const PhotoScorecard: React.FC<PhotoScorecardProps> = ({
     return (
         <Card
             className={cn(
-                'border-2 bg-gradient-to-br from-slate-900/95 to-slate-800/80 backdrop-blur-xl shadow-2xl',
-                needsImprovement ? 'border-red-500/50' : 'border-emerald-500/30',
+                // Mobile: flush — no border, shadow, or background to avoid box-in-box nesting
+                'border-0 shadow-none bg-transparent rounded-none',
+                'border-t border-slate-700/50',
+                // Desktop: restore full premium card
+                'sm:border-2 sm:rounded-lg sm:shadow-2xl sm:bg-gradient-to-br sm:from-slate-900/95 sm:to-slate-800/80 sm:backdrop-blur-xl',
+                needsImprovement ? 'sm:border-red-500/50' : 'sm:border-emerald-500/30',
                 className
             )}
         >
-            <CardContent className="p-5 space-y-5">
+            <CardContent className="p-3 sm:p-5 space-y-4 sm:space-y-5">
                 {/* Header with Status */}
                 <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
@@ -191,7 +195,7 @@ export const PhotoScorecard: React.FC<PhotoScorecardProps> = ({
                 </div>
 
                 {/* Category Scores - Now includes Outfit */}
-                <div className="grid grid-cols-5 gap-2">
+                <div className="grid grid-cols-3 gap-3 sm:grid-cols-5 sm:gap-2">
                     <ScoreRing score={scores.lighting} label="Lighting" />
                     <ScoreRing score={scores.angle} label="Angle" />
                     <ScoreRing score={scores.background} label="Background" />
@@ -252,12 +256,13 @@ export const PhotoScorecard: React.FC<PhotoScorecardProps> = ({
                             </>
                         )}
                     </div>
-                    <div className="grid grid-cols-3 gap-2">
+                    <div className="flex gap-2 overflow-x-auto snap-x pb-2 -mx-1 px-1 sm:grid sm:grid-cols-3 sm:overflow-visible sm:snap-none sm:pb-0 sm:mx-0 sm:px-0">
                         {STYLE_RECOMMENDATIONS.map((style) => (
                             <button
                                 key={style.id}
                                 onClick={() => onStyleRecommendation?.(style.id)}
                                 className={cn(
+                                    'min-w-[120px] sm:min-w-0 snap-start flex-shrink-0 sm:flex-shrink',
                                     'p-2.5 rounded-xl border transition-all duration-200 text-left',
                                     'bg-gradient-to-br hover:scale-[1.02] hover:shadow-lg',
                                     style.gradient,

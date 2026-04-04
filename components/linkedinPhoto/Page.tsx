@@ -708,8 +708,8 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/h
       {/* Google Fonts for premium typography */}
       <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600;700&display=swap" rel="stylesheet" />
 
-      <div className="relative z-10 py-16 sm:py-20 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-6xl mx-auto space-y-12 text-foreground">
+      <div className="relative z-10 py-8 sm:py-16 md:py-20 px-3 sm:px-6 lg:px-8">
+        <div className="max-w-6xl mx-auto space-y-6 sm:space-y-12 text-foreground">
           {/* Header - fades away when photo is uploaded */}
           <header className={cn(
             "text-center space-y-6 mb-4 transition-all duration-500",
@@ -787,14 +787,14 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/h
           <div className="grid gap-8 lg:grid-cols-2 lg:items-start">
             {/* Step 1: Upload Photo */}
             <Card className="h-full border-border/50 shadow-xl">
-              <CardHeader className="space-y-3 pb-6">
-                <CardTitle className="flex items-center gap-3 text-2xl">
+              <CardHeader className="space-y-3 pb-6 p-4 sm:p-6 sm:pb-6">
+                <CardTitle className="flex items-center gap-3 text-xl sm:text-2xl">
                   <span className="flex items-center justify-center w-10 h-10 rounded-full bg-primary text-primary-foreground text-base font-bold">
                     1
                   </span>
                   Upload Photo
                 </CardTitle>
-                <CardDescription className="text-base leading-relaxed">
+                <CardDescription className="text-sm sm:text-base leading-relaxed">
                   Get a{' '}
                   <span className="relative inline-block group cursor-help">
                     <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-gradient-to-r from-violet-500/15 to-blue-500/15 text-blue-300 font-medium rounded-full border border-blue-400/30 text-sm hover:border-blue-400/50 transition-colors">
@@ -816,10 +816,10 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/h
                   {' '}for free.
                 </CardDescription>
               </CardHeader>
-              <CardContent className="space-y-4">
+              <CardContent className="space-y-4 p-4 pt-0 sm:p-6 sm:pt-0">
                 <div
                   className={cn(
-                    'border-2 border-dashed rounded-xl p-10 transition-all cursor-pointer',
+                    'border-2 border-dashed rounded-xl p-4 sm:p-10 transition-all cursor-pointer',
                     isDragging ? 'border-primary bg-primary/5 scale-[1.02]' : 'border-border hover:border-primary/50',
                     photoPreview && 'bg-muted/30'
                   )}
@@ -837,67 +837,47 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/h
                     className="hidden"
                   />
                   {photoPreview ? (
-                    <div className="flex flex-col gap-6">
-                      <div className="flex flex-col md:flex-row items-center gap-6">
-                        <div className="relative">
-                          <img src={photoPreview} alt="Preview" className="w-32 h-32 object-cover rounded-xl border shadow-md" />
-                          <MagicScanAnimation isActive={isAnalyzing} />
-                        </div>
-                        <div className="flex-1 text-center md:text-left space-y-2">
-                          {isAnalyzing ? (
-                            <div className="space-y-3">
-                              <div className="flex items-center gap-2">
-                                <div className="animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent" />
-                                <p className="font-semibold text-base text-primary animate-pulse">
-                                  Analyzing Readiness Score...
-                                </p>
-                              </div>
-                              <div className="w-full max-w-xs">
-                                <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
-                                  <div className="h-full bg-gradient-to-r from-amber-500 to-primary rounded-full animate-pulse" style={{ width: '60%' }} />
-                                </div>
-                                <p className="text-xs text-muted-foreground mt-1">AI is evaluating your photo...</p>
-                              </div>
-                            </div>
-                          ) : (
-                            <>
-                              <p className="font-semibold text-base text-emerald-400">
-                                ✓ Photo uploaded successfully!
-                              </p>
-                              <p className="text-sm text-muted-foreground">Click or drag to replace</p>
-                            </>
-                          )}
-                        </div>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleFileChange(null);
-                          }}
-                        >
-                          <X className="w-4 h-4" />
-                          Remove
-                        </Button>
+                    <div className="flex flex-col md:flex-row items-center gap-3 sm:gap-6">
+                      <div className="relative">
+                        <img src={photoPreview} alt="Preview" className="w-32 h-32 object-cover rounded-xl border shadow-md" />
+                        <MagicScanAnimation isActive={isAnalyzing} />
                       </div>
-                      {/* AI Quality Scorecard */}
-                      {analysisResult && (
-                        <div data-scorecard>
-                        <PhotoScorecard
-                          scores={analysisResult.scores}
-                          tips={analysisResult.tips}
-                          processingMs={analysisResult.processingMs}
-                          onStyleRecommendation={(styleId) => {
-                            // Find and select the recommended style
-                            const style = presetOptions.find(p => p.id === styleId);
-                            if (style) {
-                              handlePresetSelect(style);
-                              setTimeout(() => scrollToRef(step2Ref), 100);
-                            }
-                          }}
-                        />
-                        </div>
-                      )}
+                      <div className="flex-1 text-center md:text-left space-y-2">
+                        {isAnalyzing ? (
+                          <div className="space-y-3">
+                            <div className="flex items-center gap-2">
+                              <div className="animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent" />
+                              <p className="font-semibold text-base text-primary animate-pulse">
+                                Analyzing Readiness Score...
+                              </p>
+                            </div>
+                            <div className="w-full max-w-xs">
+                              <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
+                                <div className="h-full bg-gradient-to-r from-amber-500 to-primary rounded-full animate-pulse" style={{ width: '60%' }} />
+                              </div>
+                              <p className="text-xs text-muted-foreground mt-1">AI is evaluating your photo...</p>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            <p className="font-semibold text-base text-emerald-400">
+                              ✓ Photo uploaded successfully!
+                            </p>
+                            <p className="text-sm text-muted-foreground">Click or drag to replace</p>
+                          </>
+                        )}
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleFileChange(null);
+                        }}
+                      >
+                        <X className="w-4 h-4" />
+                        Remove
+                      </Button>
                     </div>
                   ) : (
                     <div className="text-center space-y-4">
@@ -910,6 +890,23 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/h
                     </div>
                   )}
                 </div>
+                {/* AI Quality Scorecard — outside the dropzone to avoid box-in-box nesting */}
+                {analysisResult && (
+                  <div data-scorecard>
+                    <PhotoScorecard
+                      scores={analysisResult.scores}
+                      tips={analysisResult.tips}
+                      processingMs={analysisResult.processingMs}
+                      onStyleRecommendation={(styleId) => {
+                        const style = presetOptions.find(p => p.id === styleId);
+                        if (style) {
+                          handlePresetSelect(style);
+                          setTimeout(() => scrollToRef(step2Ref), 100);
+                        }
+                      }}
+                    />
+                  </div>
+                )}
               </CardContent>
             </Card>
 
@@ -919,8 +916,8 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/h
                 'h-full border-border/50 shadow-xl',
                 !photoFile && 'opacity-50 pointer-events-none'
               )}>
-                <CardHeader className="space-y-3 pb-6">
-                  <CardTitle className="flex items-center gap-3 text-2xl">
+                <CardHeader className="space-y-3 pb-6 p-4 sm:p-6 sm:pb-6">
+                  <CardTitle className="flex items-center gap-3 text-xl sm:text-2xl">
                     <span
                       className={cn(
                         'flex items-center justify-center w-10 h-10 rounded-full text-base font-bold',
@@ -931,9 +928,9 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/h
                     </span>
                     Choose Your Style
                   </CardTitle>
-                  <CardDescription className="text-base leading-relaxed">Select an Executive Suite preset or create your own custom style.</CardDescription>
+                  <CardDescription className="text-sm sm:text-base leading-relaxed">Select an Executive Suite preset or create your own custom style.</CardDescription>
                 </CardHeader>
-                <CardContent className="space-y-6">
+                <CardContent className="space-y-6 p-4 pt-0 sm:p-6 sm:pt-0">
                   {isLoadingPresets && (
                     <div className="w-full rounded-lg border border-border/40 bg-muted/30 p-4 text-sm text-muted-foreground">
                       Loading canonical style prompts…
@@ -1042,10 +1039,10 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/h
           {variations.length > 0 && (
             <div ref={step3Ref} className="mt-12">
               <Card className="border-border/50 shadow-xl">
-                <CardHeader className="space-y-3 pb-8">
+                <CardHeader className="space-y-3 pb-8 p-4 sm:p-6 sm:pb-8">
                   <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                     <div className="space-y-2">
-                      <CardTitle className="flex items-center gap-3 text-2xl">
+                      <CardTitle className="flex items-center gap-3 text-xl sm:text-2xl">
                         <span className="flex items-center justify-center w-10 h-10 rounded-full bg-primary text-primary-foreground text-base font-bold">
                           3
                         </span>
@@ -1063,7 +1060,7 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/h
                     </Button>
                   </div>
                 </CardHeader>
-                <CardContent className="space-y-6">
+                <CardContent className="space-y-6 p-4 pt-0 sm:p-6 sm:pt-0">
                   <ImageVariationGallery
                     variations={variations}
                     originalImage={photoPreview}
@@ -1100,6 +1097,7 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/h
                         </summary>
                         <div className="p-4 pt-0">
                           <VariationControls
+                            variant="embedded"
                             disabled={isGenerating || isCreatingVariation}
                             isSubmitting={isCreatingVariation}
                             onCreateVariation={handleCreateVariation}

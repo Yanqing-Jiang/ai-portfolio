@@ -170,7 +170,7 @@ export const CustomStyleBuilder: React.FC<CustomStyleBuilderProps> = ({
   };
 
   return (
-    <div className="space-y-8 p-6 bg-muted/50 rounded-xl border border-border">
+    <div className="space-y-5 sm:space-y-8 p-3 sm:p-6 bg-muted/50 rounded-xl border border-border">
       <div className="text-center mb-4">
         <h3 className="text-lg font-semibold text-foreground mb-1">
           Customize Your Professional Headshot
@@ -194,7 +194,7 @@ export const CustomStyleBuilder: React.FC<CustomStyleBuilderProps> = ({
             </button>
           )}
         </div>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 sm:gap-3">
           {CLOTHING_OPTIONS.map((option) => (
             <StyleParameterCard
               key={option.id}
@@ -222,7 +222,7 @@ export const CustomStyleBuilder: React.FC<CustomStyleBuilderProps> = ({
             </button>
           )}
         </div>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 sm:gap-3">
           {EXPRESSION_OPTIONS.map((option) => (
             <StyleParameterCard
               key={option.id}
@@ -250,7 +250,7 @@ export const CustomStyleBuilder: React.FC<CustomStyleBuilderProps> = ({
             </button>
           )}
         </div>
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-2 sm:gap-3">
           {BACKGROUND_OPTIONS.map((option) => (
             <StyleParameterCard
               key={option.id}
@@ -278,7 +278,7 @@ export const CustomStyleBuilder: React.FC<CustomStyleBuilderProps> = ({
             </button>
           )}
         </div>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 sm:gap-3">
           {POSE_OPTIONS.map((option) => (
             <StyleParameterCard
               key={option.id}

@@ -19,6 +19,7 @@ import { PROJECT_DATA } from './constants';
 import type { Project } from './types';
 import { ChevronLeftIcon } from './components/icons/ChevronLeftIcon';
 import { ChevronRightIcon } from './components/icons/ChevronRightIcon';
+import { supabase } from './services/auth';
 // @ts-ignore
 import { HelmetProvider } from 'react-helmet-async';
 
@@ -33,6 +34,31 @@ const ProjectRoute: React.FC = () => {
   const project = useMemo(() => (projectId ? findProject(projectId) : undefined), [projectId]);
   if (!project) return <Navigate to="/" replace />;
   return <ProjectView project={project} />;
+};
+
+// AuthCallback — lightweight route for OAuth popup flow. Supabase SDK parses the auth
+// tokens from the URL hash, then notifies the opener window via postMessage and closes.
+const AuthCallback: React.FC = () => {
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (window.opener) {
+        window.opener.postMessage(
+          { type: 'supabase-auth-complete', session: !!session },
+          window.location.origin
+        );
+        window.close();
+      } else {
+        // Direct navigation (mobile redirect fallback) — go home
+        window.location.href = '/';
+      }
+    });
+  }, []);
+
+  return (
+    <div className="flex items-center justify-center h-screen bg-[#0B1120] text-white">
+      <p className="text-sm text-slate-400">Completing sign-in...</p>
+    </div>
+  );
 };
 
 // Function: Layout - shell used by AppRoutes to hold the sidebar, routing, and shared UI chrome; called from AppRoutes; invokes goHome/goProject for navigation; exists to keep router wiring in one place.
@@ -213,6 +239,7 @@ const Layout: React.FC = () => {
 
             <Route path="/project/:projectId" element={<ProjectRoute />} />
             <Route path="/consult" element={<ConsultingPage />} />
+            <Route path="/auth/callback" element={<AuthCallback />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
 
