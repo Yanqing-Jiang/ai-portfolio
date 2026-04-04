@@ -365,6 +365,9 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/h
         setTimeout(() => {
           document.querySelector('[data-scorecard]')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         }, 100);
+      } else if (response.status === 401) {
+        // Guest rate limit exceeded — prompt sign-in
+        setShowAuthModal(true);
       } else {
         console.warn('Photo analysis failed:', response.status);
       }
