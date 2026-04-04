@@ -153,11 +153,11 @@ export const PhotoScorecard: React.FC<PhotoScorecardProps> = ({
     return (
         <Card
             className={cn(
-                // Mobile: flush — no border, shadow, or background to avoid box-in-box nesting
-                'border-0 shadow-none bg-transparent rounded-none',
-                'border-t border-slate-700/50',
+                // Mobile: lightweight card — subtle bg instead of full border/shadow to avoid box-in-box
+                'border-0 shadow-none rounded-xl bg-slate-800/60',
+                'mt-4',
                 // Desktop: restore full premium card
-                'sm:border-2 sm:rounded-lg sm:shadow-2xl sm:bg-gradient-to-br sm:from-slate-900/95 sm:to-slate-800/80 sm:backdrop-blur-xl',
+                'sm:mt-0 sm:border-2 sm:rounded-lg sm:shadow-2xl sm:bg-gradient-to-br sm:from-slate-900/95 sm:to-slate-800/80 sm:backdrop-blur-xl',
                 needsImprovement ? 'sm:border-red-500/50' : 'sm:border-emerald-500/30',
                 className
             )}
