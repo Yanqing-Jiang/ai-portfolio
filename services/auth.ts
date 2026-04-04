@@ -193,17 +193,23 @@ class AuthService {
     let url = configService.getAppUrl() ?? // Production URL from env
               window.location.origin ?? // Current origin fallback
               'http://localhost:3000' // Development fallback
-    
+
     // Ensure URL starts with http
     if (!url.startsWith('http')) {
       url = `https://${url}`
     }
-    
+
     // Remove trailing slash if present
     url = url.replace(/\/$/, '')
-    
+
+    // Preserve the current path so OAuth returns the user to where they were
+    const currentPath = window.location.pathname + window.location.search
+    if (currentPath && currentPath !== '/') {
+      url += currentPath
+    }
+
     console.log(`OAuth Redirect URL: ${url}`)
-    
+
     return url
   }
 
