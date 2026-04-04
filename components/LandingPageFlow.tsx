@@ -660,7 +660,7 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
 
                 <div className="relative z-20">
                     {/* Hero Section with 3D Holographic Dashboard */}
-                    <section ref={heroRef} className="relative min-h-screen flex flex-col items-center justify-center overflow-hidden py-12 px-4 sm:px-6 lg:px-8 border-b border-white/5">
+                    <section ref={heroRef} className="relative min-h-screen flex flex-col items-center justify-start md:justify-center overflow-hidden pt-4 pb-12 md:py-12 px-4 sm:px-6 lg:px-8 border-b border-white/5">
                         {/* Noise Texture (Consistent with Sidebar & Rest of Page) */}
                         <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20 pointer-events-none" />
 
