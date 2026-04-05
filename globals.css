@@ -337,6 +337,11 @@
     }
   }
 
+  /* Booking button glow */
+  .animate-booking-glow {
+    animation: bookingGlow 3s ease-in-out infinite;
+  }
+
   /* A2UI Row responsive stacking */
   .a2ui-row {
     flex-wrap: wrap;
@@ -345,4 +350,21 @@
   .a2ui-row__item {
     min-width: 280px;
   }
+}
+
+/* Booking button animations */
+@keyframes bookingGlow {
+  0%, 100% {
+    box-shadow: 0 0 20px rgba(14, 165, 233, 0.15), 0 0 6px rgba(14, 165, 233, 0.1);
+    border-color: rgba(14, 165, 233, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 28px rgba(14, 165, 233, 0.3), 0 0 12px rgba(14, 165, 233, 0.15);
+    border-color: rgba(14, 165, 233, 0.5);
+  }
+}
+
+@keyframes shimmerSweep {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(200%); }
 }
