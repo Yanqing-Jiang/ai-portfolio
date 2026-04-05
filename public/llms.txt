@@ -9,7 +9,7 @@ Medium: https://medium.com/@yanqing_j
 
 1. Agent-to-UI (A2UI Protocol)
    URL: https://yanqing.app/project/agent-to-ui
-   Summary: AI-powered dashboard generation using A2UI v0.8 protocol. Ask a question, watch Claude generate a custom financial dashboard in real-time.
+   Summary: AI-powered dashboard generation using A2UI v0.8 protocol. Ask a question, watch custom agent live generate dashboard with exchangeable widgets.
 
 2. Next-Gen Analytics Agent
    URL: https://yanqing.app/project/next-gen-analytics-agent

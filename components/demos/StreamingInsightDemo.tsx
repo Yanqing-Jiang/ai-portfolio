@@ -361,7 +361,7 @@ export const HolographicTerminal: React.FC = () => {
             />
 
             {/* Minimal Header dots */}
-            <div className="px-10 py-6">
+            <div className="px-4 py-3 sm:px-10 sm:py-6">
                 <div className="flex gap-2.5">
                     <div className="w-2.5 h-2.5 rounded-full bg-red-500/30" />
                     <div className="w-2.5 h-2.5 rounded-full bg-yellow-500/30" />
@@ -370,7 +370,7 @@ export const HolographicTerminal: React.FC = () => {
             </div>
 
             {/* Main Flip Card Area (DOMINANT 85%) */}
-            <div className="flex-1 p-10 flex flex-col justify-center overflow-hidden relative">
+            <div className="flex-1 p-4 sm:p-10 flex flex-col justify-center overflow-hidden relative">
                 <AnimatePresence mode="wait">
                     <motion.div
                         key={lineIndex}
@@ -380,7 +380,7 @@ export const HolographicTerminal: React.FC = () => {
                         transition={{ duration: 0.8, ease: "circOut" }}
                         className="relative"
                     >
-                        <span className="relative z-10 text-white text-[clamp(2rem,10vw,4.5rem)] font-black uppercase tracking-tighter leading-[1] block">
+                        <span className="relative z-10 text-white text-[clamp(1.25rem,5vw,4.5rem)] font-black uppercase tracking-tighter leading-[1] block break-words">
                             {lines[lineIndex].text}
                         </span>
                     </motion.div>
@@ -388,7 +388,7 @@ export const HolographicTerminal: React.FC = () => {
             </div>
 
             {/* Social Logos Section (Colored & Smaller) */}
-            <div className="flex-none h-20 flex justify-end items-center px-10 gap-4 border-t border-white/5">
+            <div className="flex-none h-14 sm:h-20 flex justify-end items-center px-4 sm:px-10 gap-4 border-t border-white/5">
                 {[
                     {
                         icon: <Linkedin className="w-4 h-4" />,

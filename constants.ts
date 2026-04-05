@@ -18,7 +18,7 @@ Ask a question about any stock, and watch as Claude analyzes your query and stre
 • Supports interactive actions like timeframe changes and ticker additions
 
 Built with Claude Agent SDK, FastAPI SSE streaming, and a custom React A2UI renderer.`,
-        cardDescription: 'Ask a question, watch Claude generate a custom financial dashboard in real-time using the A2UI protocol.',
+        cardDescription: 'Ask a question, watch custom agent live generate dashboard with exchangeable widgets using the A2UI protocol.',
         technologies: ['A2UI Protocol', 'Claude Agent SDK', 'React Renderer', 'SSE Streaming', 'Generative UX'],
         systemInstruction: `You are the AI assistant for **Agent to UI**. You have full knowledge of the A2UI protocol and how this project works. Use the details below to answer questions.
 

@@ -19,6 +19,7 @@ import {
     SITE_NAME,
 } from '../constants/seo';
 import { buildLandingSchemas, buildPersonSchema, toNavigationFromProjects } from '../constants/structuredData';
+import { Calendar as CalendarIcon } from 'lucide-react';
 
 // Register GSAP plugins
 gsap.registerPlugin(ScrollTrigger);
@@ -660,7 +661,7 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
 
                 <div className="relative z-20">
                     {/* Hero Section with 3D Holographic Dashboard */}
-                    <section ref={heroRef} className="relative min-h-screen flex flex-col items-center justify-start md:justify-center overflow-hidden pt-4 pb-12 md:py-12 px-4 sm:px-6 lg:px-8 border-b border-white/5">
+                    <section ref={heroRef} className="relative min-h-0 md:min-h-screen flex flex-col items-center justify-start md:justify-center overflow-hidden pt-4 pb-6 md:pb-12 md:py-12 px-4 sm:px-6 lg:px-8 border-b border-white/5">
                         {/* Noise Texture (Consistent with Sidebar & Rest of Page) */}
                         <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20 pointer-events-none" />
 
@@ -699,6 +700,25 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                                     <div className="absolute inset-0 bg-sky-500/10 blur-[150px] rounded-full opacity-30 pointer-events-none" />
                                     <HolographicTerminal />
                                 </motion.div>
+                            </div>
+
+                            {/* Book a Consulting Session CTA */}
+                            <div className="col-span-1 lg:col-span-2 flex justify-center mt-6 md:mt-10">
+                                <Link
+                                    to="/consult"
+                                    className="group relative inline-flex items-center gap-2.5 px-6 py-3 md:px-8 md:py-3.5
+                                               bg-sky-500/10 backdrop-blur-xl border border-sky-500/40 rounded-full
+                                               text-sky-300 text-sm md:text-base font-semibold tracking-wide
+                                               transition-all duration-300
+                                               hover:bg-sky-500/20 hover:border-sky-400 hover:text-white hover:shadow-[0_0_30px_rgba(14,165,233,0.3)]
+                                               active:scale-95"
+                                >
+                                    <CalendarIcon className="w-4 h-4 md:w-5 md:h-5" />
+                                    Book a Consulting Session
+                                    <svg className="w-4 h-4 transition-transform group-hover:translate-x-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 8l4 4m0 0l-4 4m4-4H3" />
+                                    </svg>
+                                </Link>
                             </div>
                         </div>
                     </section>
@@ -842,7 +862,7 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
 
                     {/* MOBILE VERTICAL STACKED CARDS - Shown only on mobile */}
                     {/* This replaces the horizontal timeline experience with natural vertical scroll */}
-                    <section className="md:hidden relative bg-slate-950 py-12 px-4">
+                    <section className="md:hidden relative bg-slate-950 pt-6 pb-12 px-4">
                         {/* Section Header */}
                         <div className="text-center mb-10">
                             <h2 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-br from-white to-slate-600 mb-4">
@@ -868,8 +888,13 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                                             key={project.id}
                                             className="mobile-project-card group relative rounded-2xl overflow-hidden bg-slate-900/80 border border-slate-800 shadow-xl"
                                         >
-                                            {/* Project Image */}
-                                            <div className="relative h-48 overflow-hidden">
+                                            {/* Project Image (clickable) */}
+                                            <Link
+                                                to={`/project/${project.id}`}
+                                                onClick={() => onSelectProject(project)}
+                                                aria-label={`View ${project.title}`}
+                                                className="block relative h-48 overflow-hidden cursor-pointer"
+                                            >
                                                 <ProjectMedia
                                                     src={project.coverUrl ?? project.imageUrl ?? ''}
                                                     videoUrl={project.videoUrl}
@@ -884,7 +909,7 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                                                 <div className="absolute top-3 right-3 bg-blue-600/80 backdrop-blur-sm px-3 py-1 rounded-full text-xs font-bold text-white">
                                                     {year}
                                                 </div>
-                                            </div>
+                                            </Link>
 
                                             {/* Project Content */}
                                             <div className="p-5">
