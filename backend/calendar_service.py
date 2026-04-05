@@ -358,3 +358,32 @@ async def create_booking_event(
     except Exception as exc:
         logger.error("[CALENDAR] Event creation failed: %s", exc)
         raise RuntimeError(f"Calendar event creation failed: {exc}") from exc
+
+
+async def delete_booking_event(calendar_event_id: str) -> bool:
+    """Delete a Google Calendar event (used for cancel/reschedule).
+
+    Sends cancellation notifications to all attendees.
+    Returns True on success.
+    Raises RuntimeError if calendar is not configured or deletion fails.
+    """
+    service = _get_calendar_service()
+    if service is None:
+        raise RuntimeError("Google Calendar not configured")
+
+    try:
+        import asyncio
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            None,
+            lambda: service.events().delete(
+                calendarId=GOOGLE_CALENDAR_ID,
+                eventId=calendar_event_id,
+                sendUpdates="all",
+            ).execute(),
+        )
+        logger.info("[CALENDAR] Event deleted: %s", calendar_event_id)
+        return True
+    except Exception as exc:
+        logger.error("[CALENDAR] Event deletion failed: %s", exc)
+        raise RuntimeError(f"Calendar event deletion failed: {exc}") from exc

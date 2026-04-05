@@ -9,7 +9,7 @@ from pathlib import Path
 import os
 from dotenv import load_dotenv
 import json
-from datetime import date as _Date, datetime as _DateTime, timezone
+from datetime import date as _Date, datetime as _DateTime, timezone, timedelta
 from decimal import Decimal
 import uuid
 import time
@@ -72,8 +72,9 @@ BOOKING_AMOUNT_CENTS = {
     "60": 9000,   # $90
 }
 
-from calendar_service import get_available_slots, create_booking_event
+from calendar_service import get_available_slots, create_booking_event, delete_booking_event
 from telegram_service import send_booking_notification
+from rate_limiter import parse_user_id, ParsedToken
 
 # Booking DB pool (shares SUPABASE_DB_URL with token_store)
 _booking_pool: Optional[Any] = None
@@ -440,6 +441,57 @@ class BookingSlot(BaseModel):
 class BookingSlotsResponse(BaseModel):
     slots: list[BookingSlot]
     timezone: str
+
+
+class CancelBookingRequest(BaseModel):
+    reason: str = ""
+
+
+class RescheduleBookingRequest(BaseModel):
+    new_slot_start: str  # ISO 8601 with timezone
+
+
+class BookingEntry(BaseModel):
+    id: str
+    session_type: str
+    slot_start: Optional[str] = None
+    slot_end: Optional[str] = None
+    status: str
+    meet_link: Optional[str] = None
+    amount_cents: int = 0
+    created_at: Optional[str] = None
+    can_cancel: bool = False
+    can_reschedule: bool = False
+    refund_eligible: bool = False
+
+
+class MyBookingsResponse(BaseModel):
+    bookings: list[BookingEntry]
+
+
+class CancelBookingResponse(BaseModel):
+    success: bool
+    refunded: bool = False
+    refund_amount_cents: int = 0
+    message: str
+
+
+class RescheduleBookingResponse(BaseModel):
+    success: bool
+    new_booking: Optional[BookingEntry] = None
+    message: str = ""
+
+
+# Auth dependency for booking management endpoints
+async def require_auth(request: Request) -> ParsedToken:
+    """Extract and verify Supabase JWT. Returns ParsedToken or raises 401."""
+    auth_header = request.headers.get("Authorization")
+    if not auth_header:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    parsed = parse_user_id(auth_header)
+    if parsed is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired token.")
+    return parsed
 
 
 # In-memory chat sessions storage
@@ -2117,6 +2169,320 @@ async def get_booking_confirmation(stripe_session_id: str):
         "amount_cents": row["amount_cents"],
         "created_at": row["created_at"].isoformat() if row["created_at"] else None,
     })
+
+
+# ----------------------------------------------------------------
+# Authenticated booking management endpoints
+# ----------------------------------------------------------------
+
+@app.get("/api/booking/my-bookings", response_model=MyBookingsResponse)
+async def get_my_bookings(auth: ParsedToken = Depends(require_auth)):
+    """Return all bookings for the authenticated user (by user_id or email)."""
+    pool = await _get_booking_pool()
+    if pool is None:
+        raise HTTPException(status_code=503, detail="Booking system not available.")
+
+    now = _DateTime.now(timezone.utc)
+
+    async with pool.acquire() as conn:
+        # Backfill user_id on orphaned bookings matched by email
+        if auth.email:
+            await conn.execute(
+                "UPDATE bookings SET user_id = $1, updated_at = NOW() WHERE client_email = $2 AND user_id IS NULL",
+                uuid.UUID(auth.user_id), auth.email,
+            )
+
+        # Fetch bookings by user_id OR email
+        params: list = [uuid.UUID(auth.user_id)]
+        email_clause = ""
+        if auth.email:
+            email_clause = "OR client_email = $2"
+            params.append(auth.email)
+
+        rows = await conn.fetch(
+            f"""
+            SELECT id, session_type, slot_start, slot_end, status,
+                   meet_link, amount_cents, created_at
+            FROM bookings
+            WHERE (user_id = $1 {email_clause})
+              AND status NOT IN ('expired', 'hold')
+            ORDER BY slot_start DESC
+            """,
+            *params,
+        )
+
+    entries = []
+    for row in rows:
+        slot_start = row["slot_start"]
+        is_upcoming = slot_start and slot_start > now
+        is_confirmed = row["status"] == "confirmed"
+        entries.append(BookingEntry(
+            id=str(row["id"]),
+            session_type=row["session_type"],
+            slot_start=slot_start.isoformat() if slot_start else None,
+            slot_end=row["slot_end"].isoformat() if row["slot_end"] else None,
+            status=row["status"],
+            meet_link=row["meet_link"],
+            amount_cents=row["amount_cents"] or 0,
+            created_at=row["created_at"].isoformat() if row["created_at"] else None,
+            can_cancel=is_confirmed and is_upcoming,
+            can_reschedule=is_confirmed and is_upcoming and slot_start > now + timedelta(hours=2),
+            refund_eligible=is_confirmed and is_upcoming and slot_start > now + timedelta(hours=24),
+        ))
+
+    return MyBookingsResponse(bookings=entries)
+
+
+@app.post("/api/booking/{booking_id}/cancel", response_model=CancelBookingResponse)
+async def cancel_booking(booking_id: str, req: CancelBookingRequest, auth: ParsedToken = Depends(require_auth)):
+    """Cancel a confirmed booking. Full refund if >24 hours before session."""
+    pool = await _get_booking_pool()
+    if pool is None:
+        raise HTTPException(status_code=503, detail="Booking system not available.")
+
+    now = _DateTime.now(timezone.utc)
+
+    async with pool.acquire() as conn:
+        # Fetch and verify ownership
+        row = await conn.fetchrow(
+            """
+            SELECT id, status, slot_start, stripe_session_id, calendar_event_id,
+                   client_name, client_email, session_type, amount_cents, user_id
+            FROM bookings WHERE id = $1
+            """,
+            uuid.UUID(booking_id),
+        )
+
+        if row is None:
+            raise HTTPException(status_code=404, detail="Booking not found.")
+
+        # Verify ownership
+        owns = (row["user_id"] and str(row["user_id"]) == auth.user_id) or \
+               (auth.email and row["client_email"] == auth.email)
+        if not owns:
+            raise HTTPException(status_code=403, detail="Not your booking.")
+
+        if row["status"] != "confirmed":
+            raise HTTPException(status_code=400, detail=f"Cannot cancel booking with status '{row['status']}'.")
+
+        slot_start = row["slot_start"]
+        if slot_start and slot_start <= now:
+            raise HTTPException(status_code=400, detail="Cannot cancel a past session.")
+
+        # Determine refund eligibility (>24 hours before session)
+        refund_eligible = slot_start and slot_start > now + timedelta(hours=24)
+        refund_id = None
+        refund_amount = 0
+
+        # Attempt Stripe refund if eligible
+        if refund_eligible and stripe and row["stripe_session_id"] and not row["stripe_session_id"].startswith("pending_"):
+            try:
+                checkout_session = stripe.checkout.Session.retrieve(row["stripe_session_id"])
+                payment_intent_id = checkout_session.payment_intent
+                if isinstance(payment_intent_id, dict):
+                    payment_intent_id = payment_intent_id["id"]
+                if payment_intent_id:
+                    refund = stripe.Refund.create(
+                        payment_intent=payment_intent_id,
+                        reason="requested_by_customer",
+                    )
+                    refund_id = refund.id
+                    refund_amount = refund.amount
+            except Exception as exc:
+                logger.error("[BOOKING] Stripe refund failed for %s: %s", booking_id, exc)
+                # Continue with cancellation even if refund fails
+
+        # Delete Google Calendar event
+        cal_event_id = row["calendar_event_id"]
+        if cal_event_id:
+            try:
+                await delete_booking_event(cal_event_id)
+            except Exception as exc:
+                logger.error("[BOOKING] Calendar event deletion failed for %s: %s", booking_id, exc)
+
+        # Update booking status
+        new_status = "refunded" if refund_id else "cancelled"
+        await conn.execute(
+            """
+            UPDATE bookings
+            SET status = $1, cancelled_at = NOW(), cancellation_reason = $2,
+                refund_id = $3, refund_amount_cents = $4, calendar_event_id = NULL, updated_at = NOW()
+            WHERE id = $5
+            """,
+            new_status, req.reason or None, refund_id, refund_amount, uuid.UUID(booking_id),
+        )
+
+    # Send notification
+    try:
+        await send_booking_notification(
+            name=row["client_name"],
+            email=row["client_email"],
+            session_type=row["session_type"],
+            slot_start=str(slot_start),
+            status=f"CANCELLED ({new_status})",
+        )
+    except Exception:
+        pass
+
+    if refund_id:
+        return CancelBookingResponse(
+            success=True, refunded=True, refund_amount_cents=refund_amount,
+            message="Booking cancelled and refund initiated.",
+        )
+    return CancelBookingResponse(
+        success=True, refunded=False,
+        message="Booking cancelled. No refund (less than 24 hours before session).",
+    )
+
+
+@app.post("/api/booking/{booking_id}/reschedule", response_model=RescheduleBookingResponse)
+async def reschedule_booking(booking_id: str, req: RescheduleBookingRequest, auth: ParsedToken = Depends(require_auth)):
+    """Reschedule a confirmed booking to a new time slot."""
+    pool = await _get_booking_pool()
+    if pool is None:
+        raise HTTPException(status_code=503, detail="Booking system not available.")
+
+    now = _DateTime.now(timezone.utc)
+
+    # Parse new slot
+    try:
+        new_slot_start = _DateTime.fromisoformat(req.new_slot_start)
+        if new_slot_start.tzinfo is None:
+            raise ValueError("Timezone required")
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid new_slot_start: {exc}")
+
+    if new_slot_start <= now:
+        raise HTTPException(status_code=400, detail="New slot must be in the future.")
+
+    async with pool.acquire() as conn:
+        # Fetch and verify ownership
+        row = await conn.fetchrow(
+            """
+            SELECT id, status, slot_start, stripe_session_id, stripe_event_id,
+                   calendar_event_id, client_name, client_email, session_type,
+                   amount_cents, notes, user_id
+            FROM bookings WHERE id = $1
+            """,
+            uuid.UUID(booking_id),
+        )
+
+        if row is None:
+            raise HTTPException(status_code=404, detail="Booking not found.")
+
+        owns = (row["user_id"] and str(row["user_id"]) == auth.user_id) or \
+               (auth.email and row["client_email"] == auth.email)
+        if not owns:
+            raise HTTPException(status_code=403, detail="Not your booking.")
+
+        if row["status"] != "confirmed":
+            raise HTTPException(status_code=400, detail=f"Cannot reschedule booking with status '{row['status']}'.")
+
+        slot_start = row["slot_start"]
+        if slot_start and slot_start <= now + timedelta(hours=2):
+            raise HTTPException(status_code=400, detail="Cannot reschedule less than 2 hours before session.")
+
+        # Compute new slot end
+        duration_minutes = 30 if row["session_type"] == "30" else 60
+        new_slot_end = new_slot_start + timedelta(minutes=duration_minutes)
+        new_booking_id = uuid.uuid4()
+
+        # Transaction: mark old as rescheduled, create new booking, handle calendar
+        try:
+            async with conn.transaction():
+                # Mark old booking as rescheduled
+                await conn.execute(
+                    "UPDATE bookings SET status = 'rescheduled', updated_at = NOW() WHERE id = $1",
+                    uuid.UUID(booking_id),
+                )
+
+                # Create new booking row
+                await conn.execute(
+                    """
+                    INSERT INTO bookings (
+                        id, stripe_session_id, stripe_event_id, session_type,
+                        slot_start, slot_end, client_name, client_email,
+                        notes, status, amount_cents, user_id, rescheduled_from
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'confirmed', $10, $11, $12)
+                    """,
+                    new_booking_id,
+                    row["stripe_session_id"],
+                    row["stripe_event_id"],
+                    row["session_type"],
+                    new_slot_start,
+                    new_slot_end,
+                    row["client_name"],
+                    row["client_email"],
+                    row["notes"],
+                    row["amount_cents"],
+                    row["user_id"],
+                    uuid.UUID(booking_id),
+                )
+        except Exception as db_exc:
+            logger.error("[BOOKING] Reschedule DB error: %s", db_exc)
+            raise HTTPException(status_code=409, detail="New time slot is no longer available.")
+
+        # Delete old calendar event
+        cal_event_id = row["calendar_event_id"]
+        if cal_event_id:
+            try:
+                await delete_booking_event(cal_event_id)
+            except Exception as exc:
+                logger.error("[BOOKING] Old calendar event deletion failed: %s", exc)
+
+        # Create new calendar event
+        new_meet_link = None
+        new_cal_event_id = None
+        try:
+            cal_result = await create_booking_event(
+                session_type=row["session_type"],
+                slot_start=new_slot_start,
+                name=row["client_name"],
+                email=row["client_email"],
+                notes=row["notes"],
+            )
+            new_cal_event_id = cal_result.get("event_id")
+            new_meet_link = cal_result.get("meet_link")
+        except Exception as exc:
+            logger.error("[BOOKING] New calendar event creation failed: %s", exc)
+
+        # Update new booking with calendar info
+        await conn.execute(
+            """
+            UPDATE bookings SET calendar_event_id = $1, meet_link = $2, updated_at = NOW()
+            WHERE id = $3
+            """,
+            new_cal_event_id, new_meet_link, new_booking_id,
+        )
+
+    # Notification
+    try:
+        await send_booking_notification(
+            name=row["client_name"],
+            email=row["client_email"],
+            session_type=row["session_type"],
+            slot_start=req.new_slot_start,
+            status="RESCHEDULED",
+        )
+    except Exception:
+        pass
+
+    return RescheduleBookingResponse(
+        success=True,
+        message="Booking rescheduled successfully.",
+        new_booking=BookingEntry(
+            id=str(new_booking_id),
+            session_type=row["session_type"],
+            slot_start=new_slot_start.isoformat(),
+            slot_end=new_slot_end.isoformat(),
+            status="confirmed",
+            meet_link=new_meet_link,
+            amount_cents=row["amount_cents"] or 0,
+            can_cancel=True,
+            can_reschedule=True,
+            refund_eligible=new_slot_start > now + timedelta(hours=24),
+        ),
+    )
 
 
 if __name__ == "__main__":

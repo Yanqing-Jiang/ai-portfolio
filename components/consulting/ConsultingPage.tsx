@@ -2,13 +2,16 @@ import React, { useState, useEffect } from 'react';
 // @ts-ignore
 import { Helmet } from 'react-helmet-async';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Calendar as CalendarIcon, Clock, ShieldCheck, HelpCircle, Loader2 } from 'lucide-react';
+import { Calendar as CalendarIcon, Clock, ShieldCheck, HelpCircle, Loader2, LogIn } from 'lucide-react';
 
 import { SessionTypeCard } from './SessionTypeCard';
 import { CalendarPicker } from './CalendarPicker';
 import { BookingConfirmation } from './BookingConfirmation';
 import { useAvailableSlots } from './useAvailableSlots';
+import { MyBookingsSection } from './MyBookingsSection';
 import { configService } from '@/services/config';
+import { authService, type AuthState } from '@/services/auth';
+import { AuthModal } from '@/components/AuthModal';
 
 type SessionType = '30' | '60';
 
@@ -33,8 +36,8 @@ const FAQ = [
     a: 'You\'ll receive an instant confirmation email with a Google Meet link and a calendar invitation.',
   },
   {
-    q: 'Can I reschedule?',
-    a: 'Contact yanqing@yanqing.app at least 24 hours before your session to reschedule.',
+    q: 'Can I reschedule or cancel?',
+    a: 'Sign in to manage your bookings. You can reschedule up to 2 hours before your session. Cancellations more than 24 hours before receive a full refund.',
   },
   {
     q: 'What topics can we cover?',
@@ -51,6 +54,23 @@ export const ConsultingPage: React.FC = () => {
   const [notes, setNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [authState, setAuthState] = useState<AuthState>({ user: null, loading: true, error: null });
+  const [showAuthModal, setShowAuthModal] = useState(false);
+
+  // Subscribe to auth state
+  useEffect(() => {
+    const unsubscribe = authService.subscribe(setAuthState);
+    return unsubscribe;
+  }, []);
+
+  // Auto-fill name/email from auth user
+  useEffect(() => {
+    if (authState.user) {
+      const meta = authState.user.user_metadata;
+      if (meta?.full_name && !name) setName(meta.full_name as string);
+      if (authState.user.email && !email) setEmail(authState.user.email);
+    }
+  }, [authState.user]);
 
   // Check URL for Stripe redirect confirmation
   const [confirmationSessionId, setConfirmationSessionId] = useState<string | null>(null);
@@ -184,6 +204,27 @@ export const ConsultingPage: React.FC = () => {
           </motion.p>
         </div>
       </section>
+
+      {/* My Bookings / Sign-in prompt */}
+      {authState.user ? (
+        <MyBookingsSection user={authState.user} />
+      ) : (
+        <section className="px-6 pb-8 max-w-5xl mx-auto">
+          <div className="bg-white/[0.03] border border-white/10 rounded-2xl p-5 sm:p-6 flex flex-col sm:flex-row items-center justify-between gap-4">
+            <p className="text-slate-400 text-sm text-center sm:text-left">
+              Sign in to view and manage your bookings
+            </p>
+            <button
+              onClick={() => setShowAuthModal(true)}
+              className="inline-flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-700 rounded-xl
+                         text-white text-sm font-medium transition-colors whitespace-nowrap"
+            >
+              <LogIn className="w-4 h-4" />
+              Sign In
+            </button>
+          </div>
+        </section>
+      )}
 
       {/* Session Cards */}
       <section className="px-6 pb-12 max-w-5xl mx-auto">
@@ -349,6 +390,12 @@ export const ConsultingPage: React.FC = () => {
           ))}
         </div>
       </section>
+
+      {/* Auth Modal */}
+      <AuthModal
+        isOpen={showAuthModal}
+        onClose={() => setShowAuthModal(false)}
+      />
     </div>
   );
 };
