@@ -285,16 +285,23 @@ interface StreamingPhaseProps {
 function StreamingPhase({ fortuneId }: StreamingPhaseProps) {
     const backendUrl = configService.getBackendUrl();
     const [authToken, setAuthToken] = useState<string | null>(null);
+    const [tokenResolved, setTokenResolved] = useState(false);
 
-    // Keep auth token in sync for SSE streams (EventSource doesn't support headers)
+    // Resolve auth token once before connecting — prevents double-connect flicker
     useEffect(() => {
-        authService.getAccessToken().then(setAuthToken);
+        authService.getAccessToken().then((token) => {
+            setAuthToken(token);
+            setTokenResolved(true);
+        });
     }, []);
 
+    // Only build streamUrl after token is resolved (or confirmed absent)
+    // This prevents: null→connect→token arrives→new URL→reconnect→surface flash
     const streamUrl = useMemo(() => {
+        if (!tokenResolved) return null; // Don't connect yet
         const base = `${backendUrl}/api/fortune/${fortuneId}/stream`;
         return authToken ? `${base}?token=${encodeURIComponent(authToken)}` : base;
-    }, [backendUrl, fortuneId, authToken]);
+    }, [backendUrl, fortuneId, authToken, tokenResolved]);
 
     const [streamState, streamActions] = useA2UIStream(streamUrl, {
         autoConnect: true,
@@ -370,6 +377,10 @@ function StreamingPhase({ fortuneId }: StreamingPhaseProps) {
         ? streamState.dataModels.get(surfaceEntry[0]) || {}
         : {};
 
+    // Track whether we've ever seen a surface — prevents flicker on reconnect
+    const hasEverHadSurface = useRef(false);
+    if (surface) hasEverHadSurface.current = true;
+
     // Auto-scroll: sentinel at bottom, scroll into view when new content arrives
     const scrollSentinelRef = useRef<HTMLDivElement>(null);
     const userScrolledUp = useRef(false);
@@ -389,25 +400,32 @@ function StreamingPhase({ fortuneId }: StreamingPhaseProps) {
         scrollSentinelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
     }, [surface, dataModel, streamState.isDone]);
 
+    // Show loading only when we've never had content yet
+    const showLoading = !hasEverHadSurface.current && (streamState.isLoading || !tokenResolved);
+
     return (
         <div className="mx-auto w-full max-w-2xl px-4 py-6">
-            {/* Surface rendering */}
-            {surface ? (
+            {/* Surface rendering — always render if it exists (prevents jump on reconnect) */}
+            {surface && (
                 <A2UISurface
                     surface={surface}
                     dataModel={dataModel}
                     onAction={handleAction}
                 />
-            ) : streamState.isLoading ? (
-                <A2UISurfaceLoading />
-            ) : streamState.error ? (
+            )}
+
+            {/* Loading skeleton — only before any content has appeared */}
+            {showLoading && <A2UISurfaceLoading />}
+
+            {/* Error state — only when no surface was ever rendered */}
+            {!surface && !showLoading && streamState.error && (
                 <div className="rounded-lg border border-red-800 bg-red-950/30 p-4 text-center text-sm text-red-300">
                     {streamState.error.message}
                 </div>
-            ) : null}
+            )}
 
-            {/* Status indicator */}
-            {!streamState.isDone && !streamState.error && (
+            {/* Status indicator — only before surface appears */}
+            {!hasEverHadSurface.current && !streamState.isDone && !streamState.error && !showLoading && (
                 <div className="mt-4 flex items-center justify-center gap-2 text-sm text-slate-500">
                     <span className="h-2 w-2 animate-pulse rounded-full bg-[var(--ming-accent)]" />
                     Reading in progress...
