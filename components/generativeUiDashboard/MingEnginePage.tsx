@@ -40,7 +40,7 @@ const FOCUS_OPTIONS = [
     { id: 'career', label: 'Career Deep Dive', icon: '📐' },
     { id: 'relationship', label: 'Compatibility Check', icon: '🤝' },
     { id: 'year', label: 'This Year\'s Luck', icon: '📅' },
-    { id: '', label: 'General Reading', icon: '🔮' },
+    { id: 'general', label: 'General Reading', icon: '🔮' },
 ] as const;
 
 // ---------------------------------------------------------------------------

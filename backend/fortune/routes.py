@@ -258,18 +258,19 @@ async def stream_fortune(fortune_id: str, request: Request):
             yield _sse_data(bridge.emit_elements(session.latest_foundation["elements"]))
             yield _sse_data(bridge.emit_references(session.latest_foundation["references"]))
 
-            # 3. Clarification if focus is missing
+            # 3. Default focus if somehow missing (input phase always provides it)
             if not session.request.focus:
-                session.touch(RuntimeStatus.awaiting_clarification)
-                yield _sse_data(
-                    bridge.emitter.data_update(
-                        {"status": "awaiting_clarification"}, path="/data/meta",
-                    )
+                session.request = session.request.model_copy(update={"focus": "general"})
+                ctx = FortuneRunContext(
+                    fortune_id=ctx.fortune_id,
+                    surface_id=ctx.surface_id,
+                    question=ctx.question,
+                    focus="general",
+                    tone=ctx.tone,
+                    birth_iso=ctx.birth_iso,
+                    timezone=ctx.timezone,
+                    birth_time_unknown=ctx.birth_time_unknown,
                 )
-                yield clarification_to_sse_event(_build_clarification(session.fortune_id))
-                # Signal stream end so the frontend doesn't retry on close
-                yield _sse_data('{"done": true}')
-                return
 
             # 4. Narrative (streamed, then extract final structured output)
             stream_result = await run_narrative_streamed(ctx, foundation=foundation)
