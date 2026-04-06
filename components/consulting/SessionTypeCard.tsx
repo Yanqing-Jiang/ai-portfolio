@@ -8,6 +8,7 @@ interface SessionTypeCardProps {
   price: number;
   features: string[];
   active: boolean;
+  showPrice?: boolean;
   onSelect: () => void;
 }
 
@@ -17,6 +18,7 @@ export const SessionTypeCard: React.FC<SessionTypeCardProps> = ({
   price,
   features,
   active,
+  showPrice = true,
   onSelect,
 }) => (
   <motion.div
@@ -38,10 +40,14 @@ export const SessionTypeCard: React.FC<SessionTypeCardProps> = ({
       {duration} Min Session
     </p>
     <h3 className="text-2xl sm:text-3xl font-bold mb-3">{title}</h3>
-    <div className="text-4xl sm:text-5xl font-bold mb-8 tracking-tight">
-      ${price}{' '}
-      <span className="text-base sm:text-lg text-slate-500 font-normal">USD</span>
-    </div>
+    {showPrice ? (
+      <div className="text-4xl sm:text-5xl font-bold mb-8 tracking-tight">
+        ${price}{' '}
+        <span className="text-base sm:text-lg text-slate-500 font-normal">USD</span>
+      </div>
+    ) : (
+      <div className="text-sm text-slate-500 mb-8">Sign in to see pricing</div>
+    )}
     <ul className="space-y-3 mb-8">
       {features.map((f, i) => (
         <li key={i} className="flex items-center gap-3 text-slate-400 text-sm sm:text-base">

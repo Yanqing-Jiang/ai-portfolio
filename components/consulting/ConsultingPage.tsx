@@ -237,6 +237,7 @@ export const ConsultingPage: React.FC = () => {
               price={s.price}
               features={s.features}
               active={selectedSession === s.duration}
+              showPrice={!!authState.user}
               onSelect={() => {
                 setSelectedSession(s.duration);
                 setSelectedTime(null);
@@ -358,7 +359,7 @@ export const ConsultingPage: React.FC = () => {
                             <Loader2 className="w-5 h-5 animate-spin" /> Processing...
                           </span>
                         ) : (
-                          `Confirm & Pay $${selectedPrice}`
+                          authState.user ? `Confirm & Pay $${selectedPrice}` : 'Sign in to book'
                         )}
                       </button>
                       <p className="text-center text-xs text-slate-500 flex items-center justify-center gap-2">

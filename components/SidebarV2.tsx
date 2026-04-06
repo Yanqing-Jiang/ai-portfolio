@@ -318,9 +318,11 @@ const SidebarV2: React.FC<SidebarV2Props> = ({
                                 <SignInIcon />
                             </div>
                             <div className="flex flex-col text-left">
-                                <span className="text-[10px] font-black text-sky-500/70 uppercase tracking-[0.2em] leading-none mb-1">Access Terminal</span>
+                                <span className="text-[10px] font-black text-sky-500/70 uppercase tracking-[0.2em] leading-none mb-1">
+                                    {authState.user ? 'Access Terminal' : 'Sign In / Sign Up'}
+                                </span>
                                 <span className="text-[11px] font-bold text-white/80 group-hover:text-white transition-colors">
-                                    {authState.user ? authState.user.email : 'Sign In / Sign Up'}
+                                    {authState.user ? authState.user.email : 'to unlock more usage'}
                                 </span>
                             </div>
                         </motion.button>

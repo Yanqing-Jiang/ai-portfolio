@@ -173,8 +173,7 @@ const Layout: React.FC = () => {
       />
 
       <div className="relative flex-1 flex flex-col min-w-0 transition-all duration-500 ease-in-out">
-        {/* Sidebar toggle button - hidden on /consult page */}
-        {location.pathname !== '/consult' && (
+        {/* Sidebar toggle button */}
         <button
           onClick={() => {
             setIsSidebarOpen(!isSidebarOpen);
@@ -185,16 +184,15 @@ const Layout: React.FC = () => {
           }}
           className={`fixed top-6 z-[60] flex items-center justify-center w-8 h-8 md:w-10 md:h-10
                      bg-slate-900/80 backdrop-blur-xl border border-sky-500/30 rounded-full
-                     text-sky-400 transition-all duration-500 shadow-[0_0_20px_rgba(14,165,233,0.2)] 
+                     text-sky-400 transition-all duration-500 shadow-[0_0_20px_rgba(14,165,233,0.2)]
                      hover:bg-sky-500/20 hover:text-white hover:border-sky-400
                      ${isSidebarOpen ? 'left-[19rem] sm:left-[23rem] md:left-[19rem]' : 'left-6'}`}
         >
           {isSidebarOpen ? <ChevronLeftIcon /> : <ChevronRightIcon />}
-        </button>)
-}
+        </button>
 
         {/* Sidebar hint tooltip with premium animated arrow - shows once */}
-        {showSidebarHint && !isSidebarOpen && location.pathname !== '/consult' && (
+        {showSidebarHint && !isSidebarOpen && (
           <div className="fixed top-4 left-[64px] z-50 flex items-center gap-4 animate-fade-in pointer-events-none">
             {/* Premium Stylish Arrow */}
             <div className="relative flex items-center animate-bounce-horizontal">
