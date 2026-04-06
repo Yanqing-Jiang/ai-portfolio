@@ -89,6 +89,7 @@ class RateLimitScope(str, Enum):
     ANALYTICS_SQL = "next-gen-analytics-sql"
     CONVERSATIONAL_ANALYTICS = "conversational-analytics"
     CHAT = "chat"
+    FORTUNE = "fortune"
 
 # (guest_limit, member_limit)
 SCOPE_LIMITS: Dict[RateLimitScope, Tuple[int, int]] = {
@@ -97,6 +98,7 @@ SCOPE_LIMITS: Dict[RateLimitScope, Tuple[int, int]] = {
     RateLimitScope.ANALYTICS_SQL: (GUEST_LIMIT, MEMBER_LIMIT),
     RateLimitScope.CONVERSATIONAL_ANALYTICS: (GUEST_LIMIT, MEMBER_LIMIT),
     RateLimitScope.CHAT: (CHAT_GUEST_LIMIT, CHAT_MEMBER_LIMIT),
+    RateLimitScope.FORTUNE: (GUEST_LIMIT, MEMBER_LIMIT),
 }
 
 SCOPE_ALIAS_MAP: Dict[str, RateLimitScope] = {
@@ -110,6 +112,8 @@ SCOPE_ALIAS_MAP: Dict[str, RateLimitScope] = {
     RateLimitScope.CONVERSATIONAL_ANALYTICS.value: RateLimitScope.CONVERSATIONAL_ANALYTICS,
     "chat": RateLimitScope.CHAT,
     RateLimitScope.CHAT.value: RateLimitScope.CHAT,
+    "fortune": RateLimitScope.FORTUNE,
+    RateLimitScope.FORTUNE.value: RateLimitScope.FORTUNE,
 }
 
 @dataclass(slots=True)

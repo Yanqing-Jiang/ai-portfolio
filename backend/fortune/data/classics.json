@@ -1,0 +1,310 @@
+[
+  {
+    "id": "di_tian_sui_jia",
+    "passage": "甲木参天，脱胎要火。春不容金，秋不容土。",
+    "translation": "Jia Wood reaches the sky — it needs Fire to transform and grow. In spring it cannot tolerate Metal; in autumn it cannot tolerate Earth.",
+    "source": "滴天髓 · 甲木",
+    "tags": ["wood", "day_master", "growth", "fire_support", "seasonal", "jia"]
+  },
+  {
+    "id": "di_tian_sui_yi",
+    "passage": "乙木虽柔，刲羊解牛。怀丁抱丙，跨凤乘猴。",
+    "translation": "Yi Wood is soft and flexible — yet it can cut through sheep and carve oxen. Embracing Ding Fire and holding Bing Fire, it rides the phoenix and mounts the monkey.",
+    "source": "滴天髓 · 乙木",
+    "tags": ["wood", "day_master", "flexibility", "fire_support", "yi"]
+  },
+  {
+    "id": "di_tian_sui_bing",
+    "passage": "丙火猛烈，欺霜侮雪。能煅庚金，逢辛反怯。",
+    "translation": "Bing Fire is fierce and powerful — it defies frost and conquers snow. It can forge Geng Metal, yet retreats before Xin Metal.",
+    "source": "滴天髓 · 丙火",
+    "tags": ["fire", "day_master", "strength", "metal_interaction", "bing"]
+  },
+  {
+    "id": "di_tian_sui_ding",
+    "passage": "丁火柔中，内性昭融。抱乙而孝，合壬而忠。",
+    "translation": "Ding Fire is gentle at its core — inwardly radiant and harmonious. Holding onto Yi Wood it shows filial piety; combining with Ren Water it displays loyalty.",
+    "source": "滴天髓 · 丁火",
+    "tags": ["fire", "day_master", "gentle", "wood_support", "water_interaction", "ding"]
+  },
+  {
+    "id": "di_tian_sui_wu",
+    "passage": "戊土固重，既中且正。静翕动辟，万物司命。",
+    "translation": "Wu Earth is solid and weighty — centered and upright. In stillness it gathers; in motion it opens. It governs the fate of all things.",
+    "source": "滴天髓 · 戊土",
+    "tags": ["earth", "day_master", "stability", "center", "governance", "wu"]
+  },
+  {
+    "id": "di_tian_sui_ji",
+    "passage": "己土卑湿，中正蓄藏。不愁木盛，不畏水狂。",
+    "translation": "Ji Earth is low-lying and moist — centered, storing and concealing. It does not fear flourishing Wood, nor is it afraid of raging Water.",
+    "source": "滴天髓 · 己土",
+    "tags": ["earth", "day_master", "nurturing", "resilience", "ji"]
+  },
+  {
+    "id": "di_tian_sui_geng",
+    "passage": "庚金带煞，刚健为最。得水而清，得火而锐。",
+    "translation": "Geng Metal carries a killing edge — it is the most forceful and unyielding. With Water it becomes refined; with Fire it becomes sharp.",
+    "source": "滴天髓 · 庚金",
+    "tags": ["metal", "day_master", "strength", "water_support", "fire_support", "geng"]
+  },
+  {
+    "id": "di_tian_sui_xin",
+    "passage": "辛金软弱，温润而清。畏土之叠，乐水之盈。",
+    "translation": "Xin Metal is soft and delicate — warm, refined, and pure. It fears excessive Earth piling up, and delights in abundant Water.",
+    "source": "滴天髓 · 辛金",
+    "tags": ["metal", "day_master", "refinement", "water_support", "earth_fear", "xin"]
+  },
+  {
+    "id": "di_tian_sui_ren",
+    "passage": "壬水通河，能泄金气。刚中之德，周流不滞。",
+    "translation": "Ren Water flows through great rivers — it can release Metal's energy. It embodies inner strength through constant, unobstructed movement.",
+    "source": "滴天髓 · 壬水",
+    "tags": ["water", "day_master", "flow", "metal_interaction", "movement", "ren"]
+  },
+  {
+    "id": "di_tian_sui_gui",
+    "passage": "癸水至弱，达于天津。龙德而运，功化斯神。",
+    "translation": "Gui Water is the weakest of all — yet it reaches the heavenly ford. Carried by the dragon's virtue, its transformative power is divine.",
+    "source": "滴天髓 · 癸水",
+    "tags": ["water", "day_master", "subtlety", "transformation", "gui"]
+  },
+  {
+    "id": "di_tian_sui_tong_gen",
+    "passage": "天干得一比肩，不如得支中一个余气通根。",
+    "translation": "A Heavenly Stem gaining one Companion in the stems is not as valuable as finding one residual root in the Earthly Branches.",
+    "source": "滴天髓 · 论通根",
+    "tags": ["roots", "strength", "day_master", "method", "branches"]
+  },
+  {
+    "id": "di_tian_sui_ti_yong",
+    "passage": "道有体用，不可以一端论也。要在扶之抑之得其宜。",
+    "translation": "The Way has both substance and function — it cannot be judged from one angle alone. The key is whether support and restraint are applied appropriately.",
+    "source": "滴天髓 · 论体用",
+    "tags": ["balance", "method", "support", "restraint", "theory"]
+  },
+  {
+    "id": "di_tian_sui_yuan_liu",
+    "passage": "源流不断，富贵无边。一遇休囚，反为贫贱。",
+    "translation": "When the source flows without interruption, wealth and honor are boundless. Once it encounters weakness and decline, poverty and lowliness follow.",
+    "source": "滴天髓 · 论源流",
+    "tags": ["wealth", "flow", "strength", "decline", "fortune"]
+  },
+  {
+    "id": "di_tian_sui_qing_zhuo",
+    "passage": "清者，满局无杂之谓也。浊者，满局混杂之谓也。",
+    "translation": "Clarity means the entire chart is pure and unmixed. Turbidity means the entire chart is muddled and confused.",
+    "source": "滴天髓 · 论清浊",
+    "tags": ["clarity", "chart_quality", "method", "theory"]
+  },
+  {
+    "id": "di_tian_sui_health",
+    "passage": "五行和者，一世无灾。血气乱者，生平多疾。",
+    "translation": "When the Five Elements are harmonious, one lives free of disaster. When qi and blood are disordered, illness plagues the entire life.",
+    "source": "滴天髓 · 论疾病",
+    "tags": ["health", "five_elements", "balance", "illness", "harmony"]
+  },
+  {
+    "id": "yuan_hai_ri_zhu",
+    "passage": "看命须先看日主，次辨月令旺相休囚，再观通关制化。",
+    "translation": "Reading a chart begins with the Day Master, then assessing the month branch for seasonal strength, and finally examining the flow of control and transformation.",
+    "source": "渊海子平 · 论日主旺衰",
+    "tags": ["day_master", "strength", "season", "method"]
+  },
+  {
+    "id": "yuan_hai_career",
+    "passage": "官星明朗，仕途可期。官杀混杂，则需制化方可用。",
+    "translation": "When the Officer star is clear and bright, a career path is promising. When Officer and Killer are mixed, control and transformation are needed before they become useful.",
+    "source": "渊海子平 · 论官杀",
+    "tags": ["career", "officer", "killer", "clarity", "transformation"]
+  },
+  {
+    "id": "yuan_hai_wealth",
+    "passage": "财为养命之源，身旺财旺为佳。身弱财多，反为祸患。",
+    "translation": "Wealth is the source that sustains life — a strong self with strong wealth is ideal. A weak self with too much wealth brings calamity instead.",
+    "source": "渊海子平 · 论财",
+    "tags": ["wealth", "day_master", "strength", "balance", "fortune"]
+  },
+  {
+    "id": "yuan_hai_yin_star",
+    "passage": "印绶者，生我之物也。印旺身弱，名为相生有情。",
+    "translation": "The Resource star is what gives birth to the self. When Resource is strong and the self is weak, this is called a harmonious nurturing relationship.",
+    "source": "渊海子平 · 论印绶",
+    "tags": ["resource", "support", "nurturing", "day_master", "balance"]
+  },
+  {
+    "id": "yuan_hai_food_god",
+    "passage": "食神者，我生之物也。食神制杀，化恶为权。",
+    "translation": "The Eating God is what the self produces. When the Eating God controls the Killer, it transforms malevolence into authority.",
+    "source": "渊海子平 · 论食神",
+    "tags": ["eating_god", "output", "killer", "authority", "transformation"]
+  },
+  {
+    "id": "yuan_hai_yi_lu",
+    "passage": "建禄者，月令与日主同气也。身旺不需印，一逢财官便为美。",
+    "translation": "Established Salary means the month branch shares the same element as the Day Master. The self is already strong without needing Resource — encountering Wealth and Officer becomes auspicious.",
+    "source": "渊海子平 · 论建禄",
+    "tags": ["salary", "month_branch", "strength", "career", "wealth"]
+  },
+  {
+    "id": "yuan_hai_timing",
+    "passage": "大运看十年之祸福，流年看一年之吉凶。运年并论，方得其真。",
+    "translation": "Major cycles reveal fortune and misfortune over ten-year periods; annual cycles reveal luck for a single year. Only by examining both together can the truth be found.",
+    "source": "渊海子平 · 论大运流年",
+    "tags": ["timing", "major_cycle", "annual_cycle", "year", "forecast"]
+  },
+  {
+    "id": "yuan_hai_spouse",
+    "passage": "日支为妻宫，喜静不喜冲。逢合则美，逢冲则难。",
+    "translation": "The Day Branch is the spouse palace — it favors stability over clashes. Meeting a combination is auspicious; meeting a clash brings difficulty.",
+    "source": "渊海子平 · 论婚姻",
+    "tags": ["relationship", "marriage", "spouse_palace", "clash", "combination"]
+  },
+  {
+    "id": "yuan_hai_children",
+    "passage": "食伤为子女星，时柱为子女宫。得食伤生财，子女富贵。",
+    "translation": "The Output stars represent children; the Hour Pillar is the children's palace. When Output produces Wealth, the children will enjoy riches and honor.",
+    "source": "渊海子平 · 论子女",
+    "tags": ["children", "output", "hour_pillar", "wealth", "family"]
+  },
+  {
+    "id": "yuan_hai_month_branch",
+    "passage": "月令者，提纲也。得令则旺，失令则衰。",
+    "translation": "The month branch is the guiding principle. When the Day Master gains the season, it is strong; when it loses the season, it is weak.",
+    "source": "渊海子平 · 论月令",
+    "tags": ["month_branch", "season", "strength", "method", "day_master"]
+  },
+  {
+    "id": "zi_ping_yong_shen",
+    "passage": "用神者，月令中所藏之物，取其足以辅日主之不足者也。",
+    "translation": "The Useful God is what is stored within the month branch — it is selected to supplement what the Day Master lacks.",
+    "source": "子平真诠 · 论用神",
+    "tags": ["useful_god", "month_branch", "balance", "method"]
+  },
+  {
+    "id": "zi_ping_relationship",
+    "passage": "财星为妻，官星为夫。日支为配偶宫，其旺衰合冲关乎婚姻。",
+    "translation": "The Wealth star represents the wife; the Officer star represents the husband. The Day Branch is the spouse palace — its strength, combinations, and clashes relate to marriage.",
+    "source": "子平真诠 · 论婚姻",
+    "tags": ["relationship", "marriage", "wealth_star", "spouse_palace"]
+  },
+  {
+    "id": "zi_ping_xi_shen",
+    "passage": "喜神者，用神之所喜者也。用神不可伤，喜神不可坏。",
+    "translation": "The Favorable God is what the Useful God delights in. The Useful God must not be harmed, and the Favorable God must not be damaged.",
+    "source": "子平真诠 · 论喜忌",
+    "tags": ["useful_god", "favorable", "protection", "method", "theory"]
+  },
+  {
+    "id": "zi_ping_guan_sha",
+    "passage": "官与杀同为克我之物。官宜旺不宜制，杀宜制不宜旺。",
+    "translation": "Both Officer and Killer control the self. Officer should be strong and not restrained; Killer should be restrained and not too strong.",
+    "source": "子平真诠 · 论官杀",
+    "tags": ["officer", "killer", "career", "restraint", "method"]
+  },
+  {
+    "id": "zi_ping_cai_guan",
+    "passage": "财能生官，官能护财。财官双美，富贵之格也。",
+    "translation": "Wealth can produce Officer, and Officer can protect Wealth. When both Wealth and Officer are fine, it is a pattern of riches and honor.",
+    "source": "子平真诠 · 论财官",
+    "tags": ["wealth", "officer", "career", "fortune", "pattern"]
+  },
+  {
+    "id": "zi_ping_shang_guan",
+    "passage": "伤官见官，为祸百端。伤官伤尽，反为贵奇。",
+    "translation": "When the Hurting Officer encounters the Officer star, a hundred troubles arise. But when the Hurting Officer is completely exhausted, it paradoxically becomes noble and extraordinary.",
+    "source": "子平真诠 · 论伤官",
+    "tags": ["hurting_officer", "officer", "career", "conflict", "transformation"]
+  },
+  {
+    "id": "zi_ping_yin_shou",
+    "passage": "印绶生身，最宜官杀。无官无杀，印绶无功。",
+    "translation": "Resource nurtures the self — it works best with Officer and Killer. Without Officer or Killer, Resource has no purpose.",
+    "source": "子平真诠 · 论印绶",
+    "tags": ["resource", "officer", "killer", "support", "method"]
+  },
+  {
+    "id": "zi_ping_ge_ju",
+    "passage": "格局者，月令所藏之用神也。取格之法，以月令为主。",
+    "translation": "The chart pattern is the Useful God stored within the month branch. The method of determining the pattern takes the month branch as its foundation.",
+    "source": "子平真诠 · 论格局",
+    "tags": ["pattern", "month_branch", "useful_god", "method", "theory"]
+  },
+  {
+    "id": "zi_ping_luck_pillar",
+    "passage": "运者，命之辅也。命好运好，锦上添花。命好运坏，美玉有瑕。",
+    "translation": "Luck cycles assist one's destiny. Good fate with good luck adds beauty to beauty. Good fate with bad luck is like a fine jade with a flaw.",
+    "source": "子平真诠 · 论行运",
+    "tags": ["timing", "major_cycle", "fortune", "fate", "year"]
+  },
+  {
+    "id": "san_ming_wu_xing",
+    "passage": "五行者，金木水火土也。其数有五，并往来乘除，故云五行。",
+    "translation": "The Five Elements are Metal, Wood, Water, Fire, and Earth. They number five and interact through generation, control, and transformation — hence they are called the Five Phases.",
+    "source": "三命通会 · 论五行",
+    "tags": ["five_elements", "theory", "interaction", "foundation"]
+  },
+  {
+    "id": "san_ming_xiang_sheng",
+    "passage": "木生火，火生土，土生金，金生水，水生木。此五行相生之序也。",
+    "translation": "Wood produces Fire, Fire produces Earth, Earth produces Metal, Metal produces Water, Water produces Wood. This is the sequence of the Five Elements producing one another.",
+    "source": "三命通会 · 论相生",
+    "tags": ["five_elements", "generation", "cycle", "theory", "foundation"]
+  },
+  {
+    "id": "san_ming_xiang_ke",
+    "passage": "木克土，土克水，水克火，火克金，金克木。此五行相克之序也。",
+    "translation": "Wood controls Earth, Earth controls Water, Water controls Fire, Fire controls Metal, Metal controls Wood. This is the sequence of the Five Elements controlling one another.",
+    "source": "三命通会 · 论相克",
+    "tags": ["five_elements", "control", "cycle", "theory", "restraint"]
+  },
+  {
+    "id": "san_ming_liu_he",
+    "passage": "子丑合化土，寅亥合化木，卯戌合化火，辰酉合化金，巳申合化水，午未合化土。",
+    "translation": "Zi-Chou combine into Earth, Yin-Hai combine into Wood, Mao-Xu combine into Fire, Chen-You combine into Metal, Si-Shen combine into Water, Wu-Wei combine into Earth.",
+    "source": "三命通会 · 论六合",
+    "tags": ["combinations", "branches", "transformation", "theory"]
+  },
+  {
+    "id": "san_ming_san_he",
+    "passage": "申子辰合水局，亥卯未合木局，寅午戌合火局，巳酉丑合金局。",
+    "translation": "Shen-Zi-Chen form a Water frame, Hai-Mao-Wei form a Wood frame, Yin-Wu-Xu form a Fire frame, Si-You-Chou form a Metal frame.",
+    "source": "三命通会 · 论三合",
+    "tags": ["combinations", "branches", "framework", "element_strength"]
+  },
+  {
+    "id": "san_ming_chong",
+    "passage": "子午相冲，卯酉相冲，寅申相冲，巳亥相冲，辰戌相冲，丑未相冲。",
+    "translation": "Zi clashes with Wu, Mao clashes with You, Yin clashes with Shen, Si clashes with Hai, Chen clashes with Xu, Chou clashes with Wei.",
+    "source": "三命通会 · 论六冲",
+    "tags": ["clashes", "branches", "conflict", "disruption", "theory"]
+  },
+  {
+    "id": "san_ming_na_yin",
+    "passage": "纳音者，二气交感之声也。取其宫商角徵羽以配五行。",
+    "translation": "Na Yin is the sound produced when two energies interact. It maps the five musical tones — Gong, Shang, Jue, Zhi, Yu — onto the Five Elements.",
+    "source": "三命通会 · 论纳音",
+    "tags": ["nayin", "theory", "sound", "five_elements", "advanced"]
+  },
+  {
+    "id": "san_ming_shen_sha",
+    "passage": "天乙贵人者，天上之贵神也。得之则聪明智慧，遇难呈祥。",
+    "translation": "The Heavenly Noble is a celestial spirit of honor. Possessing it grants intelligence and wisdom; in times of danger, it turns misfortune into blessing.",
+    "source": "三命通会 · 论天乙贵人",
+    "tags": ["noble", "luck", "wisdom", "protection", "special_star"]
+  },
+  {
+    "id": "san_ming_tai_sui",
+    "passage": "太岁者，一年之主宰也。犯太岁则灾，合太岁则吉。",
+    "translation": "Tai Sui is the sovereign of the year. Offending Tai Sui brings disaster; harmonizing with Tai Sui brings fortune.",
+    "source": "三命通会 · 论太岁",
+    "tags": ["timing", "year", "tai_sui", "annual_cycle", "fortune"]
+  },
+  {
+    "id": "san_ming_tao_hua",
+    "passage": "桃花者，沐浴之地也。主人多情善感，逢之多有异性缘。",
+    "translation": "The Peach Blossom is the place of bathing. It makes one romantic and sentimental — when encountered, there are many romantic connections.",
+    "source": "三命通会 · 论桃花",
+    "tags": ["relationship", "romance", "peach_blossom", "special_star", "attraction"]
+  }
+]

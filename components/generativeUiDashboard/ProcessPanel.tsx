@@ -137,6 +137,16 @@ const SKILL_METADATA: Record<string, {
             { label: 'insight: AI', color: 'secondary' },
         ],
     },
+    'ming_engine_bazi': {
+        name: 'Ming Engine',
+        description: 'Computes BaZi chart, interprets pillars, consults classical texts, and composes a personalized reading.',
+        icon: '🔮',
+        tags: [
+            { label: 'chart: BaZi', color: 'positive' },
+            { label: 'data: classical texts', color: 'info' },
+            { label: 'insight: AI narrative', color: 'secondary' },
+        ],
+    },
 };
 
 // ============================================================================

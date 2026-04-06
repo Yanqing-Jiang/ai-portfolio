@@ -70,6 +70,35 @@ Protocol: A2UI v0.8 with custom financial component catalog extension
           'Renders TradingView charts, ECharts visualizations, and real-time KPIs',
         ],
       },
+      {
+        id: 'ming-engine',
+        title: 'Ming Engine',
+        description: `Multi-agent BaZi fortune reading system using OpenAI Agents SDK.
+
+5-step pipeline (calendar → interpreter → classics → narrative → guardrail) with real-time A2UI streaming, classical text retrieval, and mobile-first zero-keyboard input.
+
+• Computes Four Pillars (四柱) from lunisolar calendar via cnlunar
+• Retrieves relevant passages from classical BaZi texts (滴天髓, 渊海子平)
+• Streams personalized narrative sections with AI-generated insights
+• Follow-up actions for career, relationship, and yearly forecasts`,
+        cardDescription: 'BaZi fortune reading with multi-agent orchestration and real-time streaming UI.',
+        technologies: ['OpenAI Agents SDK', 'BaZi', 'A2UI Protocol', 'SSE Streaming', 'cnlunar'],
+        systemInstruction: '',
+        defaultPrompts: [],
+        coverUrl: '',
+        imageUrl: '',
+        seoTitle: 'Ming Engine — BaZi Fortune Reading Agent System',
+        seoDescription: 'Multi-agent fortune-telling system using OpenAI Agents SDK with BaZi computation, classical text retrieval, and real-time streaming UI.',
+        seoKeywords: ['BaZi', 'Four Pillars', 'fortune telling', 'AI agents', 'OpenAI Agents SDK'],
+        datePublished: '2026-04-06',
+        dateModified: '2026-04-06',
+        serviceTags: ['Agent Orchestration', 'BaZi', 'Streaming UI'],
+        linkText: 'Try Ming Engine',
+        statHighlights: [
+          '5-agent pipeline: calendar → interpreter → classics → narrative → guardrail',
+          'Streams custom BaZi widgets via A2UI protocol in real-time',
+        ],
+      },
     ],
   },
   {

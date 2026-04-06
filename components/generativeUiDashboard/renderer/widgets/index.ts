@@ -12,3 +12,10 @@ export { PeerComparePanel } from './PeerComparePanel';
 export { ErrorPanel } from './ErrorPanel';
 export { WidgetSkeleton, DashboardSkeleton } from './WidgetSkeleton';
 export { SkillSection } from './SkillSection';
+
+// Ming Engine fortune widgets
+export { FourPillarsCard } from './FourPillarsCard';
+export { ElementBalanceRadar } from './ElementBalanceRadar';
+export { ClassicalReferenceCard } from './ClassicalReferenceCard';
+export { FortuneReadingPanel } from './FortuneReadingPanel';
+export { DisclaimerBanner } from './DisclaimerBanner';

@@ -229,6 +229,13 @@ try:
 except ImportError as e:
     logger.warning("[STARTUP] Generative UI not available: %s", e)
 
+# Ming Engine - Fortune / BaZi reading router (2026 project)
+try:
+    from fortune import router as fortune_router
+    app.include_router(fortune_router)
+    logger.info("[STARTUP] Mounted Ming Engine router at /api/fortune")
+except ImportError as e:
+    logger.warning("[STARTUP] Ming Engine not available: %s", e)
 
 
 @app.get("/health")

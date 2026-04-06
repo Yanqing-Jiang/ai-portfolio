@@ -9,6 +9,7 @@ pyyaml
 pydantic==2.12.4
 openai>=1.107.3
 openai-agents>=0.5.0
+cnlunar>=0.2.4
 langchain==0.3.27
 langchain-core==0.3.77
 langchain-community==0.3.30

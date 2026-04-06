@@ -267,7 +267,13 @@ export type ComponentType =
     | { NewsTimeline: NewsTimelineProps }
     | { CorrelationMatrix: CorrelationMatrixProps }
     | { ExplainMovePanel: ExplainMovePanelProps }
-    | { ErrorPanel: ErrorPanelProps };
+    | { ErrorPanel: ErrorPanelProps }
+    // Ming Engine fortune widgets
+    | { FourPillarsCard: { title?: BoundString; pillarsPath: BoundString } }
+    | { ElementBalanceRadar: { title?: BoundString; elementsPath: BoundString } }
+    | { ClassicalReferenceCard: { referencesPath: BoundString } }
+    | { FortuneReadingPanel: { sectionsPath: BoundString } }
+    | { DisclaimerBanner: { guardrailPath: BoundString } };
 
 export interface A2UIComponent {
     id: string;

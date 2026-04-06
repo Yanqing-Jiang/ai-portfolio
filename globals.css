@@ -4,6 +4,10 @@
 
 @layer base {
   :root {
+    --ming-font-chinese: 'Noto Serif SC', 'Songti SC', serif;
+    --ming-bg: #0c0a14;
+    --ming-accent: #dc2626;
+    --ming-gold: #eab308;
     --background: 0 0% 100%;
     --foreground: 222.2 84% 4.9%;
     --card: 0 0% 100%;

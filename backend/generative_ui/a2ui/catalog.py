@@ -251,6 +251,69 @@ FINANCIAL_CATALOG = CatalogDefinition(
                 ),
             }
         ),
+        # ====================================================================
+        # Ming Engine Fortune Widgets
+        # ====================================================================
+        "FourPillarsCard": ComponentDefinition(
+            description="Displays BaZi year/month/day/hour pillars with day master metadata",
+            properties={
+                "title": ComponentProperty(
+                    type="BoundString",
+                    required=False,
+                    description="Card title"
+                ),
+                "pillarsPath": ComponentProperty(
+                    type="BoundString",
+                    required=True,
+                    description="Bound path to the pillars payload"
+                ),
+            }
+        ),
+        "ElementBalanceRadar": ComponentDefinition(
+            description="Displays five-element balance scores and dominant/weakest summaries",
+            properties={
+                "title": ComponentProperty(
+                    type="BoundString",
+                    required=False,
+                    description="Chart title"
+                ),
+                "elementsPath": ComponentProperty(
+                    type="BoundString",
+                    required=True,
+                    description="Bound path to the element balance payload"
+                ),
+            }
+        ),
+        "ClassicalReferenceCard": ComponentDefinition(
+            description="Displays classical passage citations with translations and relevance",
+            properties={
+                "referencesPath": ComponentProperty(
+                    type="BoundString",
+                    required=True,
+                    description="Bound path to the references array"
+                ),
+            }
+        ),
+        "FortuneReadingPanel": ComponentDefinition(
+            description="Displays structured reading narrative sections with streaming support",
+            properties={
+                "sectionsPath": ComponentProperty(
+                    type="BoundString",
+                    required=True,
+                    description="Bound path to the sections array"
+                ),
+            }
+        ),
+        "DisclaimerBanner": ComponentDefinition(
+            description="Displays interpretation guardrails and follow-up buttons",
+            properties={
+                "guardrailPath": ComponentProperty(
+                    type="BoundString",
+                    required=True,
+                    description="Bound path to guardrail metadata"
+                ),
+            }
+        ),
     }
 )
 

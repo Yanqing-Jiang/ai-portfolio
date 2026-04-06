@@ -38,6 +38,13 @@ import { PeerComparePanel } from './widgets/PeerComparePanel';
 import { ErrorPanel } from './widgets/ErrorPanel';
 import { MetricChart } from './widgets/MetricChart';
 
+// Ming Engine fortune widgets
+import { FourPillarsCard } from './widgets/FourPillarsCard';
+import { ElementBalanceRadar } from './widgets/ElementBalanceRadar';
+import { ClassicalReferenceCard } from './widgets/ClassicalReferenceCard';
+import { FortuneReadingPanel } from './widgets/FortuneReadingPanel';
+import { DisclaimerBanner } from './widgets/DisclaimerBanner';
+
 /**
  * Common props passed to all A2UI component implementations.
  */
@@ -93,6 +100,13 @@ export const componentRegistry: Record<
     PeerComparePanel,
     ErrorPanel,
     MetricChart,
+
+    // Ming Engine fortune widgets
+    FourPillarsCard,
+    ElementBalanceRadar,
+    ClassicalReferenceCard,
+    FortuneReadingPanel,
+    DisclaimerBanner,
 };
 
 

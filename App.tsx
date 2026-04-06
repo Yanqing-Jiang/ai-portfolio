@@ -16,6 +16,7 @@ import Sidebar from './components/SidebarV2';
 import ProjectView from './components/ProjectView';
 import LandingPageFlow from './components/LandingPageFlow';
 import { GenerativeUIPage } from './components/generativeUiDashboard';
+import { MingEnginePage } from './components/generativeUiDashboard/MingEnginePage';
 import { ConsultingPage } from './components/consulting/ConsultingPage';
 
 import { PROJECT_DATA } from './constants';
@@ -282,6 +283,8 @@ const Layout: React.FC = () => {
             />
             {/* 2026 Agent to UI - Custom full-page experience */}
             <Route path="/project/agent-to-ui" element={<GenerativeUIPage />} />
+            {/* 2026 Ming Engine - BaZi Fortune Reading */}
+            <Route path="/project/ming-engine" element={<MingEnginePage />} />
 
 
 
