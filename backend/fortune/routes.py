@@ -272,9 +272,14 @@ async def stream_fortune(fortune_id: str, request: Request):
             # 4. Narrative (streamed, then extract final structured output)
             stream_result = await run_narrative_streamed(ctx, foundation=foundation)
             async for event in stream_result.stream_events():
-                delta = getattr(event, "text", None) or getattr(event, "delta", None)
-                if delta and isinstance(delta, str):
-                    yield _sse_data(bridge.emit_narrative_delta(delta))
+                # RawResponsesStreamEvent wraps OpenAI response events
+                if hasattr(event, "data"):
+                    ev_data = event.data
+                    # Text delta events carry the streaming text in .delta
+                    if getattr(ev_data, "type", None) == "response.output_text.delta":
+                        delta = getattr(ev_data, "delta", None)
+                        if delta and isinstance(delta, str):
+                            yield _sse_data(bridge.emit_narrative_delta(delta))
 
             # 5. Extract final output from the completed stream run
             narrative = stream_result.final_output

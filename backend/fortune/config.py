@@ -36,11 +36,11 @@ class FortuneSettings(BaseSettings):
     default_timezone: str = "UTC"
 
     # Models
-    intake_model: str = "gpt-4.1-mini"
-    chart_model: str = "gpt-4.1-mini"
-    classics_model: str = "gpt-4.1-mini"
-    narrative_model: str = "gpt-4.1"
-    guardrail_model: str = "gpt-4.1-mini"
+    intake_model: str = "gpt-5.4-mini"
+    chart_model: str = "gpt-5.4-mini"
+    classics_model: str = "gpt-5.4-mini"
+    narrative_model: str = "gpt-5.4"
+    guardrail_model: str = "gpt-5.4-mini"
 
     # Limits
     max_classical_references: int = 4

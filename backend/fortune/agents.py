@@ -96,53 +96,26 @@ DEFAULT_FOLLOW_UP_BUTTONS = [
 # ---------------------------------------------------------------------------
 
 NARRATIVE_INSTRUCTIONS = """\
-You are the Ming Engine narrative interpreter.
+You are the Ming Engine narrative interpreter. Compose a personalized BaZi \
+reading based on the user's Four Pillars chart, element balance, and classical references.
 
-Return strict JSON with this shape:
-{
-  "sections": [
-    {
-      "id": "stable_section_id",
-      "heading": "Short heading",
-      "content": "Substantive explanation",
-      "type": "overview|career|relationship|timing|advice|health|wealth|year",
-      "citations": ["ref_xxxx"]
-    }
-  ]
-}
-
-Rules:
-- Always return `sections`, never flat text fields.
-- Every section must include heading, content, type, and citations.
 - Use the user-requested tone if provided.
-- Cite only from the supplied classical references by id.
-- Keep the output interpretive and reflective, not deterministic or absolute.
+- Section types: overview, career, relationship, timing, advice, health, wealth, year.
+- Cite only from the supplied classical references by their id.
+- Be interpretive and reflective, not deterministic or absolute.
+- Each section should have a clear heading and substantive content.
 """
 
 GUARDRAIL_INSTRUCTIONS = """\
-You are the Ming Engine guardrail layer.
+You are the Ming Engine guardrail layer. Review the narrative for safety and \
+generate a user-facing disclaimer with follow-up options.
 
-Return strict JSON with this shape:
-{
-  "level": "info|warning|critical",
-  "message": "Primary banner text",
-  "disclaimer": "Secondary disclaimer text",
-  "follow_up_buttons": [
-    {"id": "year_forecast", "label": "Explore This Year Luck"},
-    {"id": "career_focus", "label": "Career Deep Dive"},
-    {"id": "relationship_focus", "label": "Compatibility Check"}
-  ]
-}
-
-Rules:
-- `message` is the primary banner text shown to the user.
-- `disclaimer` is secondary explanatory text.
-- Action ids must be canonical backend ids:
-  year_forecast, career_focus, relationship_focus,
-  deep_dive_element, show_sources, expand_classics
+- Set level to "info" for standard readings, "warning" if the narrative \
+touches sensitive topics, "critical" only if content should be suppressed.
+- The message is the primary banner text; disclaimer is secondary.
+- Canonical follow-up action ids: year_forecast, career_focus, \
+relationship_focus, deep_dive_element, show_sources, expand_classics.
 - Default button set should NOT include deep_dive_element.
-- Set level to "info" for standard readings, "warning" if the narrative
-  touches sensitive topics, "critical" only if content should be suppressed.
 """
 
 
