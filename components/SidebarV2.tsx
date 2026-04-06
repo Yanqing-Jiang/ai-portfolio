@@ -329,12 +329,6 @@ const SidebarV2: React.FC<SidebarV2Props> = ({
                     </div>
                 </div>
 
-                <AuthModal
-                    isOpen={showAuthModal}
-                    onClose={() => setShowAuthModal(false)}
-                    onSuccess={() => setShowAuthModal(false)}
-                />
-
                 <style dangerouslySetInnerHTML={{
                     __html: `
         @keyframes scan-y {
@@ -359,6 +353,13 @@ const SidebarV2: React.FC<SidebarV2Props> = ({
         }
       `}} />
             </aside>
+
+            {/* Auth Modal - rendered outside aside to avoid overflow clipping */}
+            <AuthModal
+                isOpen={showAuthModal}
+                onClose={() => setShowAuthModal(false)}
+                onSuccess={() => setShowAuthModal(false)}
+            />
 
             {/* 4. HOLOGRAPHIC PORTAL PREVIEW (Moved outside sidebar container to avoid clipping) */}
             <AnimatePresence>
