@@ -12,6 +12,7 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { configService } from '../../services/config';
+import { authService } from '../../services/auth';
 import { useA2UIStream } from './a2ui/useA2UIStream';
 import { A2UISurface, A2UISurfaceLoading } from './renderer/A2UISurface';
 import { ClarificationOverlay } from './ClarificationOverlay';
@@ -73,9 +74,10 @@ function InputPhase({ onSubmit }: InputPhaseProps) {
                 ? `${birthDate}T12:00:00`
                 : `${birthDate}T${selectedTime}:00`;
 
+            const authHeaders = await authService.getAuthHeaders();
             const res = await fetch(`${backendUrl}/api/fortune/create`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', ...authHeaders },
                 body: JSON.stringify({
                     birth_iso: birthIso,
                     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -282,11 +284,17 @@ interface StreamingPhaseProps {
 
 function StreamingPhase({ fortuneId }: StreamingPhaseProps) {
     const backendUrl = configService.getBackendUrl();
+    const [authToken, setAuthToken] = useState<string | null>(null);
 
-    const streamUrl = useMemo(
-        () => `${backendUrl}/api/fortune/${fortuneId}/stream`,
-        [backendUrl, fortuneId]
-    );
+    // Keep auth token in sync for SSE streams (EventSource doesn't support headers)
+    useEffect(() => {
+        authService.getAccessToken().then(setAuthToken);
+    }, []);
+
+    const streamUrl = useMemo(() => {
+        const base = `${backendUrl}/api/fortune/${fortuneId}/stream`;
+        return authToken ? `${base}?token=${encodeURIComponent(authToken)}` : base;
+    }, [backendUrl, fortuneId, authToken]);
 
     const [streamState, streamActions] = useA2UIStream(streamUrl, {
         autoConnect: true,
@@ -297,11 +305,12 @@ function StreamingPhase({ fortuneId }: StreamingPhaseProps) {
         async (actionName: string, context: Record<string, unknown>) => {
             if (actionName === 'userAction' && context.actionId) {
                 try {
+                    const authHeaders = await authService.getAuthHeaders();
                     await fetch(
                         `${backendUrl}/api/fortune/${fortuneId}/action`,
                         {
                             method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
+                            headers: { 'Content-Type': 'application/json', ...authHeaders },
                             body: JSON.stringify({
                                 action_id: context.actionId,
                                 payload: {},
@@ -331,11 +340,12 @@ function StreamingPhase({ fortuneId }: StreamingPhaseProps) {
             const focusValue = responses.focus;
             if (focusValue) {
                 try {
+                    const authHeaders = await authService.getAuthHeaders();
                     await fetch(
                         `${backendUrl}/api/fortune/${fortuneId}/action`,
                         {
                             method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
+                            headers: { 'Content-Type': 'application/json', ...authHeaders },
                             body: JSON.stringify({
                                 action_id: focusValue as string,
                                 payload: {},
