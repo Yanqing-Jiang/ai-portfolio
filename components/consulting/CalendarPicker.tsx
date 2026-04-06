@@ -32,14 +32,12 @@ export const CalendarPicker: React.FC<CalendarPickerProps> = ({ selectedDate, on
 
     for (let d = 1; d <= daysInMonth; d++) {
       const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-      const dayOfWeek = new Date(year, month, d).getDay();
       const isPast = dateStr < today;
-      const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
 
       days.push({
         date: dateStr,
         day: d,
-        disabled: isPast || isWeekend,
+        disabled: isPast,
       });
     }
 

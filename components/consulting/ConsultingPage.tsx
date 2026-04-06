@@ -263,7 +263,7 @@ export const ConsultingPage: React.FC = () => {
                     <CalendarIcon className="w-6 h-6 text-blue-400" /> Select a Date
                   </h3>
                   <p className="text-sm text-slate-400">
-                    Sessions available Monday-Friday in Pacific Time
+                    Mon-Fri 1-5pm PT &middot; Sat-Sun 1-4:30pm PT
                   </p>
                   <CalendarPicker
                     selectedDate={selectedDate}

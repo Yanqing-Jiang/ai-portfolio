@@ -29,8 +29,12 @@ GOOGLE_CALENDAR_ID = os.getenv("GOOGLE_CALENDAR_ID", "")
 GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "")
 
 # Business hours (in BOOKING_TIMEZONE)
-BUSINESS_HOUR_START = 9   # 9 AM
-BUSINESS_HOUR_END = 17    # 5 PM
+# Weekday (Mon-Fri): 1pm-5pm PT | Weekend (Sat-Sun): 1pm-4:30pm PT
+WEEKDAY_HOUR_START = 13   # 1 PM
+WEEKDAY_HOUR_END = 17     # 5 PM
+WEEKEND_HOUR_START = 13   # 1 PM
+WEEKEND_HOUR_END_H = 16   # 4:30 PM (hour component)
+WEEKEND_HOUR_END_M = 30   # 4:30 PM (minute component)
 BUFFER_MINUTES = 15       # buffer between sessions
 SLOT_DURATION_MINUTES = 30  # base slot size
 
@@ -98,21 +102,26 @@ def _generate_slot_boundaries(target_date: date, tz: ZoneInfo) -> list[tuple[dat
     """Generate all possible 30-minute slot boundaries within business hours for a given date.
 
     Returns a list of (start, end) tuples in the configured timezone.
-    Only weekdays (Mon-Fri) are valid.
+    Mon-Fri: 1pm-5pm PT | Sat-Sun: 1pm-4:30pm PT.
     """
-    # Check weekday (0=Mon, 6=Sun)
-    if target_date.weekday() >= 5:
-        return []
+    is_weekend = target_date.weekday() >= 5  # 5=Sat, 6=Sun
+
+    if is_weekend:
+        hour_start, min_start = WEEKEND_HOUR_START, 0
+        hour_end, min_end = WEEKEND_HOUR_END_H, WEEKEND_HOUR_END_M
+    else:
+        hour_start, min_start = WEEKDAY_HOUR_START, 0
+        hour_end, min_end = WEEKDAY_HOUR_END, 0
 
     slots = []
     start_of_day = datetime(
         target_date.year, target_date.month, target_date.day,
-        BUSINESS_HOUR_START, 0, 0,
+        hour_start, min_start, 0,
         tzinfo=tz,
     )
     end_of_day = datetime(
         target_date.year, target_date.month, target_date.day,
-        BUSINESS_HOUR_END, 0, 0,
+        hour_end, min_end, 0,
         tzinfo=tz,
     )
 
@@ -137,7 +146,10 @@ def _overlaps(busy_start: datetime, busy_end: datetime, slot_start: datetime, sl
 # ---------------------------------------------------------------------------
 
 def _mock_available_slots(target_date: date, session_type: str = "30") -> list[dict]:
-    """Return mock available slots for development/testing."""
+    """Return all slots as available (no Google Calendar to check against).
+
+    The DB layer in main.py still filters out held/confirmed bookings.
+    """
     tz = ZoneInfo(BOOKING_TIMEZONE)
     all_slots = _generate_slot_boundaries(target_date, tz)
     duration = SESSION_DURATIONS.get(session_type, 30)
@@ -146,22 +158,21 @@ def _mock_available_slots(target_date: date, session_type: str = "30") -> list[d
         return []
 
     available = []
-    # For mock: mark every other slot as available (simulate some busy time)
-    for i, (start, end) in enumerate(all_slots):
-        if i % 2 == 0:
-            if duration == 60:
-                # For 60-min: need this slot and the next one free
-                if i + 1 < len(all_slots):
-                    mock_end = start + timedelta(minutes=60)
-                    available.append({
-                        "start": start.isoformat(),
-                        "end": mock_end.isoformat(),
-                    })
-            else:
+    if duration == 60:
+        # 60-min: need two consecutive free slots
+        for i, (start, _end) in enumerate(all_slots):
+            if i + 1 < len(all_slots):
+                mock_end = start + timedelta(minutes=60)
                 available.append({
                     "start": start.isoformat(),
-                    "end": end.isoformat(),
+                    "end": mock_end.isoformat(),
                 })
+    else:
+        for start, end in all_slots:
+            available.append({
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+            })
 
     return available
 
