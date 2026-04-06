@@ -304,6 +304,16 @@ FINANCIAL_CATALOG = CatalogDefinition(
                 ),
             }
         ),
+        "InsightAccordion": ComponentDefinition(
+            description="Interactive accordion of themed insight cards with TL;DR, bullet points, and citations",
+            properties={
+                "insightsPath": ComponentProperty(
+                    type="BoundString",
+                    required=True,
+                    description="Bound path to the insights payload (tldr + insights[])"
+                ),
+            }
+        ),
         "DisclaimerBanner": ComponentDefinition(
             description="Displays interpretation guardrails and follow-up buttons",
             properties={

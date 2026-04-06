@@ -43,6 +43,7 @@ import { FourPillarsCard } from './widgets/FourPillarsCard';
 import { ElementBalanceRadar } from './widgets/ElementBalanceRadar';
 import { ClassicalReferenceCard } from './widgets/ClassicalReferenceCard';
 import { FortuneReadingPanel } from './widgets/FortuneReadingPanel';
+import { InsightAccordion } from './widgets/InsightAccordion';
 import { DisclaimerBanner } from './widgets/DisclaimerBanner';
 
 /**
@@ -106,6 +107,7 @@ export const componentRegistry: Record<
     ElementBalanceRadar,
     ClassicalReferenceCard,
     FortuneReadingPanel,
+    InsightAccordion,
     DisclaimerBanner,
 };
 

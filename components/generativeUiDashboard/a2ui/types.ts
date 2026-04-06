@@ -273,6 +273,7 @@ export type ComponentType =
     | { ElementBalanceRadar: { title?: BoundString; elementsPath: BoundString } }
     | { ClassicalReferenceCard: { referencesPath: BoundString } }
     | { FortuneReadingPanel: { sectionsPath: BoundString } }
+    | { InsightAccordion: { insightsPath: BoundString } }
     | { DisclaimerBanner: { guardrailPath: BoundString } };
 
 export interface A2UIComponent {

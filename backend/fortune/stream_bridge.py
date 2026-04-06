@@ -74,8 +74,8 @@ class FortuneStreamBridge:
             A2UIComponent(
                 id="fortune_reading",
                 component={
-                    "FortuneReadingPanel": {
-                        "sectionsPath": {"path": "/data/narrative"},
+                    "InsightAccordion": {
+                        "insightsPath": {"path": "/data/narrative"},
                     }
                 },
             ),
@@ -87,6 +87,8 @@ class FortuneStreamBridge:
                     }
                 },
             ),
+            # Action buttons
+            *FortuneStreamBridge._action_button_components(),
             # Layout wrappers
             A2UIComponent.card("fortune_pillars_card", "fortune_pillars"),
             A2UIComponent.card("fortune_elements_card", "fortune_elements"),
@@ -100,11 +102,50 @@ class FortuneStreamBridge:
                     "fortune_elements_card",
                     "fortune_classics_card",
                     "fortune_reading_card",
+                    "fortune_actions_row",
                     "fortune_disclaimer_card",
                 ],
             ),
             A2UIComponent.column("layout_root", ["fortune_root"]),
         ]
+
+    @staticmethod
+    def _action_button_components() -> list[A2UIComponent]:
+        """Build follow-up action button components for the fortune surface."""
+        buttons = [
+            ("btn_year", "📅 Year Forecast", "year_forecast"),
+            ("btn_career", "📐 Career Deep Dive", "career_focus"),
+            ("btn_compat", "🤝 Compatibility", "relationship_focus"),
+            ("btn_elements", "🔮 Element Deep Dive", "deep_dive_element"),
+        ]
+        components: list[A2UIComponent] = []
+        for btn_id, label, action_id in buttons:
+            # Label text component
+            components.append(A2UIComponent(
+                id=f"{btn_id}_label",
+                component={
+                    "Text": {"text": {"literalString": label}, "usageHint": "body"}
+                },
+            ))
+            # Button component
+            components.append(A2UIComponent(
+                id=btn_id,
+                component={
+                    "Button": {
+                        "child": f"{btn_id}_label",
+                        "action": {
+                            "name": "userAction",
+                            "context": [
+                                {"key": "actionId", "value": {"literalString": action_id}}
+                            ],
+                        },
+                        "variant": "secondary",
+                    }
+                },
+            ))
+        btn_ids = [b[0] for b in buttons]
+        components.append(A2UIComponent.row("fortune_actions_row", btn_ids))
+        return components
 
     # ------------------------------------------------------------------
     # Emission helpers
@@ -162,35 +203,36 @@ class FortuneStreamBridge:
         )
 
     def emit_narrative_delta(self, delta: str) -> str:
-        """Accumulate streaming text into a single live section."""
+        """Accumulate streaming text — show loading state until complete."""
         self._live_narrative += delta
-        sections = [
-            {
-                "id": "section_live",
-                "heading": "Reading In Progress",
-                "content": self._live_narrative,
-                "type": "overview",
-                "citations": [],
-            }
-        ]
         return self.emitter.data_update(
-            {"sections": sections, "isComplete": False}, path="/data/narrative",
+            {"isComplete": False, "streamingText": self._live_narrative[:120]},
+            path="/data/narrative",
         )
 
-    def emit_narrative_complete(self, sections: list[dict[str, Any]]) -> str:
-        """Replace streaming section with final multi-section output."""
-        normalized = [
-            {
-                "id": item.get("id") or _stable_id("section", json.dumps(item, sort_keys=True)),
-                "heading": item["heading"],
-                "content": item["content"],
-                "type": item["type"],
+    def emit_narrative_complete(self, narrative_data: dict[str, Any]) -> str:
+        """Emit final insight-based narrative with tldr + insight sections."""
+        insights = []
+        for item in narrative_data.get("insights", []):
+            bullets = [
+                {"icon": b.get("icon", "•"), "text": b.get("text", "")}
+                for b in item.get("bullets", [])
+            ]
+            insights.append({
+                "id": item.get("id") or _stable_id("insight", item.get("heading", "")),
+                "icon": item.get("icon", "📖"),
+                "heading": item.get("heading", ""),
+                "tagline": item.get("tagline", ""),
+                "bullets": bullets,
                 "citations": item.get("citations", []),
-            }
-            for item in sections
-        ]
+            })
         return self.emitter.data_update(
-            {"sections": normalized, "isComplete": True}, path="/data/narrative",
+            {
+                "tldr": narrative_data.get("tldr", ""),
+                "insights": insights,
+                "isComplete": True,
+            },
+            path="/data/narrative",
         )
 
     def emit_guardrail(self, payload: dict[str, Any]) -> str:
@@ -203,10 +245,16 @@ class FortuneStreamBridge:
         return self.emitter.data_update(normalized, path="/data/guardrail")
 
     def emit_complete(self) -> list[str]:
-        """Terminal success: set status + audit event."""
+        """Terminal success: set status + audit event + done signal.
+
+        The final '{"done": true}' is required by the frontend useA2UIStream
+        hook — without it, EventSource interprets the server-side close as an
+        error and retries 5 times before surfacing "Stream connection lost".
+        """
         return [
             self.emitter.data_update({"status": "complete"}, path="/data/meta"),
             self.emitter.audit("stream_complete"),
+            '{"done": true}',
         ]
 
     def emit_error(self, message: str) -> list[str]:

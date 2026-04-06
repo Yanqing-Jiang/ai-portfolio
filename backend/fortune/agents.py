@@ -60,16 +60,26 @@ class ClassicalReference(BaseModel):
     relevance: str
 
 
-class NarrativeSection(BaseModel):
+class InsightBullet(BaseModel):
+    """Single bullet point inside an insight section."""
+    icon: str = Field(description="Emoji icon for this bullet")
+    text: str = Field(description="Concise insight, max ~80 chars")
+
+
+class InsightSection(BaseModel):
+    """One themed card in the accordion (e.g. Strengths, Watch Out)."""
     id: str
-    heading: str
-    content: str
-    type: str
+    icon: str = Field(description="Section emoji")
+    heading: str = Field(description="Short heading, 2-4 words")
+    tagline: str = Field(description="1-sentence sub-heading")
+    bullets: list[InsightBullet] = Field(min_length=2, max_length=5)
     citations: list[str] = Field(default_factory=list)
 
 
 class NarrativeOutput(BaseModel):
-    sections: list[NarrativeSection]
+    """Structured narrative: a TL;DR + 3-4 insight cards."""
+    tldr: str = Field(description="1-sentence summary, max 20 words")
+    insights: list[InsightSection] = Field(min_length=2, max_length=5)
 
 
 class FollowUpButton(BaseModel):
@@ -96,14 +106,26 @@ DEFAULT_FOLLOW_UP_BUTTONS = [
 # ---------------------------------------------------------------------------
 
 NARRATIVE_INSTRUCTIONS = """\
-You are the Ming Engine narrative interpreter. Compose a personalized BaZi \
-reading based on the user's Four Pillars chart, element balance, and classical references.
+You are the Ming Engine narrative interpreter. Produce a concise, interactive \
+BaZi reading using the user's Four Pillars chart, element balance, and classical references.
 
-- Use the user-requested tone if provided.
-- Section types: overview, career, relationship, timing, advice, health, wealth, year.
+Output format:
+- tldr: 1 sentence, max 20 words, capturing the core insight.
+- insights: 3-4 themed sections. Each section has:
+  - id: snake_case identifier (e.g. "core_strength", "dynamics", "advice", "timing")
+  - icon: a single emoji that represents the theme (🎯 ⚡ ✨ 🕐 ⚠️ 💡 🔥 🌊)
+  - heading: 2-4 word title
+  - tagline: 1 sentence explaining the theme for this chart
+  - bullets: 2-4 items, each with an emoji icon and short text (max 80 chars, no paragraphs)
+  - citations: list of classical reference ids used
+
+Guidelines:
+- Be concise. More insight per word, fewer words per insight.
+- Use vivid, specific language — not vague generalities.
+- Match the user-requested tone if provided.
 - Cite only from the supplied classical references by their id.
 - Be interpretive and reflective, not deterministic or absolute.
-- Each section should have a clear heading and substantive content.
+- Prefer actionable, practical bullets over abstract philosophy.
 """
 
 GUARDRAIL_INSTRUCTIONS = """\
@@ -290,7 +312,7 @@ async def run_guardrail(
         {
             "focus": ctx.focus,
             "tone": ctx.tone,
-            "sections": [s.model_dump() for s in narrative.sections],
+            "insights": [s.model_dump() for s in narrative.insights],
             "default_buttons": [b.model_dump() for b in DEFAULT_FOLLOW_UP_BUTTONS],
         },
         ensure_ascii=False,

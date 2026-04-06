@@ -267,6 +267,8 @@ async def stream_fortune(fortune_id: str, request: Request):
                     )
                 )
                 yield clarification_to_sse_event(_build_clarification(session.fortune_id))
+                # Signal stream end so the frontend doesn't retry on close
+                yield _sse_data('{"done": true}')
                 return
 
             # 4. Narrative (streamed, then extract final structured output)
@@ -287,7 +289,7 @@ async def stream_fortune(fortune_id: str, request: Request):
                 narrative = NarrativeOutput.model_validate(narrative)
             session.latest_narrative = narrative.model_dump()
             yield _sse_data(
-                bridge.emit_narrative_complete(session.latest_narrative["sections"])
+                bridge.emit_narrative_complete(session.latest_narrative)
             )
 
             # 6. Guardrail
