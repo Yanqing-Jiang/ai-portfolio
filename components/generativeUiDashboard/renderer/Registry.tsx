@@ -50,6 +50,9 @@ import { FortuneReadingPanel } from './widgets/FortuneReadingPanel';
 import { InsightAccordion } from './widgets/InsightAccordion';
 import { DisclaimerBanner } from './widgets/DisclaimerBanner';
 import { AgentTraceSidebar } from './widgets/AgentTraceSidebar';
+import { SpookyAccuracyCard } from './widgets/SpookyAccuracyCard';
+import { PipelineDag } from './widgets/PipelineDag';
+import { CitationViewer } from './widgets/CitationViewer';
 
 /**
  * Common props passed to all A2UI component implementations.
@@ -119,6 +122,9 @@ export const componentRegistry: Record<
     InsightAccordion,
     DisclaimerBanner,
     AgentTraceSidebar,
+    SpookyAccuracyCard,
+    PipelineDag,
+    CitationViewer,
 };
 
 

@@ -134,7 +134,28 @@ class FortuneStreamBridge:
                 }
             }),
 
-            # Classical references
+            # Spooky Accuracy retrodictions
+            A2UIComponent(id="fortune_spooky", component={
+                "SpookyAccuracyCard": {
+                    "retrodictionsPath": {"path": "/data/retrodictions"},
+                }
+            }),
+
+            # Citation viewer (interactive dual-pane)
+            A2UIComponent(id="fortune_citations", component={
+                "CitationViewer": {
+                    "referencesPath": {"path": "/data/classics"},
+                }
+            }),
+
+            # Pipeline DAG (Inspector mode only)
+            A2UIComponent(id="fortune_dag", component={
+                "PipelineDag": {
+                    "stepsPath": {"path": "/data/trace/steps"},
+                }
+            }),
+
+            # Classical references (legacy card view)
             A2UIComponent(id="fortune_classics", component={
                 "ClassicalReferenceCard": {
                     "referencesPath": {"path": "/data/classics"},
@@ -179,14 +200,20 @@ class FortuneStreamBridge:
                 "fortune_interactions_card", "fortune_ten_gods_card",
             ]),
 
+            # Spooky Accuracy (full width)
+            A2UIComponent.card("fortune_spooky_card", "fortune_spooky"),
+
             # Timeline (full width)
             A2UIComponent.card("fortune_timeline_card", "fortune_timeline"),
 
-            # Row 3: Insights + Classics
+            # Pipeline DAG (full width, inspector only)
+            A2UIComponent.card("fortune_dag_card", "fortune_dag"),
+
+            # Row 3: Insights + Citations
             A2UIComponent.card("fortune_reading_card", "fortune_reading"),
-            A2UIComponent.card("fortune_classics_card", "fortune_classics"),
-            A2UIComponent.row("row_reading_classics", [
-                "fortune_reading_card", "fortune_classics_card",
+            A2UIComponent.card("fortune_citations_card", "fortune_citations"),
+            A2UIComponent.row("row_reading_citations", [
+                "fortune_reading_card", "fortune_citations_card",
             ]),
 
             # Disclaimer
@@ -208,8 +235,10 @@ class FortuneStreamBridge:
                     "kpi_row",
                     "row_pillars_elements",
                     "row_interactions_gods",
+                    "fortune_spooky_card",
                     "fortune_timeline_card",
-                    "row_reading_classics",
+                    "fortune_dag_card",
+                    "row_reading_citations",
                     "fortune_actions_row",
                     "fortune_disclaimer_card",
                 ],
@@ -459,6 +488,21 @@ class FortuneStreamBridge:
             for ap in annual_pillars
         ]
         return self.emitter.data_update({"items": normalized}, path="/data/annualPillars")
+
+    def emit_retrodictions(self, retrodictions: list[Any]) -> str:
+        """Emit Spooky Accuracy retrodictions."""
+        normalized = [
+            {
+                "year": r.year if hasattr(r, "year") else r["year"],
+                "prediction": r.prediction if hasattr(r, "prediction") else r["prediction"],
+                "interactionType": r.interaction_type if hasattr(r, "interaction_type") else r["interaction_type"],
+                "interactionDescription": r.interaction_description if hasattr(r, "interaction_description") else r["interaction_description"],
+                "affectedPillar": r.affected_pillar if hasattr(r, "affected_pillar") else r["affected_pillar"],
+                "confidence": r.confidence if hasattr(r, "confidence") else r["confidence"],
+            }
+            for r in retrodictions
+        ]
+        return self.emitter.data_update({"items": normalized}, path="/data/retrodictions")
 
     def emit_kpi(self, analysis: Any) -> str:
         """Emit KPI summary data (harmony score, seasonal strength, etc.)."""

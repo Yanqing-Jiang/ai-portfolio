@@ -17,7 +17,7 @@ try:
         compute_full_analysis, FullBaziAnalysis,
         compute_all_hidden_stems, compute_ten_gods, compute_interactions,
         compute_seasonal_strength, compute_luck_pillars, compute_annual_pillars,
-        compute_enhanced_elements, compute_harmony_score,
+        compute_enhanced_elements, compute_harmony_score, compute_retrodictions,
     )
     from .trace_collector import TraceCollector
 except ImportError:
@@ -28,7 +28,7 @@ except ImportError:
         compute_full_analysis, FullBaziAnalysis,
         compute_all_hidden_stems, compute_ten_gods, compute_interactions,
         compute_seasonal_strength, compute_luck_pillars, compute_annual_pillars,
-        compute_enhanced_elements, compute_harmony_score,
+        compute_enhanced_elements, compute_harmony_score, compute_retrodictions,
     )
     from trace_collector import TraceCollector  # type: ignore[no-redef]
 
@@ -341,7 +341,14 @@ async def run_foundation(ctx: FortuneRunContext) -> dict[str, Any]:
         notable = sum(1 for ap in annual_pillars if ap.interactions_with_chart)
         ts.output_summary = f"{len(annual_pillars)} years, {notable} with interactions"
 
-    # 9. Harmony score
+    # 9. Retrodictions (Spooky Accuracy)
+    with trace.step("tool_call", "foundation", tool_name="compute_retrodictions",
+                     label="Generating Retrodictions (Spooky Accuracy)",
+                     input_summary=f"scanning past years for strong interactions") as ts:
+        retrodictions = compute_retrodictions(annual_pillars, current_year=current_year)
+        ts.output_summary = f"{len(retrodictions)} retrodictions generated"
+
+    # 10. Harmony score
     harmony = compute_harmony_score(interactions)
 
     # Build FullBaziAnalysis for downstream compatibility
@@ -381,6 +388,7 @@ async def run_foundation(ctx: FortuneRunContext) -> dict[str, Any]:
         "elements": elements,
         "references": references,
         "analysis": analysis,
+        "retrodictions": retrodictions,
         "trace": trace,
     }
 

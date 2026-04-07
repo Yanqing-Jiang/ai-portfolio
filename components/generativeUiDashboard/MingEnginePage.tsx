@@ -16,6 +16,7 @@ import { authService } from '../../services/auth';
 import { useA2UIStream } from './a2ui/useA2UIStream';
 import { A2UISurface, A2UISurfaceLoading } from './renderer/A2UISurface';
 import { ClarificationOverlay } from './ClarificationOverlay';
+import { InspectorModeProvider } from './InspectorModeContext';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -318,9 +319,10 @@ function InputPhase({ onSubmit }: InputPhaseProps) {
 
 interface StreamingPhaseProps {
     fortuneId: string;
+    inspectorMode?: boolean;
 }
 
-function StreamingPhase({ fortuneId }: StreamingPhaseProps) {
+function StreamingPhase({ fortuneId, inspectorMode = false }: StreamingPhaseProps) {
     const backendUrl = configService.getBackendUrl();
     const [authToken, setAuthToken] = useState<string | null>(null);
     const [tokenResolved, setTokenResolved] = useState(false);
@@ -481,15 +483,17 @@ function StreamingPhase({ fortuneId }: StreamingPhaseProps) {
         <div ref={contentRef} className="mx-auto w-full max-w-6xl px-4 py-6">
             {/* Surface rendering — always render if it exists (prevents jump on reconnect) */}
             {surface && (
-                <MotionConfig transition={{ layout: { duration: 0 } }}>
-                    <div style={{ contain: 'layout paint', willChange: 'transform' }}>
-                        <A2UISurface
-                            surface={surface}
-                            dataModel={dataModel}
-                            onAction={handleAction}
-                        />
-                    </div>
-                </MotionConfig>
+                <InspectorModeProvider inspectorMode={inspectorMode}>
+                    <MotionConfig transition={{ layout: { duration: 0 } }}>
+                        <div style={{ contain: 'layout paint', willChange: 'transform' }}>
+                            <A2UISurface
+                                surface={surface}
+                                dataModel={dataModel}
+                                onAction={handleAction}
+                            />
+                        </div>
+                    </MotionConfig>
+                </InspectorModeProvider>
             )}
 
             {/* Loading skeleton — only before any content has appeared */}
@@ -567,7 +571,7 @@ export function MingEnginePage(): React.ReactElement {
                         exit={{ opacity: 0 }}
                         transition={{ duration: 0.3 }}
                     >
-                        <StreamingPhase fortuneId={fortuneId} />
+                        <StreamingPhase fortuneId={fortuneId} inspectorMode={inspectorMode} />
                     </motion.div>
                 )}
             </AnimatePresence>

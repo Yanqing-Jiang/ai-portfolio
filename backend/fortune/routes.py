@@ -283,6 +283,11 @@ async def stream_fortune(fortune_id: str, request: Request):
                 yield _sse_data(bridge.emit_annual_pillars(analysis.annual_pillars))
             yield _sse_data(bridge.emit_kpi(analysis))
 
+            # Emit retrodictions (Spooky Accuracy)
+            retrodictions = foundation.get("retrodictions", [])
+            if retrodictions:
+                yield _sse_data(bridge.emit_retrodictions(retrodictions))
+
             # Emit foundation trace steps (Glass Box sidebar)
             trace = foundation.get("trace")
             if trace:

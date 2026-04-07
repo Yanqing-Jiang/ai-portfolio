@@ -359,6 +359,36 @@ FINANCIAL_CATALOG = CatalogDefinition(
                 ),
             }
         ),
+        "SpookyAccuracyCard": ComponentDefinition(
+            description="Retrodictions — predictions about the past based on annual pillar interactions",
+            properties={
+                "retrodictionsPath": ComponentProperty(
+                    type="BoundString",
+                    required=True,
+                    description="Bound path to retrodictions array"
+                ),
+            }
+        ),
+        "PipelineDag": ComponentDefinition(
+            description="DAG visualization of the agent pipeline showing trace steps as nodes",
+            properties={
+                "stepsPath": ComponentProperty(
+                    type="BoundString",
+                    required=True,
+                    description="Bound path to trace steps array"
+                ),
+            }
+        ),
+        "CitationViewer": ComponentDefinition(
+            description="Interactive citation chips with dual-pane classical text viewer",
+            properties={
+                "referencesPath": ComponentProperty(
+                    type="BoundString",
+                    required=True,
+                    description="Bound path to classical references array"
+                ),
+            }
+        ),
         "AgentTraceSidebar": ComponentDefinition(
             description="Real-time agent pipeline trace showing tool calls, LLM calls, and timing",
             properties={

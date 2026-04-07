@@ -697,6 +697,80 @@ def compute_harmony_score(interactions: list[Interaction]) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Spooky Accuracy — Retrodictions from past interactions
+# ---------------------------------------------------------------------------
+
+# Templates for retrodiction based on interaction type + affected pillar
+RETRODICTION_TEMPLATES: dict[str, dict[str, str]] = {
+    "clash": {
+        "year": "Around {year}, you likely experienced a disruption in family dynamics or a shift in your social circle.",
+        "month": "Around {year}, your career or authority figures may have been a source of tension or sudden change.",
+        "day": "Around {year}, you may have gone through a personal identity shift or health-related event.",
+        "hour": "Around {year}, your plans, projects, or relationship with children may have faced unexpected turbulence.",
+    },
+    "combination": {
+        "year": "Around {year}, a meaningful connection or alliance likely formed in your social or family life.",
+        "month": "Around {year}, a career opportunity or mentor figure may have entered your life.",
+        "day": "Around {year}, a significant personal relationship likely deepened or transformed.",
+        "hour": "Around {year}, a creative project or aspiration likely gained momentum.",
+    },
+    "harm": {
+        "year": "Around {year}, trust may have been tested in a close relationship or family matter.",
+        "month": "Around {year}, a workplace situation may have caused quiet frustration or hidden conflict.",
+        "day": "Around {year}, an internal struggle or health concern may have surfaced subtly.",
+        "hour": "Around {year}, plans you were building toward may have hit an invisible wall.",
+    },
+}
+
+
+class Retrodiction(BaseModel):
+    """A 'prediction about the past' based on annual pillar interactions."""
+    year: int
+    prediction: str
+    interaction_type: str
+    interaction_description: str
+    affected_pillar: str  # which natal pillar was involved
+    confidence: float     # higher for clashes, lower for combinations
+
+
+def compute_retrodictions(
+    annual_pillars: list[AnnualPillar],
+    current_year: int | None = None,
+    max_results: int = 5,
+) -> list[Retrodiction]:
+    """Scan past annual pillars for strong interactions and generate retrodictions."""
+    if current_year is None:
+        current_year = datetime.now().year
+
+    candidates: list[Retrodiction] = []
+    for ap in annual_pillars:
+        if ap.year >= current_year:
+            continue  # only past years
+        for ix in ap.interactions_with_chart:
+            templates = RETRODICTION_TEMPLATES.get(ix.type)
+            if not templates:
+                continue
+            # Find which natal pillar was involved (not "annual")
+            affected = next((p for p in ix.pillars if p != "annual"), ix.pillars[-1])
+            template = templates.get(affected, templates.get("day", ""))
+
+            confidence = {"clash": 0.85, "combination": 0.7, "harm": 0.6}.get(ix.type, 0.5)
+
+            candidates.append(Retrodiction(
+                year=ap.year,
+                prediction=template.format(year=ap.year),
+                interaction_type=ix.type,
+                interaction_description=ix.description,
+                affected_pillar=affected,
+                confidence=confidence,
+            ))
+
+    # Sort by confidence (desc), then by recency (more recent = more memorable)
+    candidates.sort(key=lambda r: (-r.confidence, -(current_year - r.year)))
+    return candidates[:max_results]
+
+
+# ---------------------------------------------------------------------------
 # Master function
 # ---------------------------------------------------------------------------
 

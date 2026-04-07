@@ -17,6 +17,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import type { A2UIRendererProps } from '../Registry';
 import type { BoundValue } from '../../a2ui/types';
 import { resolveBoundValue } from '../../a2ui/DataBinder';
+import { useInspectorMode } from '../../InspectorModeContext';
 
 /* ------------------------------------------------------------------ */
 /* Types                                                               */
@@ -140,14 +141,59 @@ const ACCENT_COLORS: Record<string, string> = {
     '🌊': '#06b6d4',
 };
 
+const EVIDENCE_BADGE_STYLES: Record<string, { label: string; color: string; icon: string }> = {
+    computation: { label: 'Computed', color: '#6366f1', icon: '\u2699\uFE0F' },
+    classical: { label: 'Classical', color: '#a855f7', icon: '\uD83D\uDCDC' },
+    interpretation: { label: 'Interpreted', color: '#64748b', icon: '\uD83D\uDCA1' },
+};
+
+function EvidenceBadge({ type, receipt }: { type?: string; receipt?: string }) {
+    const [showReceipt, setShowReceipt] = useState(false);
+    const style = EVIDENCE_BADGE_STYLES[type || 'interpretation'] || EVIDENCE_BADGE_STYLES.interpretation;
+    return (
+        <span className="relative inline-flex">
+            <button
+                onClick={(e) => { e.stopPropagation(); setShowReceipt(!showReceipt); }}
+                className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[9px] font-medium transition-opacity hover:opacity-100"
+                style={{
+                    backgroundColor: `${style.color}15`,
+                    color: style.color,
+                    border: `1px solid ${style.color}30`,
+                    opacity: 0.8,
+                }}
+                title={`Evidence: ${style.label}`}
+            >
+                {style.icon} {style.label}
+            </button>
+            <AnimatePresence>
+                {showReceipt && receipt && (
+                    <motion.div
+                        initial={{ opacity: 0, y: -4, scale: 0.95 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: -4, scale: 0.95 }}
+                        transition={{ duration: 0.12 }}
+                        className="absolute left-0 top-full z-50 mt-1 w-56 rounded-lg border border-slate-700 bg-slate-800 p-2 shadow-xl"
+                        style={{ fontFamily: 'ui-monospace, monospace' }}
+                    >
+                        <p className="text-[10px] text-slate-400 mb-1">Computation Receipt</p>
+                        <p className="text-[11px] text-slate-200 whitespace-pre-wrap">{receipt}</p>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+        </span>
+    );
+}
+
 function AccordionCard({
     section,
     isOpen,
     onToggle,
+    inspectorMode,
 }: {
     section: InsightSection;
     isOpen: boolean;
     onToggle: () => void;
+    inspectorMode: boolean;
 }) {
     const accent = ACCENT_COLORS[section.icon] || '#6366f1';
 
@@ -216,6 +262,12 @@ function AccordionCard({
                                         <span className="text-sm text-slate-300 leading-snug">
                                             {bullet.text}
                                         </span>
+                                        {inspectorMode && (
+                                            <EvidenceBadge
+                                                type={(bullet as any).evidence_type || (bullet as any).evidenceType}
+                                                receipt={(bullet as any).tool_receipt || (bullet as any).toolReceipt}
+                                            />
+                                        )}
                                     </li>
                                 ))}
                             </ul>
@@ -269,6 +321,7 @@ export function InsightAccordion({
     const insights = useMemo(() => data?.insights || [], [data?.insights]);
     const isComplete = data?.isComplete ?? false;
     const tldr = data?.tldr || '';
+    const isInspector = useInspectorMode();
 
     // Track which sections are open. Default: first section expanded.
     const [openSections, setOpenSections] = useState<Set<string>>(new Set());
@@ -336,6 +389,7 @@ export function InsightAccordion({
                     section={section}
                     isOpen={effectiveOpen.has(section.id)}
                     onToggle={() => toggleSection(section.id)}
+                    inspectorMode={isInspector}
                 />
             ))}
         </motion.div>
