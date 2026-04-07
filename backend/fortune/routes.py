@@ -254,7 +254,7 @@ async def stream_fortune(fortune_id: str, request: Request):
             session.touch(RuntimeStatus.streaming)
 
             # 1. Begin rendering
-            for msg in bridge.begin_messages():
+            for msg in bridge.begin_messages(fortune_id=session.fortune_id):
                 yield _sse_data(msg)
 
             # 2. Foundation (deterministic: full BaZi analysis + classics)

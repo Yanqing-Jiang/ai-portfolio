@@ -289,12 +289,15 @@ class FortuneStreamBridge:
     # Emission helpers
     # ------------------------------------------------------------------
 
-    def begin_messages(self) -> list[str]:
+    def begin_messages(self, fortune_id: str | None = None) -> list[str]:
         """Initial SSE messages: begin rendering + surface layout + meta status."""
+        meta: dict[str, Any] = {"status": "streaming"}
+        if fortune_id:
+            meta["fortuneId"] = fortune_id
         return [
             self.emitter.begin_rendering(root_id="layout_root"),
             self.emitter.surface_update(self._root_components()),
-            self.emitter.data_update({"status": "streaming"}, path="/data/meta"),
+            self.emitter.data_update(meta, path="/data/meta"),
         ]
 
     @staticmethod
@@ -611,11 +614,16 @@ class FortuneStreamBridge:
         ]
 
     def emit_error(self, message: str) -> list[str]:
-        """Terminal error: set status + audit event."""
+        """Terminal error: set status + audit event + done signal.
+
+        Must include '{"done": true}' so the frontend useA2UIStream hook
+        cleanly closes the EventSource instead of retrying 5 times.
+        """
         return [
             self.emitter.data_update(
                 {"status": "error", "error_message": message},
                 path="/data/meta",
             ),
             self.emitter.audit("error", details=message),
+            '{"done": true}',
         ]

@@ -12,7 +12,7 @@
  * interaction with inline forms.
  */
 
-import React, { useState, useMemo, useCallback, useRef } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { A2UIRendererProps } from '../Registry';
 import type { BoundValue } from '../../a2ui/types';
@@ -102,7 +102,6 @@ interface YearCardProps {
     prediction?: YearPrediction;
     correction?: Correction;
     isCurrentYear: boolean;
-    fortuneId?: string;
     onCorrectionSubmit?: (year: number, note: string) => void;
 }
 
@@ -337,8 +336,10 @@ export function LifeTimeline({
         return { ...base, ...localCorrections };
     }, [rawCorrections, localCorrections]);
 
-    // Fortune ID from URL (simplified extraction)
-    const fortuneIdRef = useRef<string | null>(null);
+    // Fortune ID from dataModel meta (emitted by backend in begin_messages)
+    const metaPath = { path: '/data/meta' } as BoundValue;
+    const rawMeta = resolveBoundValue(metaPath, dataModel);
+    const fortuneId = (rawMeta as any)?.fortuneId as string | undefined;
 
     const handleCorrectionSubmit = useCallback(async (year: number, note: string) => {
         // Optimistically update local state
@@ -347,12 +348,12 @@ export function LifeTimeline({
             [year]: { user_note: note, corrected_at: new Date().toISOString() },
         }));
 
+        if (!fortuneId) return;
+
         // Fire-and-forget API call
         try {
             const backendUrl = configService.getBackendUrl();
             const authHeaders = await authService.getAuthHeaders();
-            // Extract fortune ID from the page URL
-            const fortuneId = fortuneIdRef.current || window.location.pathname.split('/').pop();
             await fetch(`${backendUrl}/api/fortune/${fortuneId}/correction`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', ...authHeaders },
@@ -361,7 +362,7 @@ export function LifeTimeline({
         } catch {
             // Correction is already saved locally
         }
-    }, []);
+    }, [fortuneId]);
 
     const currentYear = new Date().getFullYear();
 
