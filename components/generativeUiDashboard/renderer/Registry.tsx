@@ -41,10 +41,15 @@ import { MetricChart } from './widgets/MetricChart';
 // Ming Engine fortune widgets
 import { FourPillarsCard } from './widgets/FourPillarsCard';
 import { ElementBalanceRadar } from './widgets/ElementBalanceRadar';
+import { ElementBalanceStacked } from './widgets/ElementBalanceStacked';
+import { InteractionGraph } from './widgets/InteractionGraph';
+import { TenGodsTable } from './widgets/TenGodsTable';
+import { LifeTimeline } from './widgets/LifeTimeline';
 import { ClassicalReferenceCard } from './widgets/ClassicalReferenceCard';
 import { FortuneReadingPanel } from './widgets/FortuneReadingPanel';
 import { InsightAccordion } from './widgets/InsightAccordion';
 import { DisclaimerBanner } from './widgets/DisclaimerBanner';
+import { AgentTraceSidebar } from './widgets/AgentTraceSidebar';
 
 /**
  * Common props passed to all A2UI component implementations.
@@ -105,10 +110,15 @@ export const componentRegistry: Record<
     // Ming Engine fortune widgets
     FourPillarsCard,
     ElementBalanceRadar,
+    ElementBalanceStacked,
+    InteractionGraph,
+    TenGodsTable,
+    LifeTimeline,
     ClassicalReferenceCard,
     FortuneReadingPanel,
     InsightAccordion,
     DisclaimerBanner,
+    AgentTraceSidebar,
 };
 
 

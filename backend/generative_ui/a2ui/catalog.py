@@ -324,6 +324,81 @@ FINANCIAL_CATALOG = CatalogDefinition(
                 ),
             }
         ),
+        "ElementBalanceStacked": ComponentDefinition(
+            description="Stacked bar chart of element contributions per pillar with gauge meters",
+            properties={
+                "sourcePath": ComponentProperty(
+                    type="BoundString",
+                    required=True,
+                    description="Bound path to per-pillar element breakdown"
+                ),
+            }
+        ),
+        "InteractionGraph": ComponentDefinition(
+            description="Network graph of branch interactions (clashes, combinations, harms)",
+            properties={
+                "interactionsPath": ComponentProperty(
+                    type="BoundString",
+                    required=True,
+                    description="Bound path to interactions array"
+                ),
+                "pillarsPath": ComponentProperty(
+                    type="BoundString",
+                    required=True,
+                    description="Bound path to pillars for node data"
+                ),
+            }
+        ),
+        "TenGodsTable": ComponentDefinition(
+            description="Compact table of Ten Gods classification per position with favorability",
+            properties={
+                "godsPath": ComponentProperty(
+                    type="BoundString",
+                    required=True,
+                    description="Bound path to ten gods items array"
+                ),
+            }
+        ),
+        "AgentTraceSidebar": ComponentDefinition(
+            description="Real-time agent pipeline trace showing tool calls, LLM calls, and timing",
+            properties={
+                "stepsPath": ComponentProperty(
+                    type="BoundString",
+                    required=True,
+                    description="Bound path to trace steps array"
+                ),
+                "summaryPath": ComponentProperty(
+                    type="BoundString",
+                    required=False,
+                    description="Bound path to aggregate trace summary"
+                ),
+            }
+        ),
+        "LifeTimeline": ComponentDefinition(
+            description="Vertical year-by-year timeline with luck pillar decades, expandable cards, and corrections",
+            properties={
+                "luckPillarsPath": ComponentProperty(
+                    type="BoundString",
+                    required=True,
+                    description="Bound path to luck pillars array"
+                ),
+                "annualPillarsPath": ComponentProperty(
+                    type="BoundString",
+                    required=True,
+                    description="Bound path to annual pillars array"
+                ),
+                "narrativePath": ComponentProperty(
+                    type="BoundString",
+                    required=False,
+                    description="Bound path to narrative (contains yearPredictions)"
+                ),
+                "correctionsPath": ComponentProperty(
+                    type="BoundString",
+                    required=False,
+                    description="Bound path to user corrections dict"
+                ),
+            }
+        ),
     }
 )
 

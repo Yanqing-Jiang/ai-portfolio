@@ -44,6 +44,7 @@ except ImportError:
 try:
     from .agents import (
         DEFAULT_FOLLOW_UP_BUTTONS,
+        EnrichedNarrativeOutput,
         FortuneRunContext,
         GuardrailOutput,
         NarrativeOutput,
@@ -56,6 +57,7 @@ try:
 except ImportError:
     from agents import (  # type: ignore[no-redef]
         DEFAULT_FOLLOW_UP_BUTTONS,
+        EnrichedNarrativeOutput,
         FortuneRunContext,
         GuardrailOutput,
         NarrativeOutput,
@@ -89,6 +91,7 @@ class CreateFortuneRequest(BaseModel):
     question: str | None = None
     tone: str | None = None
     birth_time_unknown: bool = False
+    gender: str | None = None
 
 
 class CreateFortuneResponse(BaseModel):
@@ -99,6 +102,11 @@ class CreateFortuneResponse(BaseModel):
 class ActionRequest(BaseModel):
     action_id: str
     payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class CorrectionRequest(BaseModel):
+    year: int
+    user_note: str = Field(..., min_length=1, max_length=500)
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +122,7 @@ class FortuneSession(BaseModel):
     latest_foundation: dict[str, Any] = Field(default_factory=dict)
     latest_narrative: dict[str, Any] | None = None
     latest_guardrail: dict[str, Any] | None = None
+    corrections: dict[int, dict[str, str]] = Field(default_factory=dict)
 
     def touch(self, new_status: RuntimeStatus | None = None) -> None:
         if new_status is not None:
@@ -238,6 +247,7 @@ async def stream_fortune(fortune_id: str, request: Request):
             birth_iso=session.request.birth_iso,
             timezone=session.request.timezone or "UTC",
             birth_time_unknown=session.request.birth_time_unknown,
+            gender=session.request.gender or "unknown",
         )
 
         try:
@@ -247,16 +257,36 @@ async def stream_fortune(fortune_id: str, request: Request):
             for msg in bridge.begin_messages():
                 yield _sse_data(msg)
 
-            # 2. Foundation (deterministic: chart + elements + classics)
+            # 2. Foundation (deterministic: full BaZi analysis + classics)
             foundation = await run_foundation(ctx)
+            analysis = foundation["analysis"]
             session.latest_foundation = {
                 "pillars": foundation["pillars"],
                 "elements": foundation["elements"].model_dump(),
                 "references": [r.model_dump() for r in foundation["references"]],
             }
+
+            # Emit base data (existing widgets)
             yield _sse_data(bridge.emit_pillars(session.latest_foundation["pillars"]))
             yield _sse_data(bridge.emit_elements(session.latest_foundation["elements"]))
             yield _sse_data(bridge.emit_references(session.latest_foundation["references"]))
+
+            # Emit enriched computation data (new widgets)
+            yield _sse_data(bridge.emit_hidden_stems(analysis.hidden_stems))
+            yield _sse_data(bridge.emit_ten_gods(analysis.ten_gods))
+            yield _sse_data(bridge.emit_interactions(analysis.interactions))
+            yield _sse_data(bridge.emit_seasonal_strength(analysis.seasonal_strength))
+            yield _sse_data(bridge.emit_element_by_source(analysis.element_by_source))
+            if analysis.luck_pillars:
+                yield _sse_data(bridge.emit_luck_pillars(analysis.luck_pillars))
+            if analysis.annual_pillars:
+                yield _sse_data(bridge.emit_annual_pillars(analysis.annual_pillars))
+            yield _sse_data(bridge.emit_kpi(analysis))
+
+            # Emit foundation trace steps (Glass Box sidebar)
+            trace = foundation.get("trace")
+            if trace:
+                yield _sse_data(bridge.emit_trace_steps_batch(trace.steps))
 
             # 3. Default focus if somehow missing (input phase always provides it)
             if not session.request.focus:
@@ -270,23 +300,45 @@ async def stream_fortune(fortune_id: str, request: Request):
                     birth_iso=ctx.birth_iso,
                     timezone=ctx.timezone,
                     birth_time_unknown=ctx.birth_time_unknown,
+                    gender=ctx.gender,
                 )
 
             # 4. Narrative (run to completion — no streaming deltas to prevent layout jitter)
+            import time as _time
+
+            # Trace: LLM narrative call
+            if trace:
+                trace.add_instant("llm_start", "narrative", label="Generating Narrative",
+                                  input_summary=f"focus={ctx.focus}")
+                yield _sse_data(bridge.emit_trace_steps_batch(trace.steps))
+
+            _t_narrative = _time.monotonic()
             stream_result = await run_narrative_streamed(ctx, foundation=foundation)
             async for event in stream_result.stream_events():
                 pass  # consume stream silently; frontend shows skeleton until complete
 
             # 5. Extract final output from the completed stream run
             narrative = stream_result.final_output
-            if not isinstance(narrative, NarrativeOutput):
-                narrative = NarrativeOutput.model_validate(narrative)
+            if not isinstance(narrative, (NarrativeOutput, EnrichedNarrativeOutput)):
+                narrative = EnrichedNarrativeOutput.model_validate(narrative)
             session.latest_narrative = narrative.model_dump()
+
+            if trace:
+                dur = round((_time.monotonic() - _t_narrative) * 1000, 1)
+                n_insights = len(narrative.insights) if hasattr(narrative, 'insights') else 0
+                trace.add_instant("llm_complete", "narrative", label="Narrative Complete",
+                                  output_summary=f"{n_insights} insights, {dur:.0f}ms")
+                trace.steps[-1].duration_ms = dur
+
             yield _sse_data(
                 bridge.emit_narrative_complete(session.latest_narrative)
             )
 
             # 6. Guardrail
+            if trace:
+                trace.add_instant("llm_start", "guardrail", label="Running Safety Check")
+
+            _t_guard = _time.monotonic()
             guardrail = await run_guardrail(ctx, narrative=narrative)
             if not guardrail.follow_up_buttons:
                 guardrail = GuardrailOutput(
@@ -296,7 +348,19 @@ async def stream_fortune(fortune_id: str, request: Request):
                     follow_up_buttons=DEFAULT_FOLLOW_UP_BUTTONS,
                 )
             session.latest_guardrail = guardrail.model_dump()
+
+            if trace:
+                dur = round((_time.monotonic() - _t_guard) * 1000, 1)
+                trace.add_instant("llm_complete", "guardrail", label="Safety Check Complete",
+                                  output_summary=f"level={guardrail.level}, {dur:.0f}ms")
+                trace.steps[-1].duration_ms = dur
+
             yield _sse_data(bridge.emit_guardrail(session.latest_guardrail))
+
+            # Emit final trace (all steps including LLM)
+            if trace:
+                yield _sse_data(bridge.emit_trace_steps_batch(trace.steps))
+                yield _sse_data(bridge.emit_trace_summary(trace.summary()))
 
             # 7. Complete
             session.touch(RuntimeStatus.complete)
@@ -348,4 +412,30 @@ async def handle_fortune_action(
         "focus": session.request.focus,
         "status": session.status.value,
         "stream_url": f"/api/fortune/{fortune_id}/stream",
+    }
+
+
+@router.post("/{fortune_id}/correction")
+async def submit_correction(
+    fortune_id: str,
+    request_body: CorrectionRequest,
+    request: Request,
+):
+    """Store user correction for a specific year prediction."""
+    await smart_rate_limit(request, scope=RateLimitScope.FORTUNE, weight=1)
+
+    store = get_fortune_store()
+    session = store.get(fortune_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Fortune session not found")
+
+    session.corrections[request_body.year] = {
+        "user_note": request_body.user_note,
+        "corrected_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    return {
+        "fortune_id": fortune_id,
+        "year": request_body.year,
+        "correction": session.corrections[request_body.year],
     }

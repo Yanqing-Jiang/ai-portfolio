@@ -43,6 +43,12 @@ const FOCUS_OPTIONS = [
     { id: 'general', label: 'General Reading', icon: '🔮' },
 ] as const;
 
+const GENDER_OPTIONS = [
+    { id: 'male', label: 'Male', icon: '♂' },
+    { id: 'female', label: 'Female', icon: '♀' },
+    { id: 'unknown', label: 'Prefer not to say', icon: '—' },
+] as const;
+
 // ---------------------------------------------------------------------------
 // Input Phase
 // ---------------------------------------------------------------------------
@@ -55,6 +61,7 @@ function InputPhase({ onSubmit }: InputPhaseProps) {
     const [birthDate, setBirthDate] = useState('');
     const [selectedTime, setSelectedTime] = useState<string | null>(null);
     const [birthTimeUnknown, setBirthTimeUnknown] = useState(false);
+    const [gender, setGender] = useState<string>('unknown');
     const [focus, setFocus] = useState<string | null>(null);
     const [question, setQuestion] = useState('');
     const [showQuestion, setShowQuestion] = useState(false);
@@ -84,6 +91,7 @@ function InputPhase({ onSubmit }: InputPhaseProps) {
                     focus: focus || undefined,
                     question: question || undefined,
                     birth_time_unknown: birthTimeUnknown,
+                    gender: gender || undefined,
                 }),
             });
 
@@ -192,6 +200,36 @@ function InputPhase({ onSubmit }: InputPhaseProps) {
                 >
                     I don't know my birth time
                 </button>
+            </div>
+
+            {/* Gender (needed for luck pillar direction) */}
+            <div>
+                <label className="mb-1 block text-sm font-medium text-slate-300">
+                    Gender <span className="text-slate-500 font-normal">(for luck cycle calculation)</span>
+                </label>
+                <div className="grid grid-cols-3 gap-2">
+                    {GENDER_OPTIONS.map((opt) => (
+                        <button
+                            key={opt.id}
+                            className="flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-sm transition-colors"
+                            style={{
+                                background:
+                                    gender === opt.id
+                                        ? 'rgba(148, 163, 184, 0.15)'
+                                        : 'rgba(148, 163, 184, 0.06)',
+                                border:
+                                    gender === opt.id
+                                        ? '1.5px solid rgba(148, 163, 184, 0.4)'
+                                        : '1px solid rgba(148, 163, 184, 0.12)',
+                                color: gender === opt.id ? '#e2e8f0' : '#94a3b8',
+                            }}
+                            onClick={() => setGender(opt.id)}
+                        >
+                            <span className="text-base">{opt.icon}</span>
+                            <span className="font-medium">{opt.label}</span>
+                        </button>
+                    ))}
+                </div>
             </div>
 
             {/* Focus */}
@@ -440,7 +478,7 @@ function StreamingPhase({ fortuneId }: StreamingPhaseProps) {
     const showLoading = !hasEverHadSurface.current && (streamState.isLoading || !tokenResolved);
 
     return (
-        <div ref={contentRef} className="mx-auto w-full max-w-2xl px-4 py-6">
+        <div ref={contentRef} className="mx-auto w-full max-w-6xl px-4 py-6">
             {/* Surface rendering — always render if it exists (prevents jump on reconnect) */}
             {surface && (
                 <MotionConfig transition={{ layout: { duration: 0 } }}>
@@ -508,10 +546,11 @@ function StreamingPhase({ fortuneId }: StreamingPhaseProps) {
 
 export function MingEnginePage(): React.ReactElement {
     const [fortuneId, setFortuneId] = useState<string | null>(null);
+    const [inspectorMode, setInspectorMode] = useState(false);
 
     return (
         <div
-            className="min-h-screen"
+            className={`min-h-screen ${inspectorMode ? 'ming-inspector-mode' : 'ming-reading-mode'}`}
             style={{ background: 'var(--ming-bg, #0c0a14)', overscrollBehavior: 'none' }}
         >
             <AnimatePresence mode="wait">
@@ -532,6 +571,45 @@ export function MingEnginePage(): React.ReactElement {
                     </motion.div>
                 )}
             </AnimatePresence>
+
+            {/* Truth Toggle — floating button to switch Reading/Inspector mode */}
+            {fortuneId && (
+                <motion.button
+                    initial={{ opacity: 0, scale: 0.8 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ delay: 1, type: 'spring', stiffness: 200 }}
+                    onClick={() => setInspectorMode(!inspectorMode)}
+                    className="fixed bottom-6 right-6 z-50 flex h-12 w-12 items-center justify-center rounded-full shadow-lg transition-colors"
+                    style={{
+                        background: inspectorMode
+                            ? 'linear-gradient(135deg, #6366f1, #4f46e5)'
+                            : 'rgba(30, 30, 50, 0.9)',
+                        border: inspectorMode
+                            ? '2px solid #818cf8'
+                            : '1px solid rgba(148, 163, 184, 0.2)',
+                    }}
+                    title={inspectorMode ? 'Switch to Reading Mode' : 'Switch to Inspector Mode'}
+                >
+                    <span className="text-lg">
+                        {inspectorMode ? '\uD83D\uDD0D' : '\uD83D\uDD0E'}
+                    </span>
+                </motion.button>
+            )}
+
+            {/* Inject CSS for mode switching */}
+            <style>{`
+                /* Reading Mode: hide trace sidebar */
+                .ming-reading-mode [data-component-id="fortune_trace_card"] {
+                    display: none !important;
+                }
+                /* Inspector Mode: show trace sidebar, constrain main width */
+                .ming-inspector-mode [data-component-id="fortune_trace_card"] {
+                    display: block !important;
+                    min-width: 280px;
+                    max-width: 320px;
+                    border-left: 1px solid rgba(148, 163, 184, 0.1);
+                }
+            `}</style>
         </div>
     );
 }
