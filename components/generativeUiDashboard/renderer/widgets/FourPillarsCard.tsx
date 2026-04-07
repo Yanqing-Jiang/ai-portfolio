@@ -189,7 +189,7 @@ function PillarFlipCard({
                 >
                     {/* Label */}
                     <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                        {label.zh} \u00B7 {label.en}
+                        {label.zh} · {label.en}
                     </span>
 
                     {/* Stem character */}
@@ -242,7 +242,7 @@ function PillarFlipCard({
                             animate={{ opacity: [0.6, 1, 0.6] }}
                             transition={{ duration: 2, repeat: Infinity }}
                         >
-                            \u2605 Day Master
+                            ★ Day Master
                         </motion.span>
                     )}
 
@@ -265,7 +265,7 @@ function PillarFlipCard({
                         animate={{ scale: [1, 1.1, 1], rotate: [0, 5, -5, 0] }}
                         transition={{ duration: 2, repeat: Infinity, ease: 'easeInOut' }}
                     >
-                        \u2728
+                        ✨
                     </motion.span>
                     <span className="mt-1.5 text-[10px] text-slate-500">{label.en}</span>
                     <span className="mt-0.5 text-[9px] text-slate-600">tap to reveal</span>
@@ -291,7 +291,7 @@ function PillarFlipCard({
 
                         {/* Stem element */}
                         <div className="flex items-center gap-1.5">
-                            <span className="text-lg">{ELEMENT_EMOJI[pillar.stemElement] || '\u2726'}</span>
+                            <span className="text-lg">{ELEMENT_EMOJI[pillar.stemElement] || '✦'}</span>
                             <div>
                                 <span className="text-xs text-slate-500">Stem</span>
                                 <p className="text-sm font-semibold capitalize" style={{ color: stemColor }}>
@@ -302,7 +302,7 @@ function PillarFlipCard({
 
                         {/* Branch element */}
                         <div className="flex items-center gap-1.5">
-                            <span className="text-lg">{ELEMENT_EMOJI[pillar.branchElement] || '\u2726'}</span>
+                            <span className="text-lg">{ELEMENT_EMOJI[pillar.branchElement] || '✦'}</span>
                             <div>
                                 <span className="text-xs text-slate-500">Branch</span>
                                 <p className="text-sm font-semibold capitalize" style={{ color: branchColor }}>
@@ -396,7 +396,7 @@ export function FourPillarsCard({
                         border: `1px solid ${dayMasterColor}40`,
                     }}
                 >
-                    {ELEMENT_EMOJI[data.dayMasterElement] || ''} {data.dayMaster} \u00B7 {data.dayMasterElement}
+                    {ELEMENT_EMOJI[data.dayMasterElement] || ''} {data.dayMaster} · {data.dayMasterElement}
                 </span>
                 {data.birthTimeUnknown && (
                     <span className="text-xs text-slate-500">(time unknown)</span>

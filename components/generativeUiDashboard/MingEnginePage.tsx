@@ -10,7 +10,7 @@
  */
 
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence, MotionConfig } from 'framer-motion';
 import { configService } from '../../services/config';
 import { authService } from '../../services/auth';
 import { useA2UIStream } from './a2ui/useA2UIStream';
@@ -383,35 +383,75 @@ function StreamingPhase({ fortuneId }: StreamingPhaseProps) {
 
     // Auto-scroll: sentinel at bottom, scroll into view when new content arrives
     const scrollSentinelRef = useRef<HTMLDivElement>(null);
+    const contentRef = useRef<HTMLDivElement>(null);
+    const scrollContainerRef = useRef<HTMLElement | null>(null);
     const userScrolledUp = useRef(false);
 
     useEffect(() => {
+        const findScrollContainer = () => {
+            let node = contentRef.current?.parentElement ?? null;
+            while (node) {
+                const { overflowY } = window.getComputedStyle(node);
+                if (/(auto|scroll|overlay)/.test(overflowY) && node.scrollHeight > node.clientHeight) {
+                    return node;
+                }
+                node = node.parentElement;
+            }
+            return null;
+        };
+
+        const scrollTarget = findScrollContainer();
+        scrollContainerRef.current = scrollTarget;
+
         const handleScroll = () => {
+            if (scrollTarget) {
+                const atBottom = scrollTarget.scrollHeight - scrollTarget.scrollTop - scrollTarget.clientHeight < 120;
+                userScrolledUp.current = !atBottom;
+                return;
+            }
             const el = document.documentElement;
-            const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+            const scrollTop = window.scrollY || el.scrollTop;
+            const atBottom = el.scrollHeight - scrollTop - window.innerHeight < 120;
             userScrolledUp.current = !atBottom;
         };
-        window.addEventListener('scroll', handleScroll, { passive: true });
-        return () => window.removeEventListener('scroll', handleScroll);
+
+        handleScroll();
+        const target = scrollTarget ?? window;
+        target.addEventListener('scroll', handleScroll, { passive: true });
+        return () => target.removeEventListener('scroll', handleScroll);
     }, []);
 
     useEffect(() => {
         if (streamState.isDone || userScrolledUp.current) return;
-        scrollSentinelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+
+        const frame = window.requestAnimationFrame(() => {
+            const scrollTarget = scrollContainerRef.current;
+            if (scrollTarget) {
+                scrollTarget.scrollTo({ top: scrollTarget.scrollHeight, behavior: 'auto' });
+                return;
+            }
+            scrollSentinelRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
+        });
+
+        return () => window.cancelAnimationFrame(frame);
     }, [surface, dataModel, streamState.isDone]);
 
     // Show loading only when we've never had content yet
     const showLoading = !hasEverHadSurface.current && (streamState.isLoading || !tokenResolved);
 
     return (
-        <div className="mx-auto w-full max-w-2xl px-4 py-6">
+        <div ref={contentRef} className="mx-auto w-full max-w-2xl px-4 py-6">
             {/* Surface rendering — always render if it exists (prevents jump on reconnect) */}
             {surface && (
-                <A2UISurface
-                    surface={surface}
-                    dataModel={dataModel}
-                    onAction={handleAction}
-                />
+                <MotionConfig transition={{ layout: { duration: 0 } }}>
+                    <div style={{ contain: 'layout paint', willChange: 'transform' }}>
+                        <A2UISurface
+                            surface={surface}
+                            dataModel={dataModel}
+                            onAction={handleAction}
+                        />
+                    </div>
+                </MotionConfig>
             )}
 
             {/* Loading skeleton — only before any content has appeared */}
