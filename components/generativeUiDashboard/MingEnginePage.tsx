@@ -138,7 +138,7 @@ function InputPhase({ onSubmit }: InputPhaseProps) {
                 <label className="mb-1 block text-sm font-medium text-slate-300">
                     Birth Time
                 </label>
-                <div className="grid grid-cols-6 gap-1.5">
+                <div className="grid grid-cols-4 sm:grid-cols-6 gap-1.5">
                     {EARTHLY_BRANCHES.map((eb) => (
                         <button
                             key={eb.branch}
@@ -472,7 +472,7 @@ export function MingEnginePage(): React.ReactElement {
     return (
         <div
             className="min-h-screen"
-            style={{ background: 'var(--ming-bg, #0c0a14)' }}
+            style={{ background: 'var(--ming-bg, #0c0a14)', overscrollBehavior: 'none' }}
         >
             <AnimatePresence mode="wait">
                 {!fortuneId ? (

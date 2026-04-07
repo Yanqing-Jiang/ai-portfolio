@@ -31,7 +31,7 @@
  */
 
 import React, { useCallback, useContext, useLayoutEffect, useRef } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 import type {
     CardProps,
     Children,
@@ -177,16 +177,15 @@ export function ComponentRenderer({
     // IMPORTANT: useCallback must be called before any early returns to satisfy Rules of Hooks
     const renderChild = useCallback(
         (childId: string): React.ReactNode => (
-            <AnimatePresence mode="wait" key={childId}>
-                <ComponentRenderer
-                    componentId={childId}
-                    components={components}
-                    dataModel={dataModel}
-                    onAction={onAction}
-                    enableSwap={enableSwap}
-                    streamedComponentIds={streamedComponentIds}
-                />
-            </AnimatePresence>
+            <ComponentRenderer
+                key={childId}
+                componentId={childId}
+                components={components}
+                dataModel={dataModel}
+                onAction={onAction}
+                enableSwap={enableSwap}
+                streamedComponentIds={streamedComponentIds}
+            />
         ),
         [components, dataModel, onAction, enableSwap, streamedComponentIds]
     );
@@ -340,7 +339,7 @@ export function ComponentRenderer({
                     y: 0,
                     scale: 1,
                 }}
-                exit={{ opacity: 0, scale: 0.95 }}
+                exit={{ opacity: 0 }}
                 transition={isSwapping
                     ? { duration: 0.3, ease: 'easeInOut' }
                     : isStreamedComponent

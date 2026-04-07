@@ -13,7 +13,6 @@ import { motion } from 'framer-motion';
 import type { A2UIRendererProps } from '../Registry';
 import type { BoundValue } from '../../a2ui/types';
 import { resolveBoundValue } from '../../a2ui/DataBinder';
-import { useStreamingText } from '../../hooks/useStreamingText';
 
 const SECTION_ICONS: Record<string, string> = {
     overview: '🔮',
@@ -54,36 +53,7 @@ const sectionVariants = {
 };
 
 /**
- * Live section with streaming text effect.
- */
-function LiveSection({ section }: { section: NarrativeSection }) {
-    const { displayText, isStreaming } = useStreamingText(section.content, {
-        speed: 15,
-        resetKey: section.content,
-    });
-
-    const icon = SECTION_ICONS[section.type] || '📖';
-
-    return (
-        <div className="flex flex-col gap-1">
-            <div className="flex items-center gap-2">
-                <span className="text-base">{icon}</span>
-                <h3 className="text-lg font-semibold text-slate-200">
-                    {section.heading}
-                </h3>
-            </div>
-            <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-300">
-                {displayText}
-                {isStreaming && (
-                    <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-slate-400" />
-                )}
-            </p>
-        </div>
-    );
-}
-
-/**
- * Completed section (no streaming effect).
+ * Section — renders text instantly (no streaming animation).
  */
 function CompletedSection({ section }: { section: NarrativeSection }) {
     const icon = SECTION_ICONS[section.type] || '📖';
@@ -132,24 +102,16 @@ export function FortuneReadingPanel({
         return <div data-component-id={componentId} />;
     }
 
-    // During streaming: show last section with typewriter, rest as static
+    // During streaming: show all sections instantly (no typewriter), with shimmer for upcoming
     if (!isComplete) {
-        const liveSectionIndex = sections.length - 1;
         return (
             <div
                 data-component-id={componentId}
                 className="flex w-full flex-col gap-4"
             >
-                {sections.map((section, idx) =>
-                    idx === liveSectionIndex ? (
-                        <LiveSection key={section.id} section={section} />
-                    ) : (
-                        <CompletedSection
-                            key={section.id}
-                            section={section}
-                        />
-                    )
-                )}
+                {sections.map((section) => (
+                    <CompletedSection key={section.id} section={section} />
+                ))}
 
                 {/* Shimmer skeleton for upcoming content */}
                 <div className="space-y-2">

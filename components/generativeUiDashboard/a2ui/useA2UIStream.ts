@@ -250,15 +250,18 @@ export function useA2UIStream(
             eventSourceRef.current.close();
         }
 
-        // Create processor
-        processorRef.current = createMessageProcessor(syncState, opts.onAudit);
+        // Only create a fresh processor if we don't have one yet.
+        // On reconnect, reuse the existing processor so surfaces stay populated
+        // and users don't see a flash of empty content.
+        if (!processorRef.current) {
+            processorRef.current = createMessageProcessor(syncState, opts.onAudit);
+        }
 
-        // Reset state - don't clear surfaces/dataModels to avoid content flash on cached replay
-        // Let beginRendering or deleteSurface handle data updates
+        // Reset state - preserve surfaces/dataModels to avoid content flash on reconnect
         setState((prev) => ({
             ...prev,
             isConnected: false,
-            isLoading: true,
+            isLoading: prev.surfaces.size === 0, // Only show loading if no content yet
             error: null,
             isDone: false,
             connectionStatus: isRetry ? 'reconnecting' : 'connecting',
