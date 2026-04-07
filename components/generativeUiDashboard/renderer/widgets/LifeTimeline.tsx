@@ -126,7 +126,7 @@ function YearCard({
             <div className="flex flex-col items-center">
                 <button
                     onClick={() => setExpanded(!expanded)}
-                    className="relative z-10 flex h-8 w-8 items-center justify-center rounded-full border-2 text-xs font-bold transition-all hover:scale-110"
+                    className="relative z-10 flex h-11 w-11 items-center justify-center rounded-full border-2 text-xs font-bold transition-all hover:scale-110"
                     style={{
                         borderColor: yearColor,
                         backgroundColor: expanded ? yearColor : 'transparent',

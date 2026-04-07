@@ -196,7 +196,7 @@ class FortuneStreamBridge:
             A2UIComponent(id="fortune_trace", component={
                 "AgentTraceSidebar": {
                     "stepsPath": {"path": "/data/trace/steps"},
-                    "summaryPath": {"path": "/data/summary"},
+                    "summaryPath": {"path": "/data/trace/summary"},
                 }
             }),
             A2UIComponent.card("fortune_trace_card", "fortune_trace"),
@@ -335,10 +335,23 @@ class FortuneStreamBridge:
                 "bullets": bullets,
                 "citations": item.get("citations", []),
             })
+        # Include year predictions from EnrichedNarrativeOutput
+        year_preds = narrative_data.get("year_predictions", [])
+        year_predictions = [
+            {
+                "year": yp.get("year"),
+                "prediction": yp.get("prediction", ""),
+                "confidence": yp.get("confidence", 0),
+                "evidenceRefs": yp.get("evidence_refs", []),
+            }
+            for yp in year_preds
+        ]
+
         return self.emitter.data_update(
             {
                 "tldr": narrative_data.get("tldr", ""),
                 "insights": insights,
+                "yearPredictions": year_predictions,
                 "isComplete": True,
             },
             path="/data/narrative",

@@ -101,11 +101,12 @@ export function InteractionGraph({
             });
         }
 
+        // Deterministic grid layout (no Math.random — prevents jitter on re-render)
         const nodes = Array.from(nodeMap.values()).map((n, i) => ({
             name: n.name,
             symbolSize: 45,
-            x: (i % 2) * 200 + 50 + Math.random() * 20,
-            y: Math.floor(i / 2) * 150 + 50 + Math.random() * 20,
+            x: (i % 2) * 200 + 80,
+            y: Math.floor(i / 2) * 150 + 60,
             itemStyle: {
                 color: ELEMENT_NODE_COLORS[n.element] || '#64748b',
                 borderColor: 'rgba(255,255,255,0.15)',
