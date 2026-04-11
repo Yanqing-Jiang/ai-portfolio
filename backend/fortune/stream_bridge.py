@@ -591,6 +591,13 @@ class FortuneStreamBridge:
         """Emit aggregate trace summary (total duration, counts)."""
         return self.emitter.data_update(summary, path="/data/trace/summary")
 
+    def emit_progress(self, phase: str, message: str) -> str:
+        """Emit a progress event so the frontend can show phase status."""
+        return self.emitter.data_update(
+            {"phase": phase, "message": message},
+            path="/data/meta/progress",
+        )
+
     def emit_guardrail(self, payload: dict[str, Any]) -> str:
         normalized = {
             "level": payload.get("level", "info"),

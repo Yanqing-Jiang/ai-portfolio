@@ -298,7 +298,7 @@ export function useA2UIStream(
         eventSource.onmessage = (event) => {
             const data = event.data;
 
-            // Check for a "done" signal
+            // Check for a "done" signal (normal completion or timeout)
             try {
                 const json = JSON.parse(data);
                 if (json && typeof json === 'object' && json.done === true) {
@@ -306,11 +306,13 @@ export function useA2UIStream(
                         ...prev,
                         isDone: true,
                         isConnected: false,
-                        isLoading: false,  // Ensure loading state clears on completion
+                        isLoading: false,
                         connectionStatus: 'complete',
+                        // Surface timeout as a user-visible error if no content was rendered
+                        error: json.timeout ? new Error('Reading took too long. Please try again.') : prev.error,
                     }));
                     eventSource.close();
-                    return; // Stop processing this message
+                    return;
                 }
             } catch (e) {
                 // Not a JSON message, or not a "done" signal, proceed as normal
@@ -549,7 +551,12 @@ export function useA2UIStream(
     const actions: A2UIStreamActions = useMemo(() => ({
         sendAction,
         sendQuery,
-        reconnect: () => connect(false),
+        reconnect: () => {
+            // Reset retryCount before reconnecting so follow-up actions
+            // get a fresh set of retries (not polluted by prior errors)
+            setState((prev) => ({ ...prev, retryCount: 0, error: null }));
+            connect(false);
+        },
         close,
         clearClarification,
     }), [sendAction, sendQuery, connect, close, clearClarification]);

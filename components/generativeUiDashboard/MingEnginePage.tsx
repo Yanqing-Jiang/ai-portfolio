@@ -14,9 +14,11 @@ import { motion, AnimatePresence, MotionConfig } from 'framer-motion';
 import { configService } from '../../services/config';
 import { authService } from '../../services/auth';
 import { useA2UIStream } from './a2ui/useA2UIStream';
-import { A2UISurface, A2UISurfaceLoading } from './renderer/A2UISurface';
+import { A2UISurfaceLoading } from './renderer/A2UISurface';
 import { ClarificationOverlay } from './ClarificationOverlay';
 import { InspectorModeProvider } from './InspectorModeContext';
+import { BirthdayScrollPicker } from './BirthdayScrollPicker';
+import { MingResultsTabs } from './MingResultsTabs';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -134,11 +136,9 @@ function InputPhase({ onSubmit }: InputPhaseProps) {
                 <label className="mb-1 block text-sm font-medium text-slate-300">
                     Birthday
                 </label>
-                <input
-                    type="date"
+                <BirthdayScrollPicker
                     value={birthDate}
-                    onChange={(e) => setBirthDate(e.target.value)}
-                    className="w-full rounded-lg border border-slate-700 bg-slate-800/50 px-4 py-3 text-slate-200 focus:border-[var(--ming-accent)] focus:outline-none"
+                    onChange={setBirthDate}
                 />
             </div>
 
@@ -481,12 +481,12 @@ function StreamingPhase({ fortuneId, inspectorMode = false }: StreamingPhaseProp
 
     return (
         <div ref={contentRef} className="mx-auto w-full max-w-6xl px-4 py-6">
-            {/* Surface rendering — always render if it exists (prevents jump on reconnect) */}
+            {/* Tab-based results view — routes widgets to tabs */}
             {surface && (
                 <InspectorModeProvider inspectorMode={inspectorMode}>
                     <MotionConfig transition={{ layout: { duration: 0 } }}>
                         <div style={{ contain: 'layout paint', willChange: 'transform' }}>
-                            <A2UISurface
+                            <MingResultsTabs
                                 surface={surface}
                                 dataModel={dataModel}
                                 onAction={handleAction}
@@ -498,6 +498,14 @@ function StreamingPhase({ fortuneId, inspectorMode = false }: StreamingPhaseProp
 
             {/* Loading skeleton — only before any content has appeared */}
             {showLoading && <A2UISurfaceLoading />}
+
+            {/* Progress indicator — show current pipeline phase */}
+            {!streamState.isDone && !streamState.error && (dataModel as any)?.meta?.progress && (
+                <div className="mt-3 flex items-center justify-center gap-2 text-sm text-slate-400">
+                    <span className="h-2 w-2 animate-pulse rounded-full bg-[var(--ming-accent)]" />
+                    {(dataModel as any).meta.progress.message}
+                </div>
+            )}
 
             {/* Error state — only when no surface was ever rendered */}
             {!surface && !showLoading && streamState.error && (
@@ -600,13 +608,9 @@ export function MingEnginePage(): React.ReactElement {
                 </motion.button>
             )}
 
-            {/* Inject CSS for mode switching */}
+            {/* Inject CSS for mode switching — works with tab system */}
             <style>{`
-                /* Reading Mode: hide trace sidebar */
-                .ming-reading-mode [data-component-id="fortune_trace_card"] {
-                    display: none !important;
-                }
-                /* Inspector Mode: show trace sidebar, constrain main width */
+                /* Inspector Mode: show trace sidebar + all components */
                 .ming-inspector-mode [data-component-id="fortune_trace_card"] {
                     display: block !important;
                     min-width: 280px;

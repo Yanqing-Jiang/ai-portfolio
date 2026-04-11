@@ -11,7 +11,7 @@ import time
 from typing import AsyncGenerator
 
 HEARTBEAT_INTERVAL = 20  # seconds — well under CF's 100s timeout
-MAX_STREAM_DURATION = 300  # 5 minutes absolute max per connection
+MAX_STREAM_DURATION = 480  # 8 minutes — allows gpt-5.4 narrative to complete
 
 
 async def with_heartbeat(
@@ -31,7 +31,9 @@ async def with_heartbeat(
         while True:
             elapsed = time.monotonic() - start
             if elapsed >= max_duration:
-                yield ": timeout\n\n"
+                # Emit a parseable done signal so EventSource closes cleanly
+                # instead of an SSE comment (which EventSource ignores → 5 retries)
+                yield 'data: {"done": true, "timeout": true}\n\n'
                 break
 
             remaining = max_duration - elapsed
@@ -52,7 +54,7 @@ async def with_heartbeat(
             else:
                 # Heartbeat — task is still running, don't cancel it
                 if time.monotonic() - start >= max_duration:
-                    yield ": timeout\n\n"
+                    yield 'data: {"done": true, "timeout": true}\n\n'
                     break
                 yield ": heartbeat\n\n"
     finally:

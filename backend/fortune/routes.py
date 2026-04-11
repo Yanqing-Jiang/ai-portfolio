@@ -7,6 +7,7 @@ POST /api/fortune/{id}/action — follow-up action (re-runs from subset agent)
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
@@ -15,6 +16,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
 
 try:
     from rate_limiter import smart_rate_limit, RateLimitScope
@@ -229,7 +232,7 @@ async def create_fortune(request_body: CreateFortuneRequest, request: Request):
 
 @router.get("/{fortune_id}/stream")
 async def stream_fortune(fortune_id: str, request: Request):
-    await smart_rate_limit(request, scope=RateLimitScope.FORTUNE, weight=3)
+    await smart_rate_limit(request, scope=RateLimitScope.FORTUNE, weight=1)
 
     store = get_fortune_store()
     session = store.get(fortune_id)
@@ -237,6 +240,8 @@ async def stream_fortune(fortune_id: str, request: Request):
         raise HTTPException(status_code=404, detail="Fortune session not found")
 
     async def event_generator():
+        import time as _time
+
         bridge = FortuneStreamBridge(surface_id=session.surface_id)
         ctx = FortuneRunContext(
             fortune_id=session.fortune_id,
@@ -252,24 +257,46 @@ async def stream_fortune(fortune_id: str, request: Request):
 
         try:
             session.touch(RuntimeStatus.streaming)
+            _t_start = _time.monotonic()
+            logger.info("[FORTUNE] %s stream start — focus=%s birth=%s",
+                        session.fortune_id, ctx.focus, ctx.birth_iso)
 
             # 1. Begin rendering
             for msg in bridge.begin_messages(fortune_id=session.fortune_id):
                 yield _sse_data(msg)
 
-            # 2. Foundation (deterministic: full BaZi analysis + classics)
-            foundation = await run_foundation(ctx)
-            analysis = foundation["analysis"]
-            session.latest_foundation = {
-                "pillars": foundation["pillars"],
-                "elements": foundation["elements"].model_dump(),
-                "references": [r.model_dump() for r in foundation["references"]],
-            }
+            # 2. Foundation — reuse cached if available (same birth data = same chart)
+            cached = session.latest_foundation
+            if cached and cached.get("analysis"):
+                logger.info("[FORTUNE] %s reusing cached foundation", session.fortune_id)
+                foundation = cached
+                analysis = foundation["analysis"]
+                trace = foundation.get("trace")
+            else:
+                yield _sse_data(bridge.emit_progress("foundation", "Computing Four Pillars..."))
+                _t_found = _time.monotonic()
+                foundation = await run_foundation(ctx)
+                analysis = foundation["analysis"]
+                dur_f = round((_time.monotonic() - _t_found) * 1000, 1)
+                logger.info("[FORTUNE] %s foundation complete — %0.fms", session.fortune_id, dur_f)
+
+                # Cache FULL foundation (including analysis) for follow-up actions
+                session.latest_foundation = foundation
+                trace = foundation.get("trace")
 
             # Emit base data (existing widgets)
-            yield _sse_data(bridge.emit_pillars(session.latest_foundation["pillars"]))
-            yield _sse_data(bridge.emit_elements(session.latest_foundation["elements"]))
-            yield _sse_data(bridge.emit_references(session.latest_foundation["references"]))
+            yield _sse_data(bridge.emit_pillars(foundation["pillars"]))
+            elements_data = (
+                foundation["elements"].model_dump()
+                if hasattr(foundation["elements"], "model_dump")
+                else foundation["elements"]
+            )
+            yield _sse_data(bridge.emit_elements(elements_data))
+            refs_data = [
+                r.model_dump() if hasattr(r, "model_dump") else r
+                for r in foundation["references"]
+            ]
+            yield _sse_data(bridge.emit_references(refs_data))
 
             # Emit enriched computation data (new widgets)
             yield _sse_data(bridge.emit_hidden_stems(analysis.hidden_stems))
@@ -289,7 +316,6 @@ async def stream_fortune(fortune_id: str, request: Request):
                 yield _sse_data(bridge.emit_retrodictions(retrodictions))
 
             # Emit foundation trace steps (Glass Box sidebar)
-            trace = foundation.get("trace")
             if trace:
                 yield _sse_data(bridge.emit_trace_steps_batch(trace.steps))
 
@@ -309,7 +335,7 @@ async def stream_fortune(fortune_id: str, request: Request):
                 )
 
             # 4. Narrative (run to completion — no streaming deltas to prevent layout jitter)
-            import time as _time
+            yield _sse_data(bridge.emit_progress("narrative", "Generating interpretation..."))
 
             # Trace: LLM narrative call
             if trace:
@@ -318,6 +344,7 @@ async def stream_fortune(fortune_id: str, request: Request):
                 yield _sse_data(bridge.emit_trace_steps_batch(trace.steps))
 
             _t_narrative = _time.monotonic()
+            logger.info("[FORTUNE] %s narrative start — model=%s", session.fortune_id, "gpt-5.4")
             stream_result = await run_narrative_streamed(ctx, foundation=foundation)
             async for event in stream_result.stream_events():
                 pass  # consume stream silently; frontend shows skeleton until complete
@@ -328,18 +355,22 @@ async def stream_fortune(fortune_id: str, request: Request):
                 narrative = EnrichedNarrativeOutput.model_validate(narrative)
             session.latest_narrative = narrative.model_dump()
 
+            dur_n = round((_time.monotonic() - _t_narrative) * 1000, 1)
+            n_insights = len(narrative.insights) if hasattr(narrative, 'insights') else 0
+            logger.info("[FORTUNE] %s narrative complete — %d insights, %.0fms",
+                        session.fortune_id, n_insights, dur_n)
+
             if trace:
-                dur = round((_time.monotonic() - _t_narrative) * 1000, 1)
-                n_insights = len(narrative.insights) if hasattr(narrative, 'insights') else 0
                 trace.add_instant("llm_complete", "narrative", label="Narrative Complete",
-                                  output_summary=f"{n_insights} insights, {dur:.0f}ms")
-                trace.steps[-1].duration_ms = dur
+                                  output_summary=f"{n_insights} insights, {dur_n:.0f}ms")
+                trace.steps[-1].duration_ms = dur_n
 
             yield _sse_data(
                 bridge.emit_narrative_complete(session.latest_narrative)
             )
 
             # 6. Guardrail
+            yield _sse_data(bridge.emit_progress("guardrail", "Running safety check..."))
             if trace:
                 trace.add_instant("llm_start", "guardrail", label="Running Safety Check")
 
@@ -354,11 +385,14 @@ async def stream_fortune(fortune_id: str, request: Request):
                 )
             session.latest_guardrail = guardrail.model_dump()
 
+            dur_g = round((_time.monotonic() - _t_guard) * 1000, 1)
+            logger.info("[FORTUNE] %s guardrail complete — level=%s, %.0fms",
+                        session.fortune_id, guardrail.level, dur_g)
+
             if trace:
-                dur = round((_time.monotonic() - _t_guard) * 1000, 1)
                 trace.add_instant("llm_complete", "guardrail", label="Safety Check Complete",
-                                  output_summary=f"level={guardrail.level}, {dur:.0f}ms")
-                trace.steps[-1].duration_ms = dur
+                                  output_summary=f"level={guardrail.level}, {dur_g:.0f}ms")
+                trace.steps[-1].duration_ms = dur_g
 
             yield _sse_data(bridge.emit_guardrail(session.latest_guardrail))
 
@@ -368,11 +402,14 @@ async def stream_fortune(fortune_id: str, request: Request):
                 yield _sse_data(bridge.emit_trace_summary(trace.summary()))
 
             # 7. Complete
+            total_ms = round((_time.monotonic() - _t_start) * 1000, 1)
+            logger.info("[FORTUNE] %s stream complete — total %.0fms", session.fortune_id, total_ms)
             session.touch(RuntimeStatus.complete)
             for msg in bridge.emit_complete():
                 yield _sse_data(msg)
 
         except Exception as exc:
+            logger.exception("[FORTUNE] %s stream error: %s", session.fortune_id, exc)
             session.touch(RuntimeStatus.error)
             for msg in bridge.emit_error(str(exc)):
                 yield _sse_data(msg)
