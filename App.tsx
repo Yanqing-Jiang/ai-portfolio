@@ -5,18 +5,24 @@ import {
   Routes,
   Route,
   Navigate,
-  Link,
   useNavigate,
   useLocation,
   useParams,
 } from 'react-router-dom';
-import { motion } from 'framer-motion';
-import { Calendar } from 'lucide-react';
 import Sidebar from './components/SidebarV2';
 import ProjectView from './components/ProjectView';
 import LandingPageFlow from './components/LandingPageFlow';
 import { GenerativeUIPage } from './components/generativeUiDashboard';
 import { MingEnginePage } from './components/generativeUiDashboard/MingEnginePage';
+import { FortuneAgentIntro } from './components/generativeUiDashboard/FortuneAgentIntro';
+import { FortuneAgentHub } from './components/generativeUiDashboard/FortuneAgentHub';
+import { FortuneAgentCompatibility } from './components/generativeUiDashboard/FortuneAgentCompatibility';
+import { FortuneAgentLuckyDay } from './components/generativeUiDashboard/FortuneAgentLuckyDay';
+import { FortuneAgentLuckDraw } from './components/generativeUiDashboard/FortuneAgentLuckDraw';
+import { FortuneAgentCustomWish } from './components/generativeUiDashboard/FortuneAgentCustomWish';
+import { FortuneAgentLandingA } from './components/generativeUiDashboard/FortuneAgentLandingA';
+import { FortuneAgentLandingB } from './components/generativeUiDashboard/FortuneAgentLandingB';
+import { FortuneAgentLandingC } from './components/generativeUiDashboard/FortuneAgentLandingC';
 import { ConsultingPage } from './components/consulting/ConsultingPage';
 
 import { PROJECT_DATA } from './constants';
@@ -31,6 +37,41 @@ import { HelmetProvider } from 'react-helmet-async';
 // Function: findProject - called from ProjectRoute and Layout to resolve a Project by id; forwards the Project into ProjectView for rendering and into SidebarV2 for active highlighting; exists to centralize project lookup for routing.
 const ALL_PROJECTS = PROJECT_DATA.flatMap((y) => y.projects);
 const findProject = (id: string) => ALL_PROJECTS.find((p) => p.id === id);
+
+const FortuneAgentIntroRoute: React.FC = () => {
+  const navigate = useNavigate();
+  const goExplore = () => navigate('/project/fortune-agent/explore');
+  return <FortuneAgentIntro onFinish={goExplore} onSkip={goExplore} />;
+};
+
+const FortuneAgentHubRoute: React.FC = () => {
+  const navigate = useNavigate();
+  return (
+    <FortuneAgentHub
+      onSelect={(id) => navigate(`/project/fortune-agent/${id}`)}
+    />
+  );
+};
+
+const FortuneAgentCompatibilityRoute: React.FC = () => {
+  const navigate = useNavigate();
+  return <FortuneAgentCompatibility onBack={() => navigate('/project/fortune-agent/explore')} />;
+};
+
+const FortuneAgentLuckyDayRoute: React.FC = () => {
+  const navigate = useNavigate();
+  return <FortuneAgentLuckyDay onBack={() => navigate('/project/fortune-agent/explore')} />;
+};
+
+const FortuneAgentLuckDrawRoute: React.FC = () => {
+  const navigate = useNavigate();
+  return <FortuneAgentLuckDraw onBack={() => navigate('/project/fortune-agent/explore')} />;
+};
+
+const FortuneAgentCustomWishRoute: React.FC = () => {
+  const navigate = useNavigate();
+  return <FortuneAgentCustomWish onBack={() => navigate('/project/fortune-agent/explore')} />;
+};
 
 // Function: ProjectRoute - mounted by the /project/:id route; looks up the requested project and renders ProjectView or redirects home if missing; exists to keep route elements thin.
 const ProjectRoute: React.FC = () => {
@@ -222,51 +263,6 @@ const Layout: React.FC = () => {
           </div>
         )}
 
-        {/* Book a Consulting Session - persistent top-right button */}
-        {location.pathname !== '/consult' && (
-          <motion.div
-            initial={{ opacity: 0, x: 40 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ duration: 0.5, delay: 0.8, ease: [0.16, 1, 0.3, 1] }}
-            className="fixed top-6 right-6 z-[60]"
-          >
-            <Link
-              to="/consult"
-              className="group relative flex items-center gap-2 px-3 py-2 md:px-4 md:py-2.5
-                         bg-slate-900/80 backdrop-blur-xl border border-sky-500/30 rounded-full
-                         text-sky-400 text-xs md:text-sm font-medium tracking-wide
-                         transition-all duration-300 overflow-hidden
-                         animate-booking-glow
-                         hover:bg-sky-500/20 hover:text-white hover:border-sky-400
-                         hover:scale-105 hover:shadow-[0_0_35px_rgba(14,165,233,0.35)]
-                         active:scale-95"
-            >
-              {/* Shimmer sweep overlay */}
-              <span
-                className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none"
-                aria-hidden="true"
-              >
-                <span
-                  className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent"
-                  style={{ animation: 'shimmerSweep 1.5s ease-in-out infinite' }}
-                />
-              </span>
-
-              <Calendar className="w-4 h-4 relative z-10 transition-transform duration-300 group-hover:scale-110" />
-              <span className="relative z-10 md:hidden">Book</span>
-              <span className="relative z-10 hidden md:inline">Book Session</span>
-              <svg
-                className="w-3 h-3 md:w-3.5 md:h-3.5 relative z-10 transition-transform duration-300 group-hover:translate-x-0.5"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M9 5l7 7-7 7" />
-              </svg>
-            </Link>
-          </motion.div>
-        )}
-
         {/* Main content area with fluid dimensions */}
         <main ref={mainContentRef} className="flex-1 overflow-y-auto pt-16 md:pt-0">
           <Routes>
@@ -284,7 +280,16 @@ const Layout: React.FC = () => {
             {/* 2026 Ming Engine - BaZi Fortune Reading */}
             <Route path="/project/ming-engine" element={<MingEnginePage />} />
 
-
+            {/* 2026 Fortune Agent — redesign experiments (local test routes) */}
+            <Route path="/project/fortune-agent" element={<FortuneAgentIntroRoute />} />
+            <Route path="/project/fortune-agent/explore" element={<FortuneAgentHubRoute />} />
+            <Route path="/project/fortune-agent/compatibility" element={<FortuneAgentCompatibilityRoute />} />
+            <Route path="/project/fortune-agent/lucky-day" element={<FortuneAgentLuckyDayRoute />} />
+            <Route path="/project/fortune-agent/luck-draw" element={<FortuneAgentLuckDrawRoute />} />
+            <Route path="/project/fortune-agent/custom-wish" element={<FortuneAgentCustomWishRoute />} />
+            <Route path="/project/fortune-agent/landing-a" element={<FortuneAgentLandingA />} />
+            <Route path="/project/fortune-agent/landing-b" element={<FortuneAgentLandingB />} />
+            <Route path="/project/fortune-agent/landing-c" element={<FortuneAgentLandingC />} />
 
             <Route path="/project/:projectId" element={<ProjectRoute />} />
             <Route path="/consult" element={<ConsultingPage />} />

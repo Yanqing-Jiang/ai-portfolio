@@ -71,8 +71,8 @@ Protocol: A2UI v0.8 with custom financial component catalog extension
         ],
       },
       {
-        id: 'ming-engine',
-        title: 'Ming Engine',
+        id: 'fortune-agent',
+        title: 'Fortune Agent',
         description: `Multi-agent BaZi fortune reading system using OpenAI Agents SDK.
 
 5-step pipeline (calendar → interpreter → classics → narrative → guardrail) with real-time A2UI streaming, classical text retrieval, and mobile-first zero-keyboard input.
@@ -87,13 +87,13 @@ Protocol: A2UI v0.8 with custom financial component catalog extension
         defaultPrompts: [],
         coverUrl: '',
         imageUrl: '',
-        seoTitle: 'Ming Engine — BaZi Fortune Reading Agent System',
+        seoTitle: 'Fortune Agent — BaZi Fortune Reading Agent System',
         seoDescription: 'Multi-agent fortune-telling system using OpenAI Agents SDK with BaZi computation, classical text retrieval, and real-time streaming UI.',
         seoKeywords: ['BaZi', 'Four Pillars', 'fortune telling', 'AI agents', 'OpenAI Agents SDK'],
         datePublished: '2026-04-06',
         dateModified: '2026-04-06',
         serviceTags: ['Agent Orchestration', 'BaZi', 'Streaming UI'],
-        linkText: 'Try Ming Engine',
+        linkText: 'Try Fortune Agent',
         statHighlights: [
           '5-agent pipeline: calendar → interpreter → classics → narrative → guardrail',
           'Streams custom BaZi widgets via A2UI protocol in real-time',
