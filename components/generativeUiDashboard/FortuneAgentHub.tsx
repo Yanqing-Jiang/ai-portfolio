@@ -851,7 +851,11 @@ function CustomWishSection({ onCta, sectionRef, nav }: CustomWishProps) {
         animate: inView ? { opacity: 1, y: 0 } : { opacity: 0.35, y: 12 },
         transition: { duration: 0.9, ease: [0.22, 0.61, 0.36, 1] as [number, number, number, number] },
     };
-    const [draft, setDraft] = useState('');
+
+    // Teaser on the hub is *just* the pitch + CTA. The actual question
+    // input lives on the Custom Wish function page — having two inputs
+    // (hub + function page) was confusing, so the hub drops straight to
+    // the CTA.
 
     return (
         <SectionShell ref={sectionRef} sectionId="custom-wish" gradient={SECTIONS[4].gradient} nav={nav}>
@@ -876,27 +880,13 @@ function CustomWishSection({ onCta, sectionRef, nav }: CustomWishProps) {
                     Ask anything the old heaven knows.
                 </p>
                 <p className="mt-2 max-w-xs text-balance text-sm leading-relaxed text-white/65">
-                    Career windows. A name. A quiet fear. Phrase it plainly.
+                    Career windows. A name. A quiet fear. Phrase it plainly on the next screen.
                 </p>
-
-                <label htmlFor="fa-wish-teaser" className="sr-only">Your question</label>
-                <input
-                    id="fa-wish-teaser"
-                    type="text"
-                    value={draft}
-                    onChange={(e) => setDraft(e.target.value)}
-                    placeholder="Should I take the offer?"
-                    className="mt-6 w-full max-w-sm rounded-full border bg-transparent px-5 py-3 text-[15px] text-white placeholder:text-white/35 focus:outline-none"
-                    style={{ borderColor: 'rgba(234,179,8,0.35)', minHeight: 44 }}
-                    onKeyDown={(e) => {
-                        if (e.key === 'Enter') onCta();
-                    }}
-                />
 
                 <button
                     type="button"
                     onClick={onCta}
-                    className="mt-5 inline-flex min-h-[44px] items-center gap-2 rounded-full px-6 py-3 text-sm font-medium text-white transition active:scale-[0.98]"
+                    className="mt-8 inline-flex min-h-[44px] items-center gap-2 rounded-full px-6 py-3 text-sm font-medium text-white transition active:scale-[0.98]"
                     style={{
                         background: 'rgba(255,255,255,0.06)',
                         border: `1px solid ${TOKEN.gold}`,

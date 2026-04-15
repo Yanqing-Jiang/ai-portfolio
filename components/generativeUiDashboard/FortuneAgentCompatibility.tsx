@@ -442,10 +442,17 @@ export function FortuneAgentCompatibility({ onBack, onComplete }: Props) {
     const sec3Ref = useRef<HTMLDivElement>(null!);
     const sec4Ref = useRef<HTMLDivElement>(null!);
 
-    const scrollTo = useCallback((ref: React.RefObject<HTMLDivElement>) => {
-        // Delay to let framer-motion mount the section before scrolling
+    // Scroll the active section to a predictable position just below
+    // the sticky header. Manual math avoids browsers clamping to
+    // document top and tucking section 1 under the sticky header.
+    const HEADER_OFFSET = 96;
+    const scrollTo = useCallback((ref: React.RefObject<HTMLDivElement>, behavior: ScrollBehavior = 'smooth') => {
         requestAnimationFrame(() => {
-            ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            const el = ref.current;
+            if (!el) return;
+            const rect = el.getBoundingClientRect();
+            const target = Math.max(0, rect.top + window.scrollY - HEADER_OFFSET);
+            window.scrollTo({ top: target, behavior });
         });
     }, []);
 
@@ -461,10 +468,8 @@ export function FortuneAgentCompatibility({ onBack, onComplete }: Props) {
     const editStep = useCallback((to: StepIndex) => {
         setCurrentStep(to);
         const ref = to === 0 ? sec1Ref : to === 1 ? sec2Ref : to === 2 ? sec3Ref : sec4Ref;
-        requestAnimationFrame(() => {
-            ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        });
-    }, []);
+        scrollTo(ref);
+    }, [scrollTo]);
 
     const handleComplete = useCallback(() => {
         if (!relationship || !personValid(personA) || !personValid(personB)) return;
@@ -474,10 +479,11 @@ export function FortuneAgentCompatibility({ onBack, onComplete }: Props) {
     const aValid = useMemo(() => personValid(personA), [personA]);
     const bValid = useMemo(() => personValid(personB), [personB]);
 
-    // Prevent page scroll jump on initial mount
+    // Initial mount — place section 1 at its resting position just below
+    // the sticky header. `behavior: 'auto'` avoids a visible scroll jump.
     useEffect(() => {
-        window.scrollTo({ top: 0 });
-    }, []);
+        scrollTo(sec1Ref, 'auto');
+    }, [scrollTo]);
 
     const relationshipLabel = useMemo(
         () => RELATIONSHIPS.find((r) => r.id === relationship)?.label ?? '—',
@@ -548,7 +554,7 @@ export function FortuneAgentCompatibility({ onBack, onComplete }: Props) {
 
             </header>
 
-            <main className="mx-auto flex w-full max-w-[420px] flex-col gap-3 px-4 pb-24 pt-5">
+            <main className="mx-auto flex w-full max-w-[420px] flex-col gap-3 px-4 pt-5 pb-[45vh]">
                 {/* Top motif — only prominent when on step 0 */}
                 <AnimatePresence mode="wait">
                     {currentStep === 0 && (

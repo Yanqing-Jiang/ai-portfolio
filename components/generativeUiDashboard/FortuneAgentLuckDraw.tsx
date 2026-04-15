@@ -405,13 +405,26 @@ export function FortuneAgentLuckDraw({
         4: useRef<HTMLDivElement>(null!),
     } as const;
 
+    // Manually scroll so the active section's top lands just below the
+    // sticky header with a bit of breathing room. `scroll-padding-top` +
+    // `scrollIntoView` proved unreliable (browsers silently clamped to
+    // the top of the document for section 1, which left the heading
+    // clipped under the sticky header). Doing the math explicitly —
+    // rect.top + scrollY - (header + breathing) — is predictable on both
+    // desktop and mobile, regardless of viewport height.
     useEffect(() => {
         const ref = sectionRefs[activeStep as 1 | 2 | 3 | 4]?.current;
         if (!ref) return;
-        // Defer until after section has mounted + animated in
+        const isInitial = activeStep === 1 && !editingStep;
         const t = setTimeout(() => {
-            ref.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }, 120);
+            const rect = ref.getBoundingClientRect();
+            const HEADER_OFFSET = 96; // ~72px sticky header + 24px breathing
+            const target = Math.max(0, rect.top + window.scrollY - HEADER_OFFSET);
+            window.scrollTo({
+                top: target,
+                behavior: isInitial ? 'auto' : 'smooth',
+            });
+        }, isInitial ? 0 : 120);
         return () => clearTimeout(t);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [activeStep]);
@@ -643,7 +656,9 @@ export function FortuneAgentLuckDraw({
                 style={{
                     maxWidth: 390,
                     margin: '0 auto',
-                    padding: '20px 16px 64px',
+                    // Generous bottom padding gives scrollIntoView({block:'center'})
+                    // enough runway to center any section, including the last one.
+                    padding: '20px 16px 45vh',
                 }}
             >
                 <AnimatePresence initial={false}>

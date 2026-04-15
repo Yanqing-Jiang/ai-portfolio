@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { motion, AnimatePresence, LayoutGroup } from 'framer-motion';
 import { BirthdayScrollPicker } from './BirthdayScrollPicker';
 
@@ -97,11 +97,28 @@ export function FortuneAgentCustomWish({ onBack, onComplete }: Props) {
   const section2Ref = useRef<HTMLDivElement>(null!);
   const section3Ref = useRef<HTMLDivElement>(null!);
 
-  const scrollTo = (ref: React.RefObject<HTMLDivElement>) => {
+  // Scroll the active section to a predictable position just below the
+  // sticky header. Manual math avoids browsers clamping to document top
+  // and tucking section 1 under the sticky header.
+  const HEADER_OFFSET = 96;
+  const scrollTo = (
+    ref: React.RefObject<HTMLDivElement>,
+    behavior: ScrollBehavior = 'smooth',
+  ) => {
     setTimeout(() => {
-      ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      const el = ref.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      const target = Math.max(0, rect.top + window.scrollY - HEADER_OFFSET);
+      window.scrollTo({ top: target, behavior });
     }, 100);
   };
+
+  // Initial mount — place section 1 at its resting position.
+  useEffect(() => {
+    scrollTo(section1Ref, 'auto');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleStep1Complete = () => {
     if (question.length >= 5) {
@@ -177,7 +194,7 @@ export function FortuneAgentCustomWish({ onBack, onComplete }: Props) {
         </div>
       </header>
 
-      <main className="max-w-[390px] mx-auto px-5 pt-6 flex flex-col gap-10">
+      <main className="max-w-[390px] mx-auto px-5 pt-6 pb-[45vh] flex flex-col gap-10">
         <LayoutGroup>
           {/* Section 1: The Question */}
           <motion.section 

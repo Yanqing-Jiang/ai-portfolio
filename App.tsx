@@ -59,22 +59,42 @@ const FortuneAgentHubRoute: React.FC = () => {
 
 const FortuneAgentCompatibilityRoute: React.FC = () => {
   const navigate = useNavigate();
-  return <FortuneAgentCompatibility onBack={() => navigate('/project/fortune-agent/explore')} />;
+  return (
+    <FortuneAgentCompatibility
+      onBack={() => navigate('/project/fortune-agent/explore')}
+      onComplete={() => navigate('/project/fortune-agent/compatibility/result')}
+    />
+  );
 };
 
 const FortuneAgentLuckyDayRoute: React.FC = () => {
   const navigate = useNavigate();
-  return <FortuneAgentLuckyDay onBack={() => navigate('/project/fortune-agent/explore')} />;
+  return (
+    <FortuneAgentLuckyDay
+      onBack={() => navigate('/project/fortune-agent/explore')}
+      onComplete={() => navigate('/project/fortune-agent/lucky-day/result')}
+    />
+  );
 };
 
 const FortuneAgentLuckDrawRoute: React.FC = () => {
   const navigate = useNavigate();
-  return <FortuneAgentLuckDraw onBack={() => navigate('/project/fortune-agent/explore')} />;
+  return (
+    <FortuneAgentLuckDraw
+      onBack={() => navigate('/project/fortune-agent/explore')}
+      onComplete={() => navigate('/project/fortune-agent/luck-draw/result')}
+    />
+  );
 };
 
 const FortuneAgentCustomWishRoute: React.FC = () => {
   const navigate = useNavigate();
-  return <FortuneAgentCustomWish onBack={() => navigate('/project/fortune-agent/explore')} />;
+  return (
+    <FortuneAgentCustomWish
+      onBack={() => navigate('/project/fortune-agent/explore')}
+      onComplete={() => navigate('/project/fortune-agent/custom-wish/result')}
+    />
+  );
 };
 
 // Result demo pages (mock-data, no backend). Wired from the bespoke input pages' CTA.

@@ -1,21 +1,30 @@
-import React, { useState, useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ChevronRight,
-  ArrowLeft,
   Sparkles,
-  HelpCircle,
-  ArrowUpRight,
   ShieldCheck,
   Zap,
-  Star
+  Star,
 } from 'lucide-react';
+import {
+  FortuneAgentResultShell,
+  type FortuneTab,
+} from './FortuneAgentResultShell';
+import {
+  FortuneAgentAskTab,
+  type AskTurn,
+} from './FortuneAgentAskTab';
 
 /**
- * FortuneAgentOccasionResult
- * 
- * Refined auspicious date picker result page.
- * Universal shell: max-w-2xl, gold/indigo theme, "Noto Serif SC".
+ * FortuneAgentOccasionResult — 擇 Auspicious Date reading.
+ *
+ * Theme: Gold (#eab308) — the flagship accent, which also happens to be
+ * the shared "classical anchor" color. The rest of the shell (tabs, back
+ * button, glyph) comes from FortuneAgentResultShell via purpose="lucky-day".
+ *
+ * Tabs: Top Picks · Calendar · Why · Ask.
+ * Mobile-first with safe-area aware layout.
  */
 
 interface Mechanism {
@@ -167,13 +176,25 @@ const getHeatmapColor = (score: number, isClash?: boolean) => {
   return 'bg-[#450a0a] text-white/40 border-red-900/20';
 };
 
+const TABS: FortuneTab[] = [
+  { id: 'Top Picks', label: 'Picks' },
+  { id: 'Calendar', label: 'Calendar' },
+  { id: 'Why', label: 'Why' },
+  { id: 'Ask', label: 'Ask' },
+];
+
 export const FortuneAgentOccasionResult: React.FC<FortuneAgentOccasionResultProps> = ({ onBack }) => {
-  const [activeTab, setActiveTab] = useState<'Top Picks' | 'Calendar' | 'Why' | 'Ask'>('Top Picks');
+  const [activeTab, setActiveTab] = useState<string>('Top Picks');
   const [selectedDay, setSelectedDay] = useState<number | null>(12);
   const [activeWhyDate, setActiveWhyDate] = useState<number>(12);
-  const [chatInput, setChatInput] = useState('');
-  const [chatHistory, setChatHistory] = useState([
-    { role: 'assistant', content: "I've analyzed May 2026 for your contract signing. May 12th stands out as the premium window. Would you like to check the specific hour breakdown for that day?" }
+  const [askInput, setAskInput] = useState('');
+  const [askHistory, setAskHistory] = useState<AskTurn[]>([
+    {
+      id: 'a1',
+      role: 'agent',
+      content:
+        "May 12 stands out as the premium window for your contract. The real question under the question: do you want the deal signed, or signed and lasting? If the latter, anchor to the hour Wu 午 (11–13h).",
+    },
   ]);
 
   const selectedDayData = useMemo(() => 
@@ -185,79 +206,38 @@ export const FortuneAgentOccasionResult: React.FC<FortuneAgentOccasionResultProp
   [activeWhyDate]);
 
   const handleSend = () => {
-    if (!chatInput.trim()) return;
-    const newHistory = [...chatHistory, { role: 'user', content: chatInput }];
-    setChatHistory(newHistory);
-    setChatInput('');
-    console.log('User asked:', chatInput);
-    
-    // Mock response
+    if (!askInput.trim()) return;
+    const msg = askInput.trim();
+    setAskHistory((h) => [
+      ...h,
+      { id: String(Date.now()), role: 'user', content: msg },
+    ]);
+    setAskInput('');
+    // Mock response — backend will replace
     setTimeout(() => {
-      setChatHistory(prev => [...prev, { 
-        role: 'assistant', 
-        content: "That's a great question. Based on the 12 Officers, the period after May 20th enters a 'Clash' cycle for your sign. I recommend sticking to the mid-month window if possible." 
-      }]);
-    }, 1000);
+      setAskHistory((h) => [
+        ...h,
+        {
+          id: String(Date.now() + 1),
+          role: 'agent',
+          content:
+            "After May 20 the Shen–Zi cycle enters a clash phase for your Day Master. The mid-month window (12–20) is the cleanest. One thing to do this week: get the notary pre-booked for May 12 morning.",
+        },
+      ]);
+    }, 900);
   };
 
   return (
-    <div
-      className="min-h-screen text-[#f8fafc] font-sans selection:bg-[#eab308]/30 relative"
-      style={{
-        background:
-          'linear-gradient(180deg, #1a1304 0%, #3a2a08 55%, #0c0a14 100%)',
-      }}
+    <FortuneAgentResultShell
+      purpose="lucky-day"
+      eyebrow="Occasion"
+      subtitle="擇日 · Auspicious Date"
+      tabs={TABS}
+      activeTabId={activeTab}
+      onTabChange={setActiveTab}
+      onBack={onBack}
     >
-      
-      {/* Fixed Top Shell */}
-      <div className="fixed top-0 left-0 right-0 z-50 bg-[#0c0a14]/80 backdrop-blur-md border-b border-[#eab308]/10">
-        <div className="max-w-2xl mx-auto px-4 py-3 flex justify-between items-center">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-[#eab308]/10 border border-[#eab308]/30 flex items-center justify-center">
-              <span className="text-[#eab308] text-lg font-serif">◈</span>
-            </div>
-            <div>
-              <h1 className="text-sm font-serif font-bold tracking-wide text-[#eab308]">OCCASION</h1>
-              <p className="text-[10px] uppercase tracking-[0.2em] text-white/50">Auspicious Date</p>
-            </div>
-          </div>
-          
-          {onBack && (
-            <button 
-              onClick={onBack}
-              className="px-3 py-1.5 rounded-full bg-[#1e1b4b]/60 border border-[#eab308]/20 flex items-center gap-2 hover:border-[#eab308]/50 transition-colors"
-            >
-              <ArrowLeft className="w-3.5 h-3.5 text-[#eab308]" />
-              <span className="text-[10px] font-bold uppercase tracking-widest text-[#eab308]">Back</span>
-            </button>
-          )}
-        </div>
-
-        {/* Universal Tab Bar */}
-        <div className="max-w-2xl mx-auto px-4 flex">
-          {['Top Picks', 'Calendar', 'Why', 'Ask'].map((tab) => (
-            <button
-              key={tab}
-              onClick={() => setActiveTab(tab as any)}
-              className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-widest transition-all relative ${
-                activeTab === tab ? 'text-[#eab308]' : 'text-white/40 hover:text-white/60'
-              }`}
-            >
-              {tab}
-              {activeTab === tab && (
-                <motion.div
-                  layoutId="activeTab"
-                  className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#eab308]"
-                />
-              )}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Main Content Area */}
-      <main className="max-w-2xl mx-auto px-4 pt-24 pb-32 min-h-screen">
-        <AnimatePresence mode="wait">
+      <AnimatePresence mode="wait">
           
           {/* TOP PICKS TAB */}
           {activeTab === 'Top Picks' && (
@@ -476,81 +456,30 @@ export const FortuneAgentOccasionResult: React.FC<FortuneAgentOccasionResultProp
             </motion.div>
           )}
 
-          {/* ASK TAB (CHATBOT) */}
+          {/* ASK TAB — shared Sacred Scroll component */}
           {activeTab === 'Ask' && (
             <motion.div
               key="ask"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="space-y-6 flex flex-col min-h-[60vh]"
+              transition={{ duration: 0.35, ease: [0.32, 0.72, 0, 1] }}
             >
-              <div className="flex-1 space-y-4 overflow-y-auto no-scrollbar pb-4">
-                {chatHistory.map((msg, i) => (
-                  <div 
-                    key={i}
-                    className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                  >
-                    <div className={`max-w-[85%] p-4 rounded-2xl border ${
-                      msg.role === 'user' 
-                        ? 'bg-[#eab308] border-[#eab308] text-[#0c0a14] font-medium' 
-                        : 'bg-[rgba(12,10,20,0.55)] border-[#eab308]/25 text-white/80'
-                    }`}>
-                      <p className="text-sm leading-relaxed">{msg.content}</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Suggestions */}
-              <div className="space-y-4">
-                <div className="flex items-center gap-2">
-                  <HelpCircle className="w-3.5 h-3.5 text-[#eab308]" />
-                  <span className="text-[10px] uppercase tracking-widest text-[#eab308]/60">Suggested Questions</span>
-                </div>
-                <div className="flex gap-2 overflow-x-auto no-scrollbar pb-2">
-                  {SUGGESTED_CHIPS.map(chip => (
-                    <button
-                      key={chip}
-                      onClick={() => setChatInput(chip)}
-                      className="whitespace-nowrap px-4 py-2 rounded-full border border-[#eab308]/20 bg-[#1e1b4b]/40 text-[10px] text-white/70 hover:border-[#eab308]/60 hover:bg-[#1e1b4b]/60 transition-all"
-                    >
-                      {chip}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Chat Input Only in Ask Tab */}
-                <div className="relative group">
-                  <input
-                    type="text"
-                    value={chatInput}
-                    onChange={(e) => setChatInput(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-                    placeholder="Inquire about celestial timing..."
-                    className="w-full bg-[#1e1b4b]/60 border border-[#eab308]/30 rounded-2xl py-5 pl-6 pr-14 text-sm focus:outline-none focus:border-[#eab308] transition-all placeholder:text-white/20"
-                  />
-                  <button 
-                    onClick={handleSend}
-                    className="absolute right-4 top-1/2 -translate-y-1/2 w-10 h-10 rounded-xl bg-[#eab308] text-[#0c0a14] flex items-center justify-center hover:scale-105 transition-transform"
-                  >
-                    <ArrowUpRight className="w-5 h-5" />
-                  </button>
-                </div>
-              </div>
+              <FortuneAgentAskTab
+                purpose="lucky-day"
+                history={askHistory}
+                suggestedChips={SUGGESTED_CHIPS}
+                input={askInput}
+                onInputChange={setAskInput}
+                onSend={handleSend}
+                heading="Ask the almanac"
+                placeholder="Inquire about the date or the hour…"
+              />
             </motion.div>
           )}
 
         </AnimatePresence>
-      </main>
-
-      {/* Persistent Visual Glyph (Bottom Center) */}
-      <div className="fixed bottom-8 left-1/2 -translate-x-1/2 pointer-events-none opacity-20">
-        <div className="w-12 h-12 border-2 border-[#eab308] rotate-45 flex items-center justify-center">
-          <div className="w-6 h-6 border border-[#eab308]" />
-        </div>
-      </div>
-    </div>
+    </FortuneAgentResultShell>
   );
 };
 

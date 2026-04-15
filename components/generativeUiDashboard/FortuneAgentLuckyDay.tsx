@@ -435,18 +435,35 @@ export function FortuneAgentLuckyDay({ onBack, onComplete }: FortuneAgentLuckyDa
 
     const activeAccent = currentOccasion?.accent ?? '212, 175, 55';
 
-    // Advance helper
+    // Scroll the active section to a predictable position just below
+    // the sticky header. Manual math (rect.top + scrollY - offset) is
+    // more reliable than `scroll-padding-top` + scrollIntoView, which
+    // browsers clamp when already at scroll top and silently leave the
+    // first section partially tucked under the sticky header.
+    const HEADER_OFFSET = 96;
+    const scrollSectionIntoView = (
+        ref: HTMLDivElement | null,
+        behavior: ScrollBehavior = 'smooth',
+    ) => {
+        if (!ref) return;
+        const rect = ref.getBoundingClientRect();
+        const target = Math.max(0, rect.top + window.scrollY - HEADER_OFFSET);
+        window.scrollTo({ top: target, behavior });
+    };
+
     const advanceTo = (n: number) => {
         setActiveStep(n);
         setMaxStep((m) => Math.max(m, n));
-        // Smooth-scroll after render
         setTimeout(() => {
-            const ref = sectionRefs[n - 1]?.current;
-            if (ref) {
-                ref.scrollIntoView({ behavior: 'smooth', block: 'start' });
-            }
+            scrollSectionIntoView(sectionRefs[n - 1]?.current);
         }, 80);
     };
+
+    useEffect(() => {
+        // Initial mount — place section 1 at its resting position.
+        scrollSectionIntoView(sectionRefs[0]?.current, 'auto');
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     // Auto-advance from Section 1 on occasion tap (tiny delay for visual feedback)
     useEffect(() => {
@@ -610,7 +627,7 @@ export function FortuneAgentLuckyDay({ onBack, onComplete }: FortuneAgentLuckyDa
                 </div>
             </header>
 
-            <div className="mx-auto w-full max-w-[420px] px-4 pb-24 pt-4">
+            <div className="mx-auto w-full max-w-[420px] px-4 pt-4 pb-[35vh]">
                 {/* -------- Section 1: The Occasion -------- */}
                 <SectionShell
                     index={1}
