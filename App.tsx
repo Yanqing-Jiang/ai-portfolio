@@ -20,6 +20,10 @@ import { FortuneAgentCompatibility } from './components/generativeUiDashboard/Fo
 import { FortuneAgentLuckyDay } from './components/generativeUiDashboard/FortuneAgentLuckyDay';
 import { FortuneAgentLuckDraw } from './components/generativeUiDashboard/FortuneAgentLuckDraw';
 import { FortuneAgentCustomWish } from './components/generativeUiDashboard/FortuneAgentCustomWish';
+import { FortuneAgentCompatibilityResult } from './components/generativeUiDashboard/FortuneAgentCompatibilityResult';
+import { FortuneAgentOccasionResult } from './components/generativeUiDashboard/FortuneAgentOccasionResult';
+import { FortuneAgentCycleResult } from './components/generativeUiDashboard/FortuneAgentCycleResult';
+import { FortuneAgentCustomWishResult } from './components/generativeUiDashboard/FortuneAgentCustomWishResult';
 import { FortuneAgentLandingA } from './components/generativeUiDashboard/FortuneAgentLandingA';
 import { FortuneAgentLandingB } from './components/generativeUiDashboard/FortuneAgentLandingB';
 import { FortuneAgentLandingC } from './components/generativeUiDashboard/FortuneAgentLandingC';
@@ -71,6 +75,27 @@ const FortuneAgentLuckDrawRoute: React.FC = () => {
 const FortuneAgentCustomWishRoute: React.FC = () => {
   const navigate = useNavigate();
   return <FortuneAgentCustomWish onBack={() => navigate('/project/fortune-agent/explore')} />;
+};
+
+// Result demo pages (mock-data, no backend). Wired from the bespoke input pages' CTA.
+const FortuneAgentCompatibilityResultRoute: React.FC = () => {
+  const navigate = useNavigate();
+  return <FortuneAgentCompatibilityResult onBack={() => navigate('/project/fortune-agent/compatibility')} />;
+};
+
+const FortuneAgentOccasionResultRoute: React.FC = () => {
+  const navigate = useNavigate();
+  return <FortuneAgentOccasionResult onBack={() => navigate('/project/fortune-agent/lucky-day')} />;
+};
+
+const FortuneAgentCycleResultRoute: React.FC = () => {
+  const navigate = useNavigate();
+  return <FortuneAgentCycleResult onBack={() => navigate('/project/fortune-agent/luck-draw')} />;
+};
+
+const FortuneAgentCustomWishResultRoute: React.FC = () => {
+  const navigate = useNavigate();
+  return <FortuneAgentCustomWishResult onBack={() => navigate('/project/fortune-agent/custom-wish')} />;
 };
 
 // Function: ProjectRoute - mounted by the /project/:id route; looks up the requested project and renders ProjectView or redirects home if missing; exists to keep route elements thin.
@@ -287,6 +312,13 @@ const Layout: React.FC = () => {
             <Route path="/project/fortune-agent/lucky-day" element={<FortuneAgentLuckyDayRoute />} />
             <Route path="/project/fortune-agent/luck-draw" element={<FortuneAgentLuckDrawRoute />} />
             <Route path="/project/fortune-agent/custom-wish" element={<FortuneAgentCustomWishRoute />} />
+
+            {/* Result demo pages (hard-coded mock data — previews for backend design) */}
+            <Route path="/project/fortune-agent/compatibility/result" element={<FortuneAgentCompatibilityResultRoute />} />
+            <Route path="/project/fortune-agent/lucky-day/result" element={<FortuneAgentOccasionResultRoute />} />
+            <Route path="/project/fortune-agent/luck-draw/result" element={<FortuneAgentCycleResultRoute />} />
+            <Route path="/project/fortune-agent/custom-wish/result" element={<FortuneAgentCustomWishResultRoute />} />
+
             <Route path="/project/fortune-agent/landing-a" element={<FortuneAgentLandingA />} />
             <Route path="/project/fortune-agent/landing-b" element={<FortuneAgentLandingB />} />
             <Route path="/project/fortune-agent/landing-c" element={<FortuneAgentLandingC />} />

@@ -642,15 +642,19 @@ function HeroSection({ variant, sectionRef, onScrollNext, onJumpToSection }: Her
         transition: { duration: 0.9, ease: [0.22, 0.61, 0.36, 1] as [number, number, number, number] },
     };
 
+    // Each tile previews its function's accent on hover, so clicking through
+    // feels like the hub's gradient continues into the input + result pages.
     const tiles: {
         id: FortunePurposeId;
         glyph: string;
         label: string;
+        accentBorder: string;
+        accentBg: string;
     }[] = [
-        { id: 'compatibility', glyph: '緣', label: 'Compatibility' },
-        { id: 'lucky-day', glyph: '擇', label: 'Occasion' },
-        { id: 'luck-draw', glyph: '運', label: 'Cycle Reading' },
-        { id: 'custom-wish', glyph: '問', label: 'Ask Anything' },
+        { id: 'compatibility', glyph: '緣', label: 'Compatibility', accentBorder: 'rgba(244,63,94,0.75)', accentBg: 'rgba(244,63,94,0.14)' },
+        { id: 'lucky-day', glyph: '擇', label: 'Occasion', accentBorder: 'rgba(234,179,8,0.75)', accentBg: 'rgba(234,179,8,0.14)' },
+        { id: 'luck-draw', glyph: '運', label: 'Cycle Reading', accentBorder: 'rgba(249,115,22,0.75)', accentBg: 'rgba(249,115,22,0.14)' },
+        { id: 'custom-wish', glyph: '問', label: 'Ask Anything', accentBorder: 'rgba(96,165,250,0.75)', accentBg: 'rgba(96,165,250,0.14)' },
     ];
 
     let artwork: React.ReactNode;
@@ -711,8 +715,8 @@ function HeroSection({ variant, sectionRef, onScrollNext, onJumpToSection }: Her
                                         ? undefined
                                         : {
                                               y: -3,
-                                              borderColor: 'rgba(234,179,8,0.85)',
-                                              backgroundColor: 'rgba(234,179,8,0.14)',
+                                              borderColor: t.accentBorder,
+                                              backgroundColor: t.accentBg,
                                           }
                                 }
                                 whileTap={reduce ? undefined : { scale: 0.97 }}

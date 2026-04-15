@@ -573,7 +573,8 @@ export function FortuneAgentLuckyDay({ onBack, onComplete }: FortuneAgentLuckyDa
         <div
             className="min-h-screen w-full"
             style={{
-                background: 'var(--ming-bg, #0c0a14)',
+                background:
+                    'linear-gradient(180deg, #1a1304 0%, #3a2a08 55%, #0c0a14 100%)',
                 overscrollBehavior: 'none',
             }}
         >
@@ -594,8 +595,8 @@ export function FortuneAgentLuckyDay({ onBack, onComplete }: FortuneAgentLuckyDa
             <header
                 className="sticky top-0 z-20 flex items-center justify-center px-4 py-3 backdrop-blur"
                 style={{
-                    background: 'rgba(12, 10, 20, 0.82)',
-                    borderBottom: '1px solid rgba(148, 163, 184, 0.1)',
+                    background: 'rgba(26, 19, 4, 0.85)',
+                    borderBottom: '1px solid rgba(234, 179, 8, 0.14)',
                 }}
             >
                 <div className="flex flex-col items-center">

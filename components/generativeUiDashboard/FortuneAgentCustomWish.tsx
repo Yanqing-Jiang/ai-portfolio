@@ -134,7 +134,14 @@ export function FortuneAgentCustomWish({ onBack, onComplete }: Props) {
   };
 
   return (
-    <div className="min-h-screen pb-20 select-none" style={{ background: 'var(--ming-bg, #0c0a14)', color: '#f5efe6' }}>
+    <div
+      className="min-h-screen pb-20 select-none"
+      style={{
+        background:
+          'linear-gradient(180deg, #0a0c14 0%, #161a2a 55%, #0c0a14 100%)',
+        color: '#f5efe6',
+      }}
+    >
       {onBack ? (
         <button
           type="button"
@@ -149,7 +156,13 @@ export function FortuneAgentCustomWish({ onBack, onComplete }: Props) {
       ) : null}
 
       {/* Sticky Mini-Header */}
-      <header className="sticky top-0 z-40 w-full backdrop-blur-md bg-[#0c0a14]/80 border-b border-white/5 px-4 h-14 flex items-center justify-center">
+      <header
+        className="sticky top-0 z-40 w-full backdrop-blur-md border-b px-4 h-14 flex items-center justify-center"
+        style={{
+          background: 'rgba(10, 12, 20, 0.85)',
+          borderBottomColor: 'rgba(96, 165, 250, 0.14)',
+        }}
+      >
         <div className="flex gap-1.5">
           {[1, 2, 3].map((s) => (
             <div 

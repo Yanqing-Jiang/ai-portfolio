@@ -529,7 +529,8 @@ export function FortuneAgentLuckDraw({
         <div
             style={{
                 minHeight: '100vh',
-                background: 'var(--ming-bg, #0c0a14)',
+                background:
+                    'linear-gradient(180deg, #200a06 0%, #4a1608 55%, #0c0a14 100%)',
                 color: '#e2e8f0',
                 fontFamily:
                     '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
@@ -573,10 +574,10 @@ export function FortuneAgentLuckDraw({
                     top: 0,
                     zIndex: 10,
                     background:
-                        'linear-gradient(180deg, rgba(12,10,20,0.96) 0%, rgba(12,10,20,0.75) 100%)',
+                        'linear-gradient(180deg, rgba(32,10,6,0.94) 0%, rgba(32,10,6,0.72) 100%)',
                     backdropFilter: 'blur(10px)',
                     WebkitBackdropFilter: 'blur(10px)',
-                    borderBottom: '1px solid rgba(212,175,55,0.08)',
+                    borderBottom: '1px solid rgba(249, 115, 22, 0.14)',
                 }}
             >
                 <div

@@ -487,7 +487,10 @@ export function FortuneAgentCompatibility({ onBack, onComplete }: Props) {
     return (
         <div
             className="min-h-screen w-full text-slate-100"
-            style={{ background: 'var(--ming-bg, #0b1120)' }}
+            style={{
+                background:
+                    'linear-gradient(180deg, #1a0a10 0%, #3a0f14 55%, #0c0a14 100%)',
+            }}
         >
             {onBack ? (
                 <button
@@ -506,8 +509,8 @@ export function FortuneAgentCompatibility({ onBack, onComplete }: Props) {
             <header
                 className="sticky top-0 z-20 flex items-center justify-center px-3 py-2.5 backdrop-blur"
                 style={{
-                    background: 'rgba(11, 17, 32, 0.8)',
-                    borderBottom: '1px solid rgba(148, 163, 184, 0.08)',
+                    background: 'rgba(26, 10, 16, 0.85)',
+                    borderBottom: '1px solid rgba(244, 63, 94, 0.14)',
                 }}
             >
                 {/* 4-dot progress indicator */}
