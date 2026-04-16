@@ -38,6 +38,74 @@ interface UseFortuneSessionReturn {
   create: (payload: Record<string, unknown>) => Promise<void>;
 }
 
+// Per-function payload mapping: input pages emit { birthDate, birthTime, timeUnknown, gender }
+// (nested under `profile` / `personA` / `personB`). Backend expects a flat CreateFortuneRequest
+// with `birth_iso`. This helper bridges the two shapes.
+interface InputProfile {
+  birthDate?: string;
+  birthTime?: string | null;
+  timeUnknown?: boolean;
+  gender?: string;
+}
+
+function toBirthIso(p: InputProfile | undefined | null): string {
+  if (!p?.birthDate) return '';
+  const hour = p.timeUnknown ? '12' : (p.birthTime || '12');
+  return `${p.birthDate}T${hour.padStart(2, '0')}:00:00`;
+}
+
+function buildCreateRequest(functionId: FortuneFunctionId, payload: Record<string, unknown>) {
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+  switch (functionId) {
+    case 'compatibility': {
+      const p = payload as { relationship: string; personA: InputProfile; personB: InputProfile; question?: string };
+      return fortuneClient.createCompatibility({
+        relationship: p.relationship,
+        personA: { birth_iso: toBirthIso(p.personA), timezone: tz, gender: p.personA?.gender },
+        personB: { birth_iso: toBirthIso(p.personB), timezone: tz, gender: p.personB?.gender },
+        question: p.question,
+      });
+    }
+    case 'lucky-day': {
+      const p = payload as { occasion: string; profile: InputProfile; windowStart: string; windowEnd: string };
+      return fortuneClient.createLuckyDay({
+        profile: { birth_iso: toBirthIso(p.profile), timezone: tz, gender: p.profile?.gender },
+        occasion: p.occasion,
+        windowStartISO: p.windowStart,
+        windowEndISO: p.windowEnd,
+      });
+    }
+    case 'luck-cycle': {
+      const p = payload as { horizon: string; focus: string; profile: InputProfile };
+      return fortuneClient.createLuckCycle({
+        profile: {
+          birth_iso: toBirthIso(p.profile),
+          timezone: tz,
+          birth_time_unknown: p.profile?.timeUnknown,
+          gender: p.profile?.gender,
+        },
+        horizon: p.horizon,
+        focus: p.focus,
+      });
+    }
+    case 'wish': {
+      const p = payload as { question: string; profile: InputProfile; focus?: string; tone?: string };
+      return fortuneClient.createWish({
+        profile: {
+          birth_iso: toBirthIso(p.profile),
+          timezone: tz,
+          birth_time_unknown: p.profile?.timeUnknown,
+          gender: p.profile?.gender,
+        },
+        question: p.question,
+        focus: p.focus,
+        tone: p.tone,
+      });
+    }
+  }
+}
+
 export function useFortuneSession(options: UseFortuneSessionOptions): UseFortuneSessionReturn {
   const { functionId, baseRoute } = options;
   const { fortuneId: urlFortuneId } = useParams<{ fortuneId?: string }>();
@@ -179,15 +247,7 @@ export function useFortuneSession(options: UseFortuneSessionOptions): UseFortune
 
     try {
       setStatus('loading');
-      const resp = await fortuneClient.createFortune({
-        birth_iso: (payload.birthISO || payload.birth_iso || '') as string,
-        timezone: (payload.timezone || '') as string,
-        birth_time_unknown: !!payload.birthTimeUnknown,
-        gender: (payload.gender || '') as string,
-        question: (payload.question || '') as string,
-        focus: (payload.focus || '') as string,
-        tone: (payload.tone || '') as string,
-      });
+      const resp = await buildCreateRequest(functionId, payload);
 
       setFortune(resp.fortune_id, resp.run_id, {
         persistenceDegraded: resp.persistenceDegraded,
