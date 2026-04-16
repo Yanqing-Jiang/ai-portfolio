@@ -1077,6 +1077,21 @@ async def stream_fortune(fortune_id: str, request: Request):
                     event_name="narrative_complete",
                 )
 
+                # Compatibility fan-out: if the narrative includes a
+                # `compatibility` block, split it into the three paths the
+                # frontend CompatibilityModel reads from.
+                compat_block = session.latest_narrative.get("compatibility") if session.latest_narrative else None
+                if is_compat and compat_block:
+                    overview = compat_block.get("overview")
+                    if overview:
+                        yield await _emit(bridge.emit_compat_overview(overview))
+                    pair_interactions = compat_block.get("pair_interactions") or []
+                    if pair_interactions:
+                        yield await _emit(bridge.emit_compat_pair_interactions(pair_interactions))
+                    mechanisms = compat_block.get("mechanisms") or []
+                    if mechanisms:
+                        yield await _emit(bridge.emit_compat_mechanisms(mechanisms))
+
                 if run_uuid is not None:
                     try:
                         await repo.upsert_snapshot(

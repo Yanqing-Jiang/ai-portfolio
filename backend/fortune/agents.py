@@ -129,6 +129,51 @@ class YearPrediction(BaseModel):
     evidence_refs: list[str] = Field(default_factory=list, description="Classical ref IDs or interaction descriptions")
 
 
+class CompatOverview(BaseModel):
+    """Compatibility overview shown in the OverviewTab ring + hero copy."""
+    score: int = Field(ge=0, le=100, description="0-100 overall harmony score")
+    summary: str = Field(description="1-sentence italic hero verdict, max 20 words")
+    relationship: str = Field(description="Relationship label: romance, marriage, business, friends, family")
+    strengths: list[str] = Field(
+        min_length=2, max_length=5,
+        description="Short phrases describing what works well between the pair",
+    )
+    frictions: list[str] = Field(
+        min_length=1, max_length=5,
+        description="Short phrases describing tension points or watch-outs",
+    )
+
+
+class CompatPairInteraction(BaseModel):
+    """One paired pillar interaction for the Pillars tab."""
+    type: str = Field(description="combination | clash | harm | support | punishment")
+    from_: str = Field(alias="from", description="Person A branch or stem")
+    to: str = Field(description="Person B branch or stem")
+    person_a: str = Field(description="Pillar label for person A, e.g. 'Day'")
+    person_b: str = Field(description="Pillar label for person B, e.g. 'Day'")
+    description: str | None = Field(default=None, description="1-2 sentence interpretation")
+    effect: str | None = Field(default=None, description="Short practical effect")
+
+    class Config:
+        populate_by_name = True
+
+
+class CompatMechanism(BaseModel):
+    """Classical mechanism card for the Why tab."""
+    id: str
+    title: str = Field(description="Short serif title, e.g. 'Bing Fire warmed by Ji Earth'")
+    icon: str = Field(description="Emoji or lucide icon name")
+    bullets: list[str] = Field(min_length=1, max_length=4)
+    citation_ids: list[str] = Field(default_factory=list, description="Classical reference ids")
+
+
+class CompatibilityNarrativeFields(BaseModel):
+    """Compat-specific output, only populated when focus is 'compatibility:*'."""
+    overview: CompatOverview
+    pair_interactions: list[CompatPairInteraction] = Field(default_factory=list)
+    mechanisms: list[CompatMechanism] = Field(default_factory=list)
+
+
 class EnrichedNarrativeOutput(BaseModel):
     """Extended narrative with year predictions and evidence tracking."""
     tldr: str = Field(description="1-sentence summary, max 20 words")
@@ -136,6 +181,10 @@ class EnrichedNarrativeOutput(BaseModel):
     year_predictions: list[YearPrediction] = Field(
         default_factory=list,
         description="Per-year predictions for years with notable interactions",
+    )
+    compatibility: CompatibilityNarrativeFields | None = Field(
+        default=None,
+        description="Populated only when the focus is 'compatibility:*' and Person B data is available",
     )
 
 
@@ -193,6 +242,49 @@ Guidelines:
 - Be concise — more insight per word, fewer words per insight.
 - For year_predictions, focus on years with clashes or combinations. Skip uneventful years.
 - Prefer actionable, practical bullets over abstract philosophy.
+
+COMPATIBILITY MODE (only when `person_b` is present in the input JSON):
+The focus string will start with "compatibility:" and you will receive Person A's \
+chart as the top-level fields AND Person B's chart under `person_b`. Produce a \
+`compatibility` object IN ADDITION TO the standard tldr/insights:
+
+- compatibility.overview.score: 0-100 integer. Anchor to real signals:
+  - +30 for element complementarity (A's dominant feeds B's weakest, or vice versa)
+  - +25 for Day Master supporting relationship (same element, or producing/controlled)
+  - +20 for branch combinations (六合, 三合) between the two charts
+  - -25 for Day Pillar 冲 (direct clash) between A and B
+  - -15 for Hour/Year clashes (刑, 破, 害)
+  - Modulate by seasonal strength: weak Day Master benefiting from partner's dominant element is a strong positive
+- compatibility.overview.summary: Italic single sentence hero verdict, max 20 words. \
+  Reference both Day Masters by name (e.g. "Her Earth grounds your Fire.").
+- compatibility.overview.relationship: extract from the focus string after the colon \
+  (e.g. focus="compatibility:romance" → "romance"). Normalize to one of: romance, \
+  marriage, business, friends, family.
+- compatibility.overview.strengths: 2-4 phrases describing what works. Each must cite \
+  a specific chart signal (e.g. "His Jia Wood feeds your weak Fire day master").
+- compatibility.overview.frictions: 1-4 phrases describing tension. Cite a specific \
+  clash / harm / 10-god collision.
+- compatibility.pair_interactions: Scan paired pillars Year/Month/Day/Hour. For each \
+  pair that has a meaningful interaction (combination, clash, harm, punishment), \
+  emit one entry with:
+  - type: "combination" | "clash" | "harm" | "support" | "punishment"
+  - from: A's stem or branch code (e.g. "甲", "寅")
+  - to: B's stem or branch code
+  - person_a: "Year" | "Month" | "Day" | "Hour"
+  - person_b: "Year" | "Month" | "Day" | "Hour"
+  - description: 1-2 sentence interpretation
+  - effect: short practical effect, e.g. "late-night decision fatigue"
+  Skip neutral pairs. Aim for 3-6 total entries.
+- compatibility.mechanisms: 3-6 classical mechanism cards. Each has:
+  - id: snake_case slug
+  - title: short serif-friendly title, e.g. "Bing Fire warmed by Ji Earth"
+  - icon: one of flame, sparkles, heart, zap, layers, mountain, trees
+  - bullets: 1-3 reasoning points tied to computed data
+  - citation_ids: classical reference ids consulted (from the `references` field)
+
+When emitting in compatibility mode, the standard `insights` array should focus on \
+the PAIR DYNAMICS (not Person A in isolation). Do not repeat single-person insights \
+if they have no bearing on the pairing.
 """
 
 GUARDRAIL_INSTRUCTIONS = """\

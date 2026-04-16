@@ -372,6 +372,40 @@ class FortuneStreamBridge:
             }
         return self.emitter.data_update(payload, path=f"/data/compatibility/{person_key}")
 
+    def emit_compat_overview(self, overview: dict[str, Any]) -> str:
+        return self.emitter.data_update(overview, path="/data/compatibility/overview")
+
+    def emit_compat_pair_interactions(self, interactions: list[dict[str, Any]]) -> str:
+        # Frontend PairInteraction uses camelCase keys personA/personB; the
+        # narrative agent emits snake_case so we normalize here.
+        normalized = [
+            {
+                "type": item.get("type"),
+                "from": item.get("from") or item.get("from_"),
+                "to": item.get("to"),
+                "personA": item.get("person_a") or item.get("personA"),
+                "personB": item.get("person_b") or item.get("personB"),
+                "description": item.get("description"),
+                "effect": item.get("effect"),
+            }
+            for item in interactions
+        ]
+        return self.emitter.data_update(normalized, path="/data/compatibility/pairInteractions")
+
+    def emit_compat_mechanisms(self, mechanisms: list[dict[str, Any]]) -> str:
+        # Frontend Mechanism shape: {id, title, bullets[], citationIds[], icon}
+        normalized = [
+            {
+                "id": item.get("id"),
+                "title": item.get("title"),
+                "icon": item.get("icon"),
+                "bullets": item.get("bullets", []),
+                "citationIds": item.get("citation_ids") or item.get("citationIds") or [],
+            }
+            for item in mechanisms
+        ]
+        return self.emitter.data_update(normalized, path="/data/compatibility/mechanisms")
+
     def emit_references(self, references: list[dict[str, Any]]) -> str:
         normalized = [
             {
