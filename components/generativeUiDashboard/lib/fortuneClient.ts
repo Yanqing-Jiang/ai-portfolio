@@ -34,6 +34,14 @@ import { authService } from '../../../services/auth';
 // backend/fortune/routes.py.
 // ---------------------------------------------------------------------------
 
+export interface PersonBirthInfo {
+    birth_iso: string;
+    timezone?: string;
+    gender?: string;
+    birth_time_unknown?: boolean;
+    name?: string;
+}
+
 export interface CreateFortuneRequest {
     birth_iso: string;
     timezone?: string;
@@ -42,6 +50,9 @@ export interface CreateFortuneRequest {
     tone?: string;
     birth_time_unknown?: boolean;
     gender?: string;
+    /** Second person for compatibility flow. Backend computes a second
+     * foundation when this is present and focus starts with "compatibility:". */
+    person_b?: PersonBirthInfo;
 }
 
 export interface CreateFortuneResponse {
@@ -298,16 +309,24 @@ export const fortuneClient = {
 
     async createCompatibility(req: {
         relationship: string;
-        personA: { birth_iso: string; timezone?: string; gender?: string };
-        personB: { birth_iso: string; timezone?: string; gender?: string };
+        personA: { birth_iso: string; timezone?: string; gender?: string; birth_time_unknown?: boolean; name?: string };
+        personB: { birth_iso: string; timezone?: string; gender?: string; birth_time_unknown?: boolean; name?: string };
         question?: string;
     }): Promise<CreateFortuneResponse> {
         return this.createFortune({
             birth_iso: req.personA.birth_iso,
             timezone: req.personA.timezone,
             gender: req.personA.gender,
+            birth_time_unknown: req.personA.birth_time_unknown,
             focus: `compatibility:${req.relationship}`,
             question: req.question,
+            person_b: {
+                birth_iso: req.personB.birth_iso,
+                timezone: req.personB.timezone,
+                gender: req.personB.gender,
+                birth_time_unknown: req.personB.birth_time_unknown,
+                name: req.personB.name,
+            },
         });
     },
 

@@ -98,6 +98,14 @@ class RuntimeStatus(str, Enum):
     error = "error"
 
 
+class PersonBirthInfo(BaseModel):
+    birth_iso: str = Field(..., min_length=1)
+    timezone: str | None = None
+    gender: str | None = None
+    birth_time_unknown: bool = False
+    name: str | None = None
+
+
 class CreateFortuneRequest(BaseModel):
     birth_iso: str = Field(..., min_length=1)
     timezone: str | None = None
@@ -106,6 +114,10 @@ class CreateFortuneRequest(BaseModel):
     tone: str | None = None
     birth_time_unknown: bool = False
     gender: str | None = None
+    # Optional second person for compatibility flow. When present AND focus
+    # starts with "compatibility:", the stream handler computes a second
+    # foundation for this person and the narrative agent sees both charts.
+    person_b: PersonBirthInfo | None = None
 
 
 class CreateFortuneResponse(BaseModel):
@@ -847,6 +859,57 @@ async def stream_fortune(fortune_id: str, request: Request):
                 yield await _emit(bridge.emit_interactions(analysis.interactions))
                 yield await _emit(bridge.emit_seasonal_strength(analysis.seasonal_strength))
                 yield await _emit(bridge.emit_element_by_source(analysis.element_by_source))
+
+                # Compatibility: compute Person B foundation and emit both
+                # persons under /data/compatibility/{personA,personB} so the
+                # compat UI (PillarsTab, OverviewTab) can render two charts.
+                is_compat = bool(ctx.focus and ctx.focus.startswith("compatibility"))
+                person_b_info = session.request.person_b
+                foundation_b: dict[str, Any] | None = None
+                if is_compat:
+                    yield await _emit(bridge.emit_compat_person(
+                        "personA",
+                        name=None,
+                        pillars=foundation["pillars"],
+                        elements=elements_data,
+                        ten_gods=analysis.ten_gods,
+                        hidden_stems=analysis.hidden_stems,
+                    ))
+                    if person_b_info is not None:
+                        yield await _emit(
+                            bridge.emit_progress("foundation", "Computing Person B's Four Pillars..."),
+                            event_name="progress",
+                        )
+                        ctx_b = FortuneRunContext(
+                            fortune_id=session.fortune_id,
+                            surface_id=session.surface_id,
+                            run_id=session.run_id,
+                            focus=ctx.focus,
+                            birth_iso=person_b_info.birth_iso,
+                            timezone=person_b_info.timezone or ctx.timezone,
+                            birth_time_unknown=person_b_info.birth_time_unknown,
+                            gender=person_b_info.gender or "unknown",
+                        )
+                        foundation_b = await run_foundation(ctx_b)
+                        analysis_b = foundation_b["analysis"]
+                        elements_b = (
+                            foundation_b["elements"].model_dump()
+                            if hasattr(foundation_b["elements"], "model_dump")
+                            else foundation_b["elements"]
+                        )
+                        yield await _emit(bridge.emit_compat_person(
+                            "personB",
+                            name=person_b_info.name,
+                            pillars=foundation_b["pillars"],
+                            elements=elements_b,
+                            ten_gods=analysis_b.ten_gods,
+                            hidden_stems=analysis_b.hidden_stems,
+                        ))
+                        # Cache on session so _build_narrative_prompt can see it.
+                        session.latest_foundation = {
+                            **foundation,
+                            "person_b": foundation_b,
+                        }
                 if analysis.luck_pillars:
                     yield await _emit(bridge.emit_luck_pillars(analysis.luck_pillars))
                 if analysis.annual_pillars:

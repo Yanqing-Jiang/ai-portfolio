@@ -449,6 +449,26 @@ def _build_narrative_prompt(ctx: FortuneRunContext, foundation: dict[str, Any]) 
         ]
         prompt_data["notable_annual_pillars"] = notable_years[:20]  # cap at 20
 
+    # Compatibility: attach Person B's chart so the agent reasons about both.
+    person_b_foundation = foundation.get("person_b")
+    if person_b_foundation:
+        analysis_b: FullBaziAnalysis = person_b_foundation["analysis"]
+        prompt_data["person_a_label"] = "Person A"
+        prompt_data["person_b"] = {
+            "pillars": person_b_foundation["pillars"],
+            "elements": person_b_foundation["elements"].model_dump()
+                if hasattr(person_b_foundation["elements"], "model_dump")
+                else person_b_foundation["elements"],
+            "hidden_stems": {
+                k: [s.model_dump() for s in v] for k, v in analysis_b.hidden_stems.items()
+            },
+            "ten_gods": [tg.model_dump() for tg in analysis_b.ten_gods],
+            "interactions": [ix.model_dump() for ix in analysis_b.interactions],
+            "seasonal_strength": analysis_b.seasonal_strength.model_dump(),
+            "enhanced_element_counts": analysis_b.enhanced_element_counts,
+            "harmony_score": analysis_b.harmony_score,
+        }
+
     return json.dumps(prompt_data, ensure_ascii=False)
 
 

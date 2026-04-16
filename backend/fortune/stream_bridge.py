@@ -328,6 +328,50 @@ class FortuneStreamBridge:
     def emit_elements(self, payload: dict[str, Any]) -> str:
         return self.emitter.data_update(payload, path="/data/elements")
 
+    def emit_compat_person(
+        self,
+        person_key: str,
+        *,
+        name: str | None,
+        pillars: dict[str, Any],
+        elements: dict[str, Any] | None,
+        ten_gods: list[Any] | None = None,
+        hidden_stems: dict[str, list[Any]] | None = None,
+    ) -> str:
+        """Emit a single person's chart into the compatibility data model.
+
+        person_key: 'personA' or 'personB'. The frontend's CompatibilityModel
+        expects dataModel.compatibility.{personA,personB} of shape PersonChart.
+        """
+        normalized_pillars: dict[str, Any] = {}
+        for key in ("year", "month", "day"):
+            if key in pillars and pillars[key]:
+                normalized_pillars[key] = self._normalize_pillar(pillars[key])
+        if "hour" in pillars and pillars["hour"]:
+            normalized_pillars["hour"] = self._normalize_pillar(pillars["hour"])
+        else:
+            normalized_pillars["hour"] = None
+
+        payload: dict[str, Any] = {
+            "pillars": normalized_pillars,
+            "dayMaster": pillars.get("day_master", ""),
+            "dayMasterElement": pillars.get("day_master_element", ""),
+        }
+        if name:
+            payload["name"] = name
+        if elements is not None:
+            payload["elements"] = elements
+        if ten_gods is not None:
+            payload["tenGods"] = [
+                tg.model_dump() if hasattr(tg, "model_dump") else tg for tg in ten_gods
+            ]
+        if hidden_stems is not None:
+            payload["hiddenStems"] = {
+                k: [s.model_dump() if hasattr(s, "model_dump") else s for s in v]
+                for k, v in hidden_stems.items()
+            }
+        return self.emitter.data_update(payload, path=f"/data/compatibility/{person_key}")
+
     def emit_references(self, references: list[dict[str, Any]]) -> str:
         normalized = [
             {
