@@ -108,7 +108,9 @@ class TraceCollector:
         """Return aggregate trace summary."""
         total_ms = round((time.monotonic() - self._start_time) * 1000, 1)
         tool_calls = sum(1 for s in self.steps if s.step_type == "tool_call")
-        llm_calls = sum(1 for s in self.steps if s.step_type in ("llm_start", "llm_complete"))
+        # Count each LLM call once. `llm_start` and `llm_complete` are bookends
+        # of the same call, so counting both would double each run.
+        llm_calls = sum(1 for s in self.steps if s.step_type == "llm_start")
         return {
             "totalDurationMs": total_ms,
             "toolCallCount": tool_calls,

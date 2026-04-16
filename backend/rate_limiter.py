@@ -89,7 +89,16 @@ class RateLimitScope(str, Enum):
     ANALYTICS_SQL = "next-gen-analytics-sql"
     CONVERSATIONAL_ANALYTICS = "conversational-analytics"
     CHAT = "chat"
+    # FORTUNE kept as a coarse catch-all for legacy callers. Each fortune
+    # workflow step also has its own scope so quotas match cost shape.
     FORTUNE = "fortune"
+    FORTUNE_CREATE = "fortune-create"
+    FORTUNE_STREAM = "fortune-stream"
+    FORTUNE_ACTION = "fortune-action"
+    FORTUNE_CORRECTION = "fortune-correction"
+    FORTUNE_REPLAY = "fortune-replay"
+    FORTUNE_ASK = "fortune-ask"
+    FORTUNE_SIMULATE = "fortune-simulate"
 
 # (guest_limit, member_limit)
 SCOPE_LIMITS: Dict[RateLimitScope, Tuple[int, int]] = {
@@ -99,6 +108,16 @@ SCOPE_LIMITS: Dict[RateLimitScope, Tuple[int, int]] = {
     RateLimitScope.CONVERSATIONAL_ANALYTICS: (GUEST_LIMIT, MEMBER_LIMIT),
     RateLimitScope.CHAT: (CHAT_GUEST_LIMIT, CHAT_MEMBER_LIMIT),
     RateLimitScope.FORTUNE: (GUEST_LIMIT, MEMBER_LIMIT),
+    # /create spawns a whole pipeline — tighter guest cap.
+    RateLimitScope.FORTUNE_CREATE: (3, MEMBER_LIMIT),
+    # /stream is keyed off the same create run; loose because each create
+    # only triggers one stream but the client may reconnect.
+    RateLimitScope.FORTUNE_STREAM: (10, 40),
+    RateLimitScope.FORTUNE_ACTION: (GUEST_LIMIT, MEMBER_LIMIT),
+    RateLimitScope.FORTUNE_CORRECTION: (GUEST_LIMIT, MEMBER_LIMIT),
+    RateLimitScope.FORTUNE_REPLAY: (GUEST_LIMIT, MEMBER_LIMIT),
+    RateLimitScope.FORTUNE_ASK: (GUEST_LIMIT, MEMBER_LIMIT),
+    RateLimitScope.FORTUNE_SIMULATE: (GUEST_LIMIT, MEMBER_LIMIT),
 }
 
 SCOPE_ALIAS_MAP: Dict[str, RateLimitScope] = {
@@ -114,6 +133,20 @@ SCOPE_ALIAS_MAP: Dict[str, RateLimitScope] = {
     RateLimitScope.CHAT.value: RateLimitScope.CHAT,
     "fortune": RateLimitScope.FORTUNE,
     RateLimitScope.FORTUNE.value: RateLimitScope.FORTUNE,
+    "fortune_create": RateLimitScope.FORTUNE_CREATE,
+    RateLimitScope.FORTUNE_CREATE.value: RateLimitScope.FORTUNE_CREATE,
+    "fortune_stream": RateLimitScope.FORTUNE_STREAM,
+    RateLimitScope.FORTUNE_STREAM.value: RateLimitScope.FORTUNE_STREAM,
+    "fortune_action": RateLimitScope.FORTUNE_ACTION,
+    RateLimitScope.FORTUNE_ACTION.value: RateLimitScope.FORTUNE_ACTION,
+    "fortune_correction": RateLimitScope.FORTUNE_CORRECTION,
+    RateLimitScope.FORTUNE_CORRECTION.value: RateLimitScope.FORTUNE_CORRECTION,
+    "fortune_replay": RateLimitScope.FORTUNE_REPLAY,
+    RateLimitScope.FORTUNE_REPLAY.value: RateLimitScope.FORTUNE_REPLAY,
+    "fortune_ask": RateLimitScope.FORTUNE_ASK,
+    RateLimitScope.FORTUNE_ASK.value: RateLimitScope.FORTUNE_ASK,
+    "fortune_simulate": RateLimitScope.FORTUNE_SIMULATE,
+    RateLimitScope.FORTUNE_SIMULATE.value: RateLimitScope.FORTUNE_SIMULATE,
 }
 
 @dataclass(slots=True)
@@ -217,6 +250,34 @@ def parse_user_id(token: str) -> Optional[ParsedToken]:
         logger.debug("JWT unexpected error: %s", e)
         return None
 
+TRUST_FORWARDED_IP = os.getenv("TRUST_FORWARDED_IP", "false").lower() == "true"
+
+
+def _guest_ip(request: Request) -> str:
+    """Resolve the guest IP that the limiter will key against.
+
+    In production the backend sits behind a Cloudflare Tunnel, so
+    ``request.client.host`` is the tunnel's local endpoint — useless for
+    per-caller rate limiting. The CF Pages BFF forwards the real caller on
+    ``cf-connecting-ip`` (and mirrors it into ``x-forwarded-for``), but we
+    must only trust those headers when we know the request came through our
+    proxy — otherwise anyone can forge them. ``TRUST_FORWARDED_IP`` is set in
+    ``.env.production`` and unset in local dev.
+    """
+    if TRUST_FORWARDED_IP:
+        cf_ip = request.headers.get("cf-connecting-ip")
+        if cf_ip:
+            return cf_ip.strip()
+        xff = request.headers.get("x-forwarded-for")
+        if xff:
+            # XFF may be a list "client, proxy1, proxy2" — leftmost is the
+            # original client.
+            first = xff.split(",", 1)[0].strip()
+            if first:
+                return first
+    return request.client.host if request.client else "unknown"
+
+
 async def who_am_i(request: Request) -> str:
     """
     Identifier function that switches between IP and user_id based on authentication.
@@ -241,9 +302,8 @@ async def who_am_i(request: Request) -> str:
             request.state.user_email = parsed.email
             return f"user:{parsed.user_id}"
 
-    # Fallback to IP for guests
-    client_ip = request.client.host if request.client else "unknown"
-    return f"ip:{client_ip}"
+    # Fallback to IP for guests — use the trusted-proxy anchor if configured.
+    return f"ip:{_guest_ip(request)}"
 
 async def auth_required_callback(request: Request, response, pexpire: int):
     """Custom callback that returns 401 instead of 429 when rate limit is exceeded"""

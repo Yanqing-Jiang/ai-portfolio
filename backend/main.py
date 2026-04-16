@@ -330,6 +330,51 @@ async def startup_event():
     except Exception as e:
         logger.warning("[STARTUP] DB pool prewarm failed (non-fatal): %s", e)
 
+    # Register the Ming Engine tracing processor for Glass Box durability.
+    try:
+        from fortune.tracing import ensure_registered as register_fortune_tracing
+        register_fortune_tracing()
+    except Exception as e:
+        logger.warning("[STARTUP] Fortune trace processor registration failed: %s", e)
+
+    # Sweep any fortune_run rows left in `queued` / `streaming` by a previous
+    # worker that crashed mid-stream. Without this, replay keeps reporting
+    # 'pending' forever and the Activity Rail shows a permanent spinner.
+    async def _sweep_stuck_fortune_runs() -> None:
+        try:
+            from fortune.store import get_repository as _get_repo
+            repo = await _get_repo()
+            if not repo.available:
+                return
+            # 20 min buys enough headroom for a legitimately slow narrative
+            # (~9s p50 + OpenAI tail) without rescuing truly dead runs too
+            # late. If workloads shift, the right next step is a heartbeat
+            # column on fortune_run that the stream loop touches each emit.
+            count = await repo.sweep_stuck_runs(older_than_minutes=20)
+            if count:
+                logger.info("[STARTUP] Swept %d stuck fortune_run rows", count)
+        except Exception as exc:
+            logger.warning("[STARTUP] stuck-run sweep failed: %s", exc)
+
+    await _sweep_stuck_fortune_runs()
+
+    # Periodic sweep so a crash mid-shift doesn't leave stragglers until next
+    # boot. 5-minute cadence keeps the overhead negligible; the sweep itself
+    # is a single indexed UPDATE.
+    async def _periodic_stuck_sweep() -> None:
+        import asyncio as _asyncio
+        while True:
+            try:
+                await _asyncio.sleep(300)
+                await _sweep_stuck_fortune_runs()
+            except _asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.warning("[STARTUP] periodic stuck-run sweep iteration failed: %s", exc)
+
+    import asyncio as _asyncio
+    app.state.fortune_stuck_sweep_task = _asyncio.create_task(_periodic_stuck_sweep())
+
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -340,7 +385,16 @@ async def shutdown_event():
     Why: Clean shutdown of DB pool and HTTP clients to release resources.
     """
     await token_store.shutdown()
-    
+
+    # Cancel the periodic stuck-run sweep before closing the DB pool.
+    sweep_task = getattr(app.state, "fortune_stuck_sweep_task", None)
+    if sweep_task is not None:
+        sweep_task.cancel()
+        try:
+            await sweep_task
+        except Exception:
+            pass
+
     # Close DB pool
     try:
         from shared_tools.sql_executor import close_pool
@@ -348,7 +402,33 @@ async def shutdown_event():
         logger.info("[SHUTDOWN] DB connection pool closed")
     except Exception as e:
         logger.warning("[SHUTDOWN] DB pool close failed: %s", e)
-    
+
+    # Drain outstanding trace span writes BEFORE closing the DB pool; the
+    # processor writes through the fortune pool, so draining after a pool
+    # close would be a no-op that loses the tail of the last trace.
+    try:
+        from fortune.tracing import flush_pending_spans
+        await flush_pending_spans()
+        logger.info("[SHUTDOWN] Fortune trace span writes flushed")
+    except Exception as e:
+        logger.warning("[SHUTDOWN] Fortune trace span flush failed: %s", e)
+
+    # Close fortune Supabase pool
+    try:
+        from fortune.store import close_fortune_pool
+        await close_fortune_pool()
+        logger.info("[SHUTDOWN] Fortune Supabase pool closed")
+    except Exception as e:
+        logger.warning("[SHUTDOWN] Fortune Supabase pool close failed: %s", e)
+
+    # Close fortune ask-session SQLAlchemy engine
+    try:
+        from fortune.session_store import close_ask_engine
+        await close_ask_engine()
+        logger.info("[SHUTDOWN] Fortune ask-session engine closed")
+    except Exception as e:
+        logger.warning("[SHUTDOWN] Fortune ask-session engine close failed: %s", e)
+
     # Close shared httpx client for news service
     try:
         from shared_tools.news_service import close_http_client

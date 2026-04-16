@@ -326,28 +326,6 @@ const SidebarV2: React.FC<SidebarV2Props> = ({
                                 </span>
                             </div>
                         </motion.button>
-
-                        <Link
-                            to="/consult"
-                            className="flex items-center gap-4 w-full group py-4 px-4 bg-sky-500/5 border border-sky-500/10 hover:bg-sky-500/10 hover:border-sky-500/30 rounded-2xl transition-all duration-500"
-                        >
-                            <div className="w-10 h-10 rounded-full border border-sky-500/20 flex items-center justify-center text-sky-500 group-hover:scale-110 transition-transform duration-500">
-                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                                    <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
-                                    <line x1="16" y1="2" x2="16" y2="6" />
-                                    <line x1="8" y1="2" x2="8" y2="6" />
-                                    <line x1="3" y1="10" x2="21" y2="10" />
-                                </svg>
-                            </div>
-                            <div className="flex flex-col text-left">
-                                <span className="text-[10px] font-black text-sky-500/70 uppercase tracking-[0.2em] leading-none mb-1">
-                                    Book a session
-                                </span>
-                                <span className="text-[11px] font-bold text-white/80 group-hover:text-white transition-colors">
-                                    30 min with Yanqing
-                                </span>
-                            </div>
-                        </Link>
                     </div>
                 </div>
 

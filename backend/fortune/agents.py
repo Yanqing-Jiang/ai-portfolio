@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
-from agents import Agent, Runner
+from agents import Agent, Runner, RunConfig
 from pydantic import BaseModel, Field
 
 try:
@@ -41,6 +41,7 @@ except ImportError:
 class FortuneRunContext:
     fortune_id: str
     surface_id: str
+    run_id: str | None = None
     question: str | None = None
     focus: str | None = None
     tone: str | None = None
@@ -49,6 +50,29 @@ class FortuneRunContext:
     birth_time_unknown: bool = False
     gender: str = "unknown"
     metadata: dict[str, Any] = field(default_factory=dict)
+
+
+def _run_config(ctx: "FortuneRunContext") -> RunConfig:
+    """Build RunConfig so TracingProcessor can route spans to the right row.
+
+    OpenAI's hosted tracing exporter requires ``trace_id`` to start with
+    ``trace_``; we prepend it here and strip it back to run_id in the
+    GlassBoxTraceProcessor resolver. ``group_id`` must start with ``group_``
+    for the same reason.
+    """
+    source_id = ctx.run_id or ctx.fortune_id
+    return RunConfig(
+        trace_id=f"trace_{source_id.replace('-', '')}" if source_id else None,
+        group_id=f"group_{ctx.fortune_id.replace('-', '')}" if ctx.fortune_id else None,
+        trace_metadata={
+            # OpenAI hosted tracing requires all metadata values to be strings.
+            "run_id": ctx.run_id or "",
+            "fortune_id": ctx.fortune_id or "",
+            "focus": ctx.focus or "",
+            "tone": ctx.tone or "",
+            "birth_time_unknown": "true" if ctx.birth_time_unknown else "false",
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -439,6 +463,7 @@ async def run_narrative(
         NARRATIVE_AGENT,
         input=prompt,
         context=ctx,
+        run_config=_run_config(ctx),
     )
     if isinstance(result.final_output, EnrichedNarrativeOutput):
         return result.final_output
@@ -456,6 +481,7 @@ async def run_narrative_streamed(
         NARRATIVE_AGENT,
         input=prompt,
         context=ctx,
+        run_config=_run_config(ctx),
     )
 
 
@@ -478,6 +504,7 @@ async def run_guardrail(
         GUARDRAIL_AGENT,
         input=prompt,
         context=ctx,
+        run_config=_run_config(ctx),
     )
     if isinstance(result.final_output, GuardrailOutput):
         return result.final_output

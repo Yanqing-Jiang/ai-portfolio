@@ -19,6 +19,11 @@ import { ClarificationOverlay } from './ClarificationOverlay';
 import { InspectorModeProvider } from './InspectorModeContext';
 import { BirthdayScrollPicker } from './BirthdayScrollPicker';
 import { MingResultsTabs } from './MingResultsTabs';
+import { fortuneClient, FortuneApiError } from './lib/fortuneClient';
+import { useFortuneStore } from './stores/fortuneStore';
+import { ActivityRail, type ActivityRailStep, type ActivityRailSummary } from './ActivityRail';
+import { GlassBoxDrawer } from './GlassBoxDrawer';
+import { BirthTimeSimulator } from './BirthTimeSimulator';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -73,40 +78,39 @@ function InputPhase({ onSubmit }: InputPhaseProps) {
 
     const canSubmit = birthDate && (selectedTime || birthTimeUnknown) && focus !== null;
 
+    const setFortune = useFortuneStore((s) => s.setFortune);
+
     const handleSubmit = async () => {
         if (!canSubmit || isSubmitting) return;
         setIsSubmitting(true);
         setError(null);
 
         try {
-            const backendUrl = configService.getBackendUrl();
             const birthIso = birthTimeUnknown
                 ? `${birthDate}T12:00:00`
                 : `${birthDate}T${selectedTime}:00`;
 
-            const authHeaders = await authService.getAuthHeaders();
-            const res = await fetch(`${backendUrl}/api/fortune/create`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...authHeaders },
-                body: JSON.stringify({
-                    birth_iso: birthIso,
-                    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-                    focus: focus || undefined,
-                    question: question || undefined,
-                    birth_time_unknown: birthTimeUnknown,
-                    gender: gender || undefined,
-                }),
+            const data = await fortuneClient.createFortune({
+                birth_iso: birthIso,
+                timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                focus: focus || undefined,
+                question: question || undefined,
+                birth_time_unknown: birthTimeUnknown,
+                gender: gender || undefined,
             });
 
-            if (!res.ok) {
-                const errData = await res.json().catch(() => ({}));
-                throw new Error(errData.detail || `Server error ${res.status}`);
-            }
-
-            const data = await res.json();
+            setFortune(data.fortune_id, data.run_id, {
+                persistenceDegraded: data.persistenceDegraded,
+            });
             onSubmit(data.fortune_id);
         } catch (err) {
-            setError(err instanceof Error ? err.message : 'Failed to create reading');
+            const msg =
+                err instanceof FortuneApiError
+                    ? err.message
+                    : err instanceof Error
+                    ? err.message
+                    : 'Failed to create reading';
+            setError(msg);
             setIsSubmitting(false);
         }
     };
@@ -348,30 +352,24 @@ function StreamingPhase({ fortuneId, inspectorMode = false }: StreamingPhaseProp
         apiBaseUrl: `${backendUrl}/api/fortune`,
     });
 
+    const setRunId = useFortuneStore((s) => s.setRunId);
+
     const handleAction = useCallback(
         async (actionName: string, context: Record<string, unknown>) => {
             if (actionName === 'userAction' && context.actionId) {
                 try {
-                    const authHeaders = await authService.getAuthHeaders();
-                    await fetch(
-                        `${backendUrl}/api/fortune/${fortuneId}/action`,
-                        {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json', ...authHeaders },
-                            body: JSON.stringify({
-                                action_id: context.actionId,
-                                payload: {},
-                            }),
-                        }
+                    const res = await fortuneClient.submitAction(
+                        fortuneId,
+                        context.actionId as string,
                     );
-                    // Reconnect stream for follow-up
+                    setRunId(res.run_id);
                     streamActions.reconnect();
                 } catch (err) {
                     console.error('[MingEngine] Action failed:', err);
                 }
             }
         },
-        [backendUrl, fortuneId, streamActions]
+        [fortuneId, streamActions, setRunId]
     );
 
     const handleClarification = useCallback(
@@ -383,29 +381,18 @@ function StreamingPhase({ fortuneId, inspectorMode = false }: StreamingPhaseProp
             streamActions.clearClarification();
             if (skipped) return;
 
-            // The focus value is in responses.focus
             const focusValue = responses.focus;
             if (focusValue) {
                 try {
-                    const authHeaders = await authService.getAuthHeaders();
-                    await fetch(
-                        `${backendUrl}/api/fortune/${fortuneId}/action`,
-                        {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json', ...authHeaders },
-                            body: JSON.stringify({
-                                action_id: focusValue as string,
-                                payload: {},
-                            }),
-                        }
-                    );
+                    const res = await fortuneClient.submitAction(fortuneId, focusValue as string);
+                    setRunId(res.run_id);
                     streamActions.reconnect();
                 } catch (err) {
                     console.error('[MingEngine] Clarification action failed:', err);
                 }
             }
         },
-        [backendUrl, fortuneId, streamActions]
+        [fortuneId, streamActions, setRunId]
     );
 
     // Get the first surface and data model
@@ -479,6 +466,39 @@ function StreamingPhase({ fortuneId, inspectorMode = false }: StreamingPhaseProp
     // Show loading only when we've never had content yet
     const showLoading = !hasEverHadSurface.current && (streamState.isLoading || !tokenResolved);
 
+    // ---- Glass Box / Activity Rail ---------------------------------------
+    // Trace data rides on the A2UI data model at /data/trace/steps and
+    // /data/trace/summary — we just reshape it for the rail/drawer.
+    const traceFromModel = (dataModel as any)?.trace as
+        | { steps?: { items?: any[] } | any[]; summary?: any }
+        | undefined;
+    const traceSteps: ActivityRailStep[] = useMemo(() => {
+        const raw = traceFromModel?.steps;
+        // Stream bridge emits either an array (batch) or a keyed map of { stepId: {step} }.
+        if (!raw) return [];
+        if (Array.isArray(raw)) return raw as ActivityRailStep[];
+        if (typeof raw === 'object') {
+            const items = (raw as { items?: any[] }).items;
+            if (Array.isArray(items)) return items as ActivityRailStep[];
+            // Fall back to a map of stepId → { step } entries.
+            return Object.values(raw)
+                .map((v: any) => v?.step ?? v)
+                .filter(Boolean) as ActivityRailStep[];
+        }
+        return [];
+    }, [traceFromModel?.steps]);
+    const traceSummary: ActivityRailSummary | null = traceFromModel?.summary ?? null;
+    const [glassOpen, setGlassOpen] = useState(false);
+    // Close when a fresh run kicks off so the user re-opens intentionally for the new data.
+    useEffect(() => {
+        if (streamState.isLoading) setGlassOpen(false);
+    }, [streamState.isLoading]);
+
+    const storeRunId = useFortuneStore((s) => s.runId);
+    const glassContext = storeRunId ? `Run ${storeRunId.slice(0, 8)}` : undefined;
+
+    const [simulatorOpen, setSimulatorOpen] = useState(false);
+
     return (
         <div ref={contentRef} className="mx-auto w-full max-w-6xl px-4 py-6">
             {/* Tab-based results view — routes widgets to tabs */}
@@ -524,6 +544,40 @@ function StreamingPhase({ fortuneId, inspectorMode = false }: StreamingPhaseProp
 
             {/* Auto-scroll sentinel */}
             <div ref={scrollSentinelRef} className="h-1" />
+
+            {/* Glass Box bottom drawer — agent trace inspection */}
+            <GlassBoxDrawer
+                open={glassOpen}
+                onClose={() => setGlassOpen(false)}
+                steps={traceSteps}
+                summary={traceSummary}
+                contextLabel={glassContext}
+            />
+            <ActivityRail
+                steps={traceSteps}
+                summary={traceSummary}
+                isStreaming={!streamState.isDone}
+                isOpen={glassOpen}
+                onToggle={() => setGlassOpen((v) => !v)}
+            />
+
+            {/* Birth-time uncertainty simulator — opens a modal that runs
+                the deterministic foundation across all 12 branches. */}
+            <button
+                type="button"
+                onClick={() => setSimulatorOpen(true)}
+                className="fixed bottom-16 left-4 z-40 flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-slate-900/80 px-3 py-1.5 text-[11px] uppercase tracking-wide text-amber-300 shadow-lg backdrop-blur hover:bg-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/40"
+                aria-haspopup="dialog"
+                aria-expanded={simulatorOpen}
+            >
+                <span aria-hidden="true">⧖</span>
+                <span>Time Uncertainty</span>
+            </button>
+            <BirthTimeSimulator
+                open={simulatorOpen}
+                fortuneId={fortuneId}
+                onClose={() => setSimulatorOpen(false)}
+            />
 
             {/* Clarification overlay */}
             {streamState.pendingClarification && (

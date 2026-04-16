@@ -8,7 +8,7 @@ beautifulsoup4
 pyyaml
 pydantic==2.12.4
 openai>=1.107.3
-openai-agents>=0.5.0
+openai-agents==0.14.1
 cnlunar>=0.2.4
 langchain==0.3.27
 langchain-core==0.3.77
@@ -22,6 +22,7 @@ python-multipart
 fastapi-limiter
 redis
 asyncpg
+sqlalchemy[asyncio]>=2.0.30
 sqlglot
 python-jose[cryptography]
 pytest-asyncio>=0.23.6

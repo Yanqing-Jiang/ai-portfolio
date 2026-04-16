@@ -3,7 +3,7 @@ import type { ProjectYear } from './types';
 export const PROJECT_DATA: ProjectYear[] = [
   {
     year: 2026,
-    subtitle: '(Generative UI & Agent UX)',
+    subtitle: '(Generative UI & Agent Harness)',
     projects: [
       {
         id: 'agent-to-ui',
@@ -81,8 +81,8 @@ Protocol: A2UI v0.8 with custom financial component catalog extension
 • Retrieves relevant passages from classical BaZi texts (滴天髓, 渊海子平)
 • Streams personalized narrative sections with AI-generated insights
 • Follow-up actions for career, relationship, and yearly forecasts`,
-        cardDescription: 'BaZi fortune reading with multi-agent orchestration and real-time streaming UI.',
-        technologies: ['OpenAI Agents SDK', 'BaZi', 'A2UI Protocol', 'SSE Streaming', 'cnlunar'],
+        cardDescription: 'An agent harness wrapping BaZi (八字) — the 1,000-year Chinese fortune-telling craft, with 10 classical fortune-telling texts loaded as context.',
+        technologies: ['Harness Engineering', 'Context Caching', 'OpenAI Agents SDK', 'SSE Streaming', 'cnlunar'],
         systemInstruction: '',
         defaultPrompts: [],
         coverUrl: '',
