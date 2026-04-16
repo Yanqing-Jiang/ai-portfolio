@@ -101,6 +101,12 @@ export async function forwardPost(
   if (ua) upstreamHeaders["user-agent"] = ua;
   const accept = request.headers.get("accept");
   if (accept) upstreamHeaders["accept"] = accept;
+  // Forward the Supabase JWT so the backend's rate limiter can resolve the
+  // signed-in user (and superuser bypass). Without this the backend keys
+  // every POST by Cloudflare egress IP and denies with 401 "Sign-in required
+  // after free quota" after 3 guest requests.
+  const auth = request.headers.get("authorization");
+  if (auth) upstreamHeaders["authorization"] = auth;
 
   let upstreamResp: Response;
   try {
