@@ -50,6 +50,12 @@ interface DatePick {
 
 interface FortuneAgentOccasionResultProps {
   onBack?: () => void;
+  inputPayload?: {
+    occasion: string;
+    profile: { birthDate: string; birthTime: string | null; gender: string };
+    windowStart: string;
+    windowEnd: string;
+  } | null;
 }
 
 // Mock Data matching the Backend Data Contract
@@ -183,7 +189,12 @@ const TABS: FortuneTab[] = [
   { id: 'Ask', label: 'Ask' },
 ];
 
-export const FortuneAgentOccasionResult: React.FC<FortuneAgentOccasionResultProps> = ({ onBack }) => {
+export const FortuneAgentOccasionResult: React.FC<FortuneAgentOccasionResultProps> = ({ onBack, inputPayload }) => {
+  const _occasionLabel = inputPayload?.occasion
+    ? inputPayload.occasion.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+    : 'Business Signing';
+  const _birthLabel = inputPayload?.profile?.birthDate || '1991-09-05';
+  void _occasionLabel; void _birthLabel;
   const [activeTab, setActiveTab] = useState<string>('Top Picks');
   const [selectedDay, setSelectedDay] = useState<number | null>(12);
   const [activeWhyDate, setActiveWhyDate] = useState<number>(12);

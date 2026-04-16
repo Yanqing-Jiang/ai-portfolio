@@ -34,6 +34,11 @@ import {
 
 interface FortuneAgentCompatibilityResultProps {
     onBack?: () => void;
+    inputPayload?: {
+        relationship: string;
+        personA: { name: string; birthDate: string; birthTime: string | null; gender: string };
+        personB: { name: string; birthDate: string; birthTime: string | null; gender: string };
+    } | null;
 }
 
 const THEME = FORTUNE_THEMES.compatibility;
@@ -302,7 +307,14 @@ const MechanismCard: React.FC<{
 
 export const FortuneAgentCompatibilityResult: React.FC<FortuneAgentCompatibilityResultProps> = ({
     onBack,
+    inputPayload,
 }) => {
+    const partnerA = inputPayload
+        ? { ...PARTNER_A, name: inputPayload.personA.name || 'You', birth: `${inputPayload.personA.birthDate} ${inputPayload.personA.birthTime || ''}`.trim() }
+        : PARTNER_A;
+    const partnerB = inputPayload
+        ? { ...PARTNER_B, name: inputPayload.personB.name || 'Partner', birth: `${inputPayload.personB.birthDate} ${inputPayload.personB.birthTime || ''}`.trim() }
+        : PARTNER_B;
     const [activeTab, setActiveTab] = useState<string>('overview');
     const [openMechanism, setOpenMechanism] = useState<number | null>(0);
     const [expandedPillar, setExpandedPillar] = useState<number | null>(null);
@@ -423,14 +435,14 @@ export const FortuneAgentCompatibilityResult: React.FC<FortuneAgentCompatibility
                                         >
                                             <motion.div
                                                 initial={{ width: 0 }}
-                                                animate={{ width: `${PARTNER_A.elements[el]}%` }}
+                                                animate={{ width: `${partnerA.elements[el]}%` }}
                                                 transition={{ duration: 0.9 }}
                                                 className="h-full"
                                                 style={{ background: `${THEME.accent}55` }}
                                             />
                                             <motion.div
                                                 initial={{ width: 0 }}
-                                                animate={{ width: `${PARTNER_B.elements[el]}%` }}
+                                                animate={{ width: `${partnerB.elements[el]}%` }}
                                                 transition={{ duration: 0.9, delay: 0.1 }}
                                                 className="h-full"
                                                 style={{ background: 'rgba(248,250,252,0.12)' }}
@@ -441,11 +453,11 @@ export const FortuneAgentCompatibilityResult: React.FC<FortuneAgentCompatibility
                                                 </span>
                                                 <div className="flex gap-1.5 font-mono text-[9px]">
                                                     <span style={{ color: THEME.accent }}>
-                                                        {PARTNER_A.elements[el]}%
+                                                        {partnerA.elements[el]}%
                                                     </span>
                                                     <span className="text-white/25">/</span>
                                                     <span className="text-white/45">
-                                                        {PARTNER_B.elements[el]}%
+                                                        {partnerB.elements[el]}%
                                                     </span>
                                                 </div>
                                             </div>
@@ -498,7 +510,7 @@ export const FortuneAgentCompatibilityResult: React.FC<FortuneAgentCompatibility
                             </div>
                         </div>
 
-                        {PARTNER_A.pillars.map((p, i) => {
+                        {partnerA.pillars.map((p, i) => {
                             const clash = i === 3; // Hour-pillar clash
                             return (
                                 <div key={i} className="space-y-2">
@@ -550,19 +562,19 @@ export const FortuneAgentCompatibilityResult: React.FC<FortuneAgentCompatibility
                                             }}
                                         >
                                             <span className="mb-1 text-[9px] uppercase tracking-widest text-white/35">
-                                                {PARTNER_B.pillars[i].label}
+                                                {partnerB.pillars[i].label}
                                             </span>
                                             <span
                                                 className="text-lg text-[#f8fafc]"
                                                 style={{ fontFamily: FORTUNE_CHINESE_FONT }}
                                             >
-                                                {PARTNER_B.pillars[i].stem}
+                                                {partnerB.pillars[i].stem}
                                             </span>
                                             <span
                                                 className="text-lg text-[#f8fafc]"
                                                 style={{ fontFamily: FORTUNE_CHINESE_FONT }}
                                             >
-                                                {PARTNER_B.pillars[i].branch}
+                                                {partnerB.pillars[i].branch}
                                             </span>
                                         </div>
                                     </div>

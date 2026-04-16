@@ -34,6 +34,11 @@ import {
 
 interface FortuneAgentCycleResultProps {
     onBack?: () => void;
+    inputPayload?: {
+        horizon: string;
+        focus: string;
+        profile: { birthDate: string; birthTime: string | null; timeUnknown: boolean; gender: string };
+    } | null;
 }
 
 const THEME = FORTUNE_THEMES['luck-draw']; // orange / glyph 運
@@ -201,7 +206,11 @@ const ElementRingSmall: React.FC<{ position: number }> = ({ position }) => (
 
 export const FortuneAgentCycleResult: React.FC<FortuneAgentCycleResultProps> = ({
     onBack,
+    inputPayload,
 }) => {
+    const _horizon = inputPayload?.horizon || 'this-year';
+    const _focus = inputPayload?.focus || 'career';
+    void _horizon; void _focus;
     const [activeTab, setActiveTab] = useState<string>('Now');
     const [expandedYear, setExpandedYear] = useState<number | null>(2026);
     const [askInput, setAskInput] = useState('');

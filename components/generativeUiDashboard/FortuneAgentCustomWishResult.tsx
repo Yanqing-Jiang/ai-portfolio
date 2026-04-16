@@ -220,7 +220,7 @@ const TABS: FortuneTab[] = [
 
 export const FortuneAgentCustomWishResult: React.FC<FortuneAgentCustomWishResultProps> = ({
     onBack,
-    initialQuestion = 'Should I take the new job in Shanghai?',
+    initialQuestion = 'What does my chart say about the road ahead?',
 }) => {
     const [activeTab, setActiveTab] = useState<string>('Verdict');
     const [expandedAnchor, setExpandedAnchor] = useState<string | null>('p1');

@@ -8,6 +8,7 @@ import {
   useNavigate,
   useLocation,
   useParams,
+  useSearchParams,
 } from 'react-router-dom';
 import Sidebar from './components/SidebarV2';
 import ProjectView from './components/ProjectView';
@@ -62,7 +63,7 @@ const FortuneAgentCompatibilityRoute: React.FC = () => {
   return (
     <FortuneAgentCompatibility
       onBack={() => navigate('/project/fortune-agent/explore')}
-      onComplete={() => navigate('/project/fortune-agent/compatibility/result')}
+      onComplete={(payload) => navigate('/project/fortune-agent/compatibility/result', { state: payload })}
     />
   );
 };
@@ -72,7 +73,7 @@ const FortuneAgentLuckyDayRoute: React.FC = () => {
   return (
     <FortuneAgentLuckyDay
       onBack={() => navigate('/project/fortune-agent/explore')}
-      onComplete={() => navigate('/project/fortune-agent/lucky-day/result')}
+      onComplete={(payload) => navigate('/project/fortune-agent/lucky-day/result', { state: payload })}
     />
   );
 };
@@ -82,7 +83,7 @@ const FortuneAgentLuckDrawRoute: React.FC = () => {
   return (
     <FortuneAgentLuckDraw
       onBack={() => navigate('/project/fortune-agent/explore')}
-      onComplete={() => navigate('/project/fortune-agent/luck-draw/result')}
+      onComplete={(payload) => navigate('/project/fortune-agent/luck-draw/result', { state: payload })}
     />
   );
 };
@@ -92,30 +93,36 @@ const FortuneAgentCustomWishRoute: React.FC = () => {
   return (
     <FortuneAgentCustomWish
       onBack={() => navigate('/project/fortune-agent/explore')}
-      onComplete={() => navigate('/project/fortune-agent/custom-wish/result')}
+      onComplete={(payload) => navigate(`/project/fortune-agent/custom-wish/result?q=${encodeURIComponent(payload.question)}`)}
     />
   );
 };
 
 // Result demo pages (mock-data, no backend). Wired from the bespoke input pages' CTA.
+// Each input page fires onComplete(payload) which navigate() carries via route state.
 const FortuneAgentCompatibilityResultRoute: React.FC = () => {
   const navigate = useNavigate();
-  return <FortuneAgentCompatibilityResult onBack={() => navigate('/project/fortune-agent/compatibility')} />;
+  const { state } = useLocation();
+  return <FortuneAgentCompatibilityResult onBack={() => navigate('/project/fortune-agent/compatibility')} inputPayload={state} />;
 };
 
 const FortuneAgentOccasionResultRoute: React.FC = () => {
   const navigate = useNavigate();
-  return <FortuneAgentOccasionResult onBack={() => navigate('/project/fortune-agent/lucky-day')} />;
+  const { state } = useLocation();
+  return <FortuneAgentOccasionResult onBack={() => navigate('/project/fortune-agent/lucky-day')} inputPayload={state} />;
 };
 
 const FortuneAgentCycleResultRoute: React.FC = () => {
   const navigate = useNavigate();
-  return <FortuneAgentCycleResult onBack={() => navigate('/project/fortune-agent/luck-draw')} />;
+  const { state } = useLocation();
+  return <FortuneAgentCycleResult onBack={() => navigate('/project/fortune-agent/luck-draw')} inputPayload={state} />;
 };
 
 const FortuneAgentCustomWishResultRoute: React.FC = () => {
   const navigate = useNavigate();
-  return <FortuneAgentCustomWishResult onBack={() => navigate('/project/fortune-agent/custom-wish')} />;
+  const [searchParams] = useSearchParams();
+  const question = searchParams.get('q') || undefined;
+  return <FortuneAgentCustomWishResult onBack={() => navigate('/project/fortune-agent/custom-wish')} initialQuestion={question} />;
 };
 
 // Function: ProjectRoute - mounted by the /project/:id route; looks up the requested project and renders ProjectView or redirects home if missing; exists to keep route elements thin.
