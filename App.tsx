@@ -340,7 +340,13 @@ const Layout: React.FC = () => {
             <Route path="/project/fortune-agent/luck-draw" element={<FortuneAgentLuckDrawRoute />} />
             <Route path="/project/fortune-agent/custom-wish" element={<FortuneAgentCustomWishRoute />} />
 
-            {/* Result demo pages (hard-coded mock data — previews for backend design) */}
+            {/* Result pages — /:fortuneId routes for live backend + replay */}
+            <Route path="/project/fortune-agent/custom-wish/:fortuneId" element={<FortuneAgentCustomWishResultRoute />} />
+            <Route path="/project/fortune-agent/luck-draw/:fortuneId" element={<FortuneAgentCycleResultRoute />} />
+            <Route path="/project/fortune-agent/compatibility/:fortuneId" element={<FortuneAgentCompatibilityResultRoute />} />
+            <Route path="/project/fortune-agent/lucky-day/:fortuneId" element={<FortuneAgentOccasionResultRoute />} />
+
+            {/* Legacy result routes (mock-data fallback during migration) */}
             <Route path="/project/fortune-agent/compatibility/result" element={<FortuneAgentCompatibilityResultRoute />} />
             <Route path="/project/fortune-agent/lucky-day/result" element={<FortuneAgentOccasionResultRoute />} />
             <Route path="/project/fortune-agent/luck-draw/result" element={<FortuneAgentCycleResultRoute />} />

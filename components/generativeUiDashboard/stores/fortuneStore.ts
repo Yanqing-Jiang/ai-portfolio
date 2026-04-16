@@ -21,6 +21,12 @@
 
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
+import type {
+    FortuneFunctionId,
+    FortuneDataModel,
+    FortuneReplayResponse,
+    FortuneStatus,
+} from '../lib/fortuneTypes';
 
 export interface AskTurn {
     id: string;
@@ -42,6 +48,12 @@ interface FortuneStateShape {
     /** True when backend reported X-Fortune-Persistence: degraded. */
     persistenceDegraded: boolean;
 
+    // Fortune data (new — streaming + replay)
+    functionId: FortuneFunctionId | null;
+    dataModel: FortuneDataModel | null;
+    lastSeq: number;
+    status: FortuneStatus;
+
     // Ask tab
     askInput: string;
     askLoading: boolean;
@@ -50,8 +62,13 @@ interface FortuneStateShape {
     askMemoryEverDegraded: boolean;
 
     // Actions
-    setFortune: (fortuneId: string, runId: string, opts?: { persistenceDegraded?: boolean }) => void;
+    setFortune: (fortuneId: string, runId: string, opts?: { persistenceDegraded?: boolean; functionId?: FortuneFunctionId }) => void;
     setRunId: (runId: string) => void;
+    setStatus: (status: FortuneStatus) => void;
+    /** Apply a streamed data update at a JSON-pointer path within dataModel. */
+    applyPatch: (path: string, value: unknown) => void;
+    /** Hydrate the full data model from a replay snapshot. */
+    hydrateFromReplay: (replay: FortuneReplayResponse) => void;
     setAskInput: (v: string) => void;
     beginAsk: (userTurn: AskTurn) => void;
     finishAsk: (agentTurn: AskTurn) => void;
@@ -60,13 +77,16 @@ interface FortuneStateShape {
     reset: () => void;
 }
 
-const INITIAL: Omit<
-    FortuneStateShape,
-    'setFortune' | 'setRunId' | 'setAskInput' | 'beginAsk' | 'finishAsk' | 'failAsk' | 'clearAskHistory' | 'reset'
-> = {
+type ActionKeys = 'setFortune' | 'setRunId' | 'setStatus' | 'applyPatch' | 'hydrateFromReplay' | 'setAskInput' | 'beginAsk' | 'finishAsk' | 'failAsk' | 'clearAskHistory' | 'reset';
+
+const INITIAL: Omit<FortuneStateShape, ActionKeys> = {
     fortuneId: null,
     runId: null,
     persistenceDegraded: false,
+    functionId: null,
+    dataModel: null,
+    lastSeq: 0,
+    status: 'idle',
     askInput: '',
     askLoading: false,
     askHistory: [],
@@ -79,21 +99,71 @@ export const useFortuneStore = create<FortuneStateShape>()(
 
         setFortune: (fortuneId, runId, opts) =>
             set((s) => {
-                // New fortune wipes prior Ask thread — the store-bound session is
-                // keyed by fortune_id on the backend, so cross-fortune bleed would
-                // look wrong even if the /ask endpoint would technically handle it.
                 if (s.fortuneId && s.fortuneId !== fortuneId) {
                     s.askHistory = [];
                     s.askMemoryEverDegraded = false;
+                    s.dataModel = null;
+                    s.lastSeq = 0;
                 }
                 s.fortuneId = fortuneId;
                 s.runId = runId;
                 s.persistenceDegraded = !!opts?.persistenceDegraded;
+                if (opts?.functionId) s.functionId = opts.functionId;
             }),
 
         setRunId: (runId) =>
             set((s) => {
                 s.runId = runId;
+            }),
+
+        setStatus: (status) =>
+            set((s) => {
+                s.status = status;
+            }),
+
+        applyPatch: (path, value) =>
+            set((s) => {
+                if (!s.dataModel) s.dataModel = {};
+                // Strip /data/ prefix
+                let clean = path;
+                if (clean.startsWith('/data/')) clean = clean.slice(6);
+                else if (clean.startsWith('/data')) clean = clean.slice(5);
+                if (clean.startsWith('/')) clean = clean.slice(1);
+
+                if (!clean) {
+                    // Root merge
+                    Object.assign(s.dataModel, value);
+                    return;
+                }
+
+                const segments = clean.split('/');
+                let current: Record<string, unknown> = s.dataModel as Record<string, unknown>;
+                for (let i = 0; i < segments.length - 1; i++) {
+                    const seg = segments[i];
+                    if (!current[seg] || typeof current[seg] !== 'object') {
+                        current[seg] = {};
+                    }
+                    current = current[seg] as Record<string, unknown>;
+                }
+                const last = segments[segments.length - 1];
+                const existing = current[last];
+                if (existing && typeof existing === 'object' && typeof value === 'object' && value && !Array.isArray(existing)) {
+                    Object.assign(existing as Record<string, unknown>, value as Record<string, unknown>);
+                } else {
+                    current[last] = value;
+                }
+            }),
+
+        hydrateFromReplay: (replay) =>
+            set((s) => {
+                s.fortuneId = replay.fortune_id;
+                s.runId = replay.run_id;
+                s.functionId = replay.function_id;
+                s.lastSeq = replay.last_seq;
+                s.status = replay.status === 'complete' ? 'complete' : replay.status === 'error' ? 'error' : 'loading';
+                s.persistenceDegraded = !!replay.metadata?.persistence_degraded;
+                s.dataModel = replay.data_model;
+                s.askHistory = replay.ask_history || [];
             }),
 
         setAskInput: (v) =>

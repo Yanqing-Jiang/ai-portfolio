@@ -187,6 +187,28 @@ async function jsonFetch<T>(
 // Public API
 // ---------------------------------------------------------------------------
 
+// Fortune replay response — matches backend GET /api/fortune/{id}
+interface BackendReplaySnapshot {
+    fortune_id: string;
+    snapshot_version?: number;
+    status: string;
+    metadata: {
+        created_at: string;
+        persistence_degraded?: boolean;
+        function_id?: string;
+    };
+    data: {
+        overview?: Record<string, unknown>;
+        pillars?: Record<string, unknown>;
+        mechanics?: Record<string, unknown>;
+        narrative?: Record<string, unknown>;
+        trace?: Record<string, unknown>;
+        references?: Record<string, unknown>;
+        retrodictions?: Record<string, unknown>;
+        corrections?: Record<string, unknown>;
+    };
+}
+
 export const fortuneClient = {
     async createFortune(req: CreateFortuneRequest): Promise<CreateFortuneResponse> {
         const { data, headers } = await jsonFetch<Omit<CreateFortuneResponse, 'persistenceDegraded'>>(
@@ -240,6 +262,95 @@ export const fortuneClient = {
             { method: 'POST', body: JSON.stringify({ year, user_note: userNote }) },
         );
         return data;
+    },
+
+    // Typed create methods for each fortune function
+    async createWish(req: {
+        profile: { birth_iso: string; timezone?: string; birth_time_unknown?: boolean; gender?: string };
+        question: string;
+        focus?: string;
+        tone?: string;
+    }): Promise<CreateFortuneResponse> {
+        return this.createFortune({
+            birth_iso: req.profile.birth_iso,
+            timezone: req.profile.timezone,
+            birth_time_unknown: req.profile.birth_time_unknown,
+            gender: req.profile.gender,
+            question: req.question,
+            focus: req.focus || 'custom_wish',
+            tone: req.tone,
+        });
+    },
+
+    async createLuckCycle(req: {
+        profile: { birth_iso: string; timezone?: string; birth_time_unknown?: boolean; gender?: string };
+        horizon: string;
+        focus: string;
+    }): Promise<CreateFortuneResponse> {
+        return this.createFortune({
+            birth_iso: req.profile.birth_iso,
+            timezone: req.profile.timezone,
+            birth_time_unknown: req.profile.birth_time_unknown,
+            gender: req.profile.gender,
+            focus: `luck_cycle:${req.focus}:${req.horizon}`,
+        });
+    },
+
+    async createCompatibility(req: {
+        relationship: string;
+        personA: { birth_iso: string; timezone?: string; gender?: string };
+        personB: { birth_iso: string; timezone?: string; gender?: string };
+        question?: string;
+    }): Promise<CreateFortuneResponse> {
+        return this.createFortune({
+            birth_iso: req.personA.birth_iso,
+            timezone: req.personA.timezone,
+            gender: req.personA.gender,
+            focus: `compatibility:${req.relationship}`,
+            question: req.question,
+        });
+    },
+
+    async createLuckyDay(req: {
+        profile: { birth_iso: string; timezone?: string; gender?: string };
+        occasion: string;
+        windowStartISO: string;
+        windowEndISO: string;
+    }): Promise<CreateFortuneResponse> {
+        return this.createFortune({
+            birth_iso: req.profile.birth_iso,
+            timezone: req.profile.timezone,
+            gender: req.profile.gender,
+            focus: `occasion:${req.occasion}:${req.windowStartISO}:${req.windowEndISO}`,
+        });
+    },
+
+    /**
+     * Fetch a completed fortune snapshot for replay.
+     * 200 → mapped response, 202 → null (still pending), 404/503 → throw
+     */
+    async getFortune(fortuneId: string, opts?: { signal?: AbortSignal }): Promise<BackendReplaySnapshot | null> {
+        const base = _apiBase();
+        const authHeaders = await authService.getAuthHeaders();
+        const res = await fetch(`${base}/api/fortune/${fortuneId}`, {
+            headers: { ...authHeaders },
+            signal: opts?.signal,
+        });
+
+        if (res.status === 202) return null; // still pending
+        if (!res.ok) {
+            const requestId = res.headers.get('x-request-id');
+            let body: unknown;
+            try { body = await res.json(); } catch { /* ignore */ }
+            throw new FortuneApiError(
+                `Fortune ${res.status}`,
+                res.status,
+                requestId,
+                body,
+            );
+        }
+
+        return (await res.json()) as BackendReplaySnapshot;
     },
 
     /**
