@@ -18,7 +18,7 @@ Ask a question about any stock, and watch as Claude analyzes your query and stre
 • Supports interactive actions like timeframe changes and ticker additions
 
 Built with Claude Agent SDK, FastAPI SSE streaming, and a custom React A2UI renderer.`,
-        cardDescription: 'Ask a question, watch custom agent live generate dashboard with exchangeable widgets using the A2UI protocol.',
+        cardDescription: 'Agent generating UI to fill up a full dashboard on the go with exchangeable widgets using Google A2UI.',
         technologies: ['A2UI Protocol', 'Claude Agent SDK', 'React Renderer', 'SSE Streaming', 'Generative UX'],
         systemInstruction: `You are the AI assistant for **Agent to UI**. You have full knowledge of the A2UI protocol and how this project works. Use the details below to answer questions.
 
@@ -81,17 +81,17 @@ Protocol: A2UI v0.8 with custom financial component catalog extension
 • Retrieves relevant passages from classical BaZi texts (滴天髓, 渊海子平)
 • Streams personalized narrative sections with AI-generated insights
 • Follow-up actions for career, relationship, and yearly forecasts`,
-        cardDescription: 'An agent harness wrapping BaZi (八字) — the 1,000-year Chinese fortune-telling craft, with 10 classical fortune-telling texts loaded as context.',
+        cardDescription: 'Tell your fortune with an agent wrapping traditional Chinese fortune books as harness and the OpenAI Agents SDK as agent runtime.',
         technologies: ['Harness Engineering', 'Context Caching', 'OpenAI Agents SDK', 'SSE Streaming', 'cnlunar'],
         systemInstruction: '',
         defaultPrompts: [],
         coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/fortune-teller-discovers-ai.gif',
         imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/fortune-teller-discovers-ai.gif',
-        ogImage: 'https://yanqinghot.blob.core.windows.net/public-access/fortune-teller-discovers-ai-poster.jpg',
+        ogImage: 'https://yanqinghot.blob.core.windows.net/public-access/fortune-teller-discovers-ai-og.jpg',
         videoUrl: 'https://yanqinghot.blob.core.windows.net/public-access/fortune-teller-discovers-ai.webm',
         posterUrl: 'https://yanqinghot.blob.core.windows.net/public-access/fortune-teller-discovers-ai-poster.jpg',
         seoTitle: 'Fortune Agent — BaZi Fortune Reading Agent System',
-        seoDescription: 'Multi-agent fortune-telling system using OpenAI Agents SDK with BaZi computation, classical text retrieval, and real-time streaming UI.',
+        seoDescription: 'Tell your fortune with an agent wrapping traditional Chinese fortune books as harness and the OpenAI Agents SDK as agent runtime.',
         seoKeywords: ['BaZi', 'Four Pillars', 'fortune telling', 'AI agents', 'OpenAI Agents SDK'],
         datePublished: '2026-04-06',
         dateModified: '2026-04-06',

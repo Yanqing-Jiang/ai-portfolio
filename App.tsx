@@ -11,6 +11,7 @@ import {
   useSearchParams,
 } from 'react-router-dom';
 import Sidebar from './components/SidebarV2';
+import ProjectHelmet from './components/ProjectHelmet';
 import ProjectView from './components/ProjectView';
 import LandingPageFlow from './components/LandingPageFlow';
 import { GenerativeUIPage } from './components/generativeUiDashboard';
@@ -46,7 +47,13 @@ const findProject = (id: string) => ALL_PROJECTS.find((p) => p.id === id);
 const FortuneAgentIntroRoute: React.FC = () => {
   const navigate = useNavigate();
   const goExplore = () => navigate('/project/fortune-agent/explore');
-  return <FortuneAgentIntro onFinish={goExplore} onSkip={goExplore} />;
+  const fortuneProject = findProject('fortune-agent');
+  return (
+    <>
+      {fortuneProject && <ProjectHelmet project={fortuneProject} />}
+      <FortuneAgentIntro onFinish={goExplore} onSkip={goExplore} />
+    </>
+  );
 };
 
 const FortuneAgentHubRoute: React.FC = () => {
