@@ -334,17 +334,22 @@ export const Architecture: React.FC = () => {
           })}
         </div>
 
-        {/* Right Column: Sticky Detail Panel */}
+        {/* Right Column: Sticky Detail Panel
+            NOTE: We deliberately do NOT wrap this in <AnimatePresence mode="wait">.
+            With framer-motion 11 + React 19, the parent re-renders every 2s
+            (from `usePhase`); a wait-for-exit cycle on the keyed child gets
+            interrupted on each tick and the new viz never mounts — leaving the
+            right panel stuck on whatever was active first (Memory by default).
+            Plain key-based remount on <motion.div> is enough: React unmounts
+            the old, mounts the new, and `initial → animate` plays the fade-in. */}
         <div className="lg:col-span-7 lg:sticky lg:top-24 flex flex-col gap-8">
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={activeSub.id}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              transition={{ duration: 0.3 }}
-              className="flex flex-col gap-8"
-            >
+          <motion.div
+            key={activeSub.id}
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.3 }}
+            className="flex flex-col gap-8"
+          >
               <ActiveViz phase={phase} />
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
@@ -379,8 +384,7 @@ export const Architecture: React.FC = () => {
                   </div>
                 ))}
               </div>
-            </motion.div>
-          </AnimatePresence>
+          </motion.div>
         </div>
       </div>
     </SectionShell>
