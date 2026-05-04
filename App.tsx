@@ -36,11 +36,6 @@ import BlogPostPage from './components/blog/BlogPostPage';
 // /homer — Homer Lite case-study landing. Lazy-loaded so /homer's section bundle
 // (Lenis init, Hero animations, etc.) doesn't load on the marketing landing.
 const HomerLitePage = lazy(() => import('./components/homer-lite/HomerLitePage'));
-// /homer/architecture[/:variant] — comparison pages for the 5 redesign variants.
-// Lazy-loaded for parity with /homer; each variant page itself further lazy-loads
-// only its own viz code via React.lazy in components/homer-lite/architecture-compare/variants.ts.
-const ArchitectureCompareIndex = lazy(() => import('./components/homer-lite/architecture-compare/ArchitectureCompareIndex'));
-const ArchitectureComparePage = lazy(() => import('./components/homer-lite/architecture-compare/ArchitectureComparePage'));
 
 import { PROJECT_DATA } from './constants';
 import type { Project } from './types';
@@ -399,38 +394,6 @@ const Layout: React.FC = () => {
               }
             />
 
-            {/* Architecture redesign — 5-variant comparison pages.
-                /homer/architecture           → index of all 5 variants.
-                /homer/architecture/:variant  → single variant on dark bg w/ sticky top bar. */}
-            <Route
-              path="/homer/architecture"
-              element={
-                <Suspense
-                  fallback={
-                    <div className="flex items-center justify-center h-screen text-sm text-slate-400">
-                      loading variants…
-                    </div>
-                  }
-                >
-                  <ArchitectureCompareIndex />
-                </Suspense>
-              }
-            />
-            <Route
-              path="/homer/architecture/:variant"
-              element={
-                <Suspense
-                  fallback={
-                    <div className="flex items-center justify-center h-screen text-sm text-slate-400">
-                      loading variant…
-                    </div>
-                  }
-                >
-                  <ArchitectureComparePage />
-                </Suspense>
-              }
-            />
-
             <Route path="/auth/callback" element={<AuthCallback />} />
           </Routes>
 
@@ -446,11 +409,10 @@ export const AppRoutes: React.FC = () => <Layout />;
 // Function: App - application root used by Vite entry; wraps the router with HelmetProvider; exists to set up providers once.
 const App: React.FC = () => (
   <HelmetProvider>
-    <BrowserRouter>
+    <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <AppRoutes />
     </BrowserRouter>
   </HelmetProvider>
 );
 
 export default App;
-
