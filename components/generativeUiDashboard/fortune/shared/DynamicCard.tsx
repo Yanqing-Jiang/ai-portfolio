@@ -40,13 +40,20 @@ export const DynamicCard: React.FC<DynamicCardProps> = ({
           {elements.length > 0 && (
             <div className="mt-2 flex gap-1.5">
               {elements.map((el) => {
-                const ec = ELEMENT_COLORS[el];
+                const key = typeof el === 'string'
+                  ? (el.charAt(0).toUpperCase() + el.slice(1).toLowerCase()) as ElementType
+                  : el;
+                const ec = ELEMENT_COLORS[key] ?? {
+                  bg: 'bg-slate-500/10',
+                  text: 'text-slate-300',
+                  border: 'border-slate-500/30',
+                };
                 return (
                   <span
-                    key={el}
+                    key={String(el)}
                     className={`${ec.bg} ${ec.text} ${ec.border} border rounded-full px-2 py-0.5 text-[10px]`}
                   >
-                    {el}
+                    {String(el)}
                   </span>
                 );
               })}

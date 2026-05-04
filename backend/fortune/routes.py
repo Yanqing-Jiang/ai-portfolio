@@ -170,6 +170,10 @@ class FortuneSession(BaseModel):
     # agent runs instead of the default narrative agent. Cleared after stream.
     pending_action_id: str | None = None
     pending_action_question: str | None = None
+    # Set by POST /{fortune_id}/cancel. The stream loop checks this flag
+    # after every emit; once true, it aborts the Runner.run_streamed() call
+    # gracefully and closes the SSE stream so the client can release the UI.
+    cancel_requested: bool = False
 
     def touch(self, new_status: RuntimeStatus | None = None) -> None:
         if new_status is not None:
@@ -547,6 +551,13 @@ async def get_fortune_replay(
 
     repo = await get_repository()
     if not repo.available:
+        store = get_fortune_store()
+        if store.get(fortune_id) is not None:
+            return JSONResponse(
+                status_code=202,
+                content={"fortune_id": fortune_id, "status": "pending"},
+                headers={"Cache-Control": "no-store"},
+            )
         raise HTTPException(
             status_code=503,
             detail="Replay unavailable",
@@ -674,6 +685,33 @@ def _extract_stream_event_meta(event: Any) -> dict[str, Any] | None:
                 or getattr(raw_item, "handoff_target", None)
             )
             return {"kind": "handoff_call", "target": target}
+        if "reasoningitem" in tokens:
+            # Reasoning summary chunk. Reasoning models may emit one or more
+            # reasoning_items per generation when summary="auto" is set.
+            # per generation when summary="auto" is set. The payload shape is
+            # ``list[Summary(text=..., type="summary_text")]``. We flatten the
+            # text(s) to a single string so the thinking panel can render a
+            # real signal during the 20-40s narrative window.
+            raw_summary = (
+                getattr(item, "summary", None)
+                or getattr(raw_item, "summary", None)
+                or getattr(raw_item, "content", None)
+            )
+
+            def _text_of(entry: Any) -> str:
+                if entry is None:
+                    return ""
+                if isinstance(entry, str):
+                    return entry
+                if isinstance(entry, dict):
+                    return str(entry.get("text") or entry.get("content") or "")
+                return str(getattr(entry, "text", None) or "")
+
+            if isinstance(raw_summary, list):
+                summary_text = " ".join(_text_of(s) for s in raw_summary).strip()
+            else:
+                summary_text = _text_of(raw_summary)
+            return {"kind": "reasoning", "summary": summary_text or None}
         if "messageoutputitem" in tokens:
             return {"kind": "message", "tool": None}
         return None
@@ -905,11 +943,10 @@ async def stream_fortune(fortune_id: str, request: Request):
                             ten_gods=analysis_b.ten_gods,
                             hidden_stems=analysis_b.hidden_stems,
                         ))
-                        # Cache on session so _build_narrative_prompt can see it.
-                        session.latest_foundation = {
-                            **foundation,
-                            "person_b": foundation_b,
-                        }
+                        # Include Person B in the exact foundation passed to
+                        # narrative generation, not only the reconnect cache.
+                        foundation = {**foundation, "person_b": foundation_b}
+                        session.latest_foundation = foundation
                 if analysis.luck_pillars:
                     yield await _emit(bridge.emit_luck_pillars(analysis.luck_pillars))
                 if analysis.annual_pillars:
@@ -1000,7 +1037,11 @@ async def stream_fortune(fortune_id: str, request: Request):
                         yield await _emit(bridge.emit_trace_steps_batch(trace.steps))
 
                     _t_narrative = _time.monotonic()
-                    logger.info("[FORTUNE] %s narrative start — model=%s", session.fortune_id, "gpt-5.4")
+                    logger.info(
+                        "[FORTUNE] %s narrative start — model=%s",
+                        session.fortune_id,
+                        get_settings().narrative_model,
+                    )
 
                     # BLOCKING #2 fix: translate SDK stream events into SSE
                     # envelopes. We surface semantic milestones (tool call,
@@ -1010,6 +1051,20 @@ async def stream_fortune(fortune_id: str, request: Request):
                     stream_result = await run_narrative_streamed(ctx, foundation=foundation)
                     seen_tools: set[str] = set()
                     async for event in stream_result.stream_events():
+                        # Check cancel flag (POST /cancel) or client disconnect
+                        # at each SDK stream event. Graceful ``after_turn``
+                        # cancel keeps session state consistent and emits a
+                        # final progress update so the UI can show "Paused".
+                        if session.cancel_requested or await request.is_disconnected():
+                            try:
+                                stream_result.cancel()
+                            except Exception:  # pragma: no cover - SDK drift
+                                pass
+                            if session.cancel_requested:
+                                yield await _emit(
+                                    bridge.emit_progress("cancelled", "Reading paused by user"),
+                                )
+                            break
                         meta = _extract_stream_event_meta(event)
                         if meta is None:
                             continue
@@ -1047,6 +1102,22 @@ async def stream_fortune(fortune_id: str, request: Request):
                                 trace.add_instant(
                                     "tool_result", "narrative",
                                     tool_name=tool, label=f"{tool} complete",
+                                )
+                                yield await _emit(bridge.emit_trace_steps_batch(trace.steps))
+                        elif kind == "reasoning":
+                            snippet = (meta.get("summary") or "").strip()
+                            label = (
+                                f"Reasoning · {snippet[:80]}"
+                                if snippet else "Reasoning…"
+                            )
+                            yield await _emit(
+                                bridge.emit_progress("narrative", label),
+                            )
+                            if trace:
+                                trace.add_instant(
+                                    "reasoning", "narrative",
+                                    label=label,
+                                    output_summary=snippet[:240] if snippet else "",
                                 )
                                 yield await _emit(bridge.emit_trace_steps_batch(trace.steps))
                         elif kind == "message":
@@ -1091,6 +1162,62 @@ async def stream_fortune(fortune_id: str, request: Request):
                     mechanisms = compat_block.get("mechanisms") or []
                     if mechanisms:
                         yield await _emit(bridge.emit_compat_mechanisms(mechanisms))
+
+                # Occasion fan-out
+                occasion_block = session.latest_narrative.get("occasion") if session.latest_narrative else None
+                is_occasion = bool(ctx.focus and ctx.focus.startswith("occasion"))
+                logger.info(
+                    "[FORTUNE] %s occasion fan-out: is_occasion=%s block=%s picks=%d mechs=%d",
+                    session.fortune_id, is_occasion,
+                    bool(occasion_block),
+                    len((occasion_block or {}).get("top_picks") or []),
+                    len((occasion_block or {}).get("mechanisms") or []),
+                )
+                if is_occasion and occasion_block:
+                    if occasion_block.get("top_picks"):
+                        yield await _emit(bridge.emit_occasion_top_picks(
+                            occasion_block["top_picks"],
+                            fallback_mechanisms=occasion_block.get("mechanisms") or [],
+                        ))
+                    if occasion_block.get("analysis"):
+                        yield await _emit(bridge.emit_occasion_analysis(occasion_block["analysis"]))
+                    if occasion_block.get("mechanisms"):
+                        yield await _emit(bridge.emit_occasion_mechanisms(occasion_block["mechanisms"]))
+
+                # Luck cycle fan-out
+                luck_block = session.latest_narrative.get("luck_cycle") if session.latest_narrative else None
+                is_luck = bool(ctx.focus and ctx.focus.startswith("luck_cycle"))
+                if is_luck:
+                    yield await _emit(bridge.emit_luck_cycle_timeline(
+                        luck_pillars=analysis.luck_pillars,
+                        annual_pillars=analysis.annual_pillars,
+                    ))
+                    yield await _emit(bridge.emit_luck_cycle_current_window(
+                        (luck_block or {}).get("current_window") or {},
+                        luck_pillars=analysis.luck_pillars,
+                    ))
+                    if luck_block and luck_block.get("mechanisms"):
+                        yield await _emit(bridge.emit_luck_cycle_mechanisms(luck_block["mechanisms"]))
+
+                # Wish fan-out
+                wish_block = session.latest_narrative.get("wish") if session.latest_narrative else None
+                # Wish is the "everything else with a question" bucket — triggered when a question is present
+                # AND focus is NOT one of the other specialized prefixes.
+                is_wish = bool(
+                    session.request.question
+                    and not (ctx.focus and (
+                        ctx.focus.startswith("compatibility") or
+                        ctx.focus.startswith("occasion") or
+                        ctx.focus.startswith("luck_cycle")
+                    ))
+                )
+                if is_wish and wish_block:
+                    if wish_block.get("verdict"):
+                        yield await _emit(bridge.emit_wish_verdict(wish_block["verdict"]))
+                    if wish_block.get("anchors"):
+                        yield await _emit(bridge.emit_wish_anchors(wish_block["anchors"]))
+                    if wish_block.get("mechanisms"):
+                        yield await _emit(bridge.emit_wish_mechanisms(wish_block["mechanisms"]))
 
                 if run_uuid is not None:
                     try:
@@ -1387,6 +1514,24 @@ async def ask_fortune(
         narrative=narrative.model_dump(),
         degraded_memory=degraded_memory,
     )
+
+
+@router.post("/{fortune_id}/cancel")
+async def cancel_fortune(fortune_id: str, request: Request):
+    """Pause/cancel an in-flight reading.
+
+    Sets ``session.cancel_requested = True``. The SSE stream loop polls this
+    flag between SDK events and calls ``stream_result.cancel()`` gracefully,
+    then closes the stream. Idempotent: calling it on a completed session is
+    a no-op.
+    """
+    store = get_fortune_store()
+    session = store.get(fortune_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Fortune session not found")
+    session.cancel_requested = True
+    logger.info("[FORTUNE] %s cancel requested", fortune_id)
+    return {"fortune_id": fortune_id, "cancelled": True}
 
 
 @router.post("/{fortune_id}/simulate")

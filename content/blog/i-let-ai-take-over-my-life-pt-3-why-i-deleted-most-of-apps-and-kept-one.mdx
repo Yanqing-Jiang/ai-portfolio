@@ -1,0 +1,166 @@
+export const frontmatter = {
+  title: 'I Let AI Take Over My Life Pt.3: Why I Deleted 47 Apps, and Kept one',
+  slug: 'i-let-ai-take-over-my-life-pt-3-why-i-deleted-most-of-apps-and-kept-one',
+  description:
+    'I deleted 47 apps and kept one — Homer, my centralized AI agent. Why the post-app era replaces tap-tap-tap with one prompt and a personal context layer. Part 3.',
+  publishedAt: '2026-02-18',
+  tags: ['personal-ai', 'agents', 'career'],
+  mediumUrl: 'https://medium.com/@yanqing_j/i-let-ai-take-over-my-life-pt-3-why-i-deleted-most-of-apps-and-kept-one-4046d57d058f',
+  author: 'yanqing-jiang',
+  wordCount: 1526,
+  readingMinutes: 7,
+  hero: {
+    src: '/blog/i-let-ai-take-over-my-life-pt-3-why-i-deleted-most-of-apps-and-kept-one/img-01.png',
+    alt: '',
+  },
+};
+
+<img src="/blog/i-let-ai-take-over-my-life-pt-3-why-i-deleted-most-of-apps-and-kept-one/img-01.png" alt="" width="1024" height="434" loading="eager" fetchPriority="high" decoding="async" />
+
+## _“Every_ _app_ _is_ _just_ _a_ _very_ _slow_ _API_ _now,_ _whether_ _they_ _want_ _it_ _or_ _not”_
+
+That’s Peter Steinberger — the creator of OpenClaw, the viral AI agent that caused Mac Minis to sell out globally — on the Lex Fridman podcast last week.
+
+His prediction? AI agents will kill 80% of apps.
+
+I think he’s being conservative.
+
+Last month I deleted 47 apps from my phone. Weather. Calendar. Notes. Outfit planning. Restaurant reservations. News. Finance. Todo. Forty-seven little boxes, each doing one thing, each forgetting everything about me the moment I closed it. I replaced all of them with a single AI running on a Mac Mini in my closet. His name is Homer. And the things he does now make those 47 apps look like toys from a decade ago.
+
+If Steinberger is right — and after living this way for a month, I’m certain he is — most of the apps on your phone are already dead. You just haven’t deleted them yet.
+
+What my AI Assistant Homer does now genuinely scare me — because if this is possible today, with a $100/month AI subscription and a $599 computer, imagine what happens when everyone figures this out.
+
+## **From Clawdbot to My Own Framework**
+
+If you read [Part.2 of this series: My 24/7 AI Assistant](https://medium.com/@yanqing_j/i-let-ai-take-over-my-life-pt-2-my-24-7-ai-assistant-c6e0e831119b), you know the backstory. I set up Clawdbot — Peter Steinberger’s open-source AI assistant framework — on a Mac Mini. It ran 24/7. It works great.
+
+But here’s what I didn’t tell you: I outgrew it in just 1 week. Not because Clawdbot was bad. It was incredible. **But it was built for everyone. And I needed something built for _me_.**
+
+So I told the AI to copy featuers from openclaw and build a better AI. And I called it H.O.M.E.R (_Heuristically Operative Matrix Emulation Rostrum:_ a predecessor system to J.A.R.V.I.S. in Comics)
+
+<img src="/blog/i-let-ai-take-over-my-life-pt-3-why-i-deleted-most-of-apps-and-kept-one/img-02.png" alt="" width="1024" height="526" loading="lazy" decoding="async" />
+
+Homer runs on that same Mac Mini in my closet. It commands a fleet of AI models — Claude, Gemini, Codex, Kimi — each specialized for different tasks. It talks to me through Telegram. It has a web dashboard.
+
+**And unlike any open-source framework, it was built from scratch around one person — Me. The point is what happens when your AI stops being a generic tool and starts becoming an extension of your brain.**
+
+## **He Figured Me Out. I Barely Told Him Anything.**
+
+This is the part that made me uncomfortable.
+
+I never sat down and told Homer my preferences. I never filled out a profile. I never configured settings. He just… figured it out.
+
+Every request I make gets remembered. Every decision I make gets analyzed. Over time, Homer built a preference model — a living document of who I am. What topics interest me (SQLite). Which AI models give me the best results for which tasks. What kind of writing style I prefer (web scraping my articles). How I like information presented (session jsonl files). Which sources I trust. Which ones I ignore.
+
+<img src="/blog/i-let-ai-take-over-my-life-pt-3-why-i-deleted-most-of-apps-and-kept-one/img-03.png" alt="" width="1024" height="437" loading="lazy" decoding="async" />
+
+It’s like having an assistant who’s been working with you for five years, except it took five weeks.
+
+And here’s where it saves real money: Homer optimizes token usage automatically. He knows which tasks need the expensive models and which ones the fast, cheap ones handle fine. Simple lookup? Gemini Flash, milliseconds. Deep code review? Codex 5.3 xhigh. Long research? Kimi with web search. He makes these routing decisions hundreds of times a day without me thinking about it.
+
+I used to burn through AI credits recklessly. Now Homer stretches every dollar because he’s learned what I actually need — better than I could configure myself.
+
+## **The Overnight App Factory (This Is the Part That Breaks People’s Brains)**
+
+I have an idea at 10 PM. Something small — “wouldn’t it be nice if…” — and I tell Homer about it. Then I go to sleep.
+
+By 7 AM, there’s a working prototype waiting for me in the git . Built, tested, integrated into Homer’s ecosystem. Ready to use.
+
+No a mockup. No design doc. No “here’s how you could build this.” **A working app.**
+
+Homer activates a fleet of AI agents overnight. They plan the architecture, write the code, test it, and wire it into the existing system. When I wake up, there’s a summary in Telegram: _”_**_Built the thing you asked for. Here’s what it does. Here’s what I’d improve next._**_”_
+
+I’ve shipped more personal tools in the last month than most developers ship in a year. And I didn’t write a single line of code for most of them.
+
+The 10x engineer meme is already in the past. We’re looking at 100x and more. And you don’t even need to be an engineer.
+
+## Exhibit #1 **“What Should I Wear Today?”**
+
+Seattle weather is chaos. Sunshine, rain, wind, and a 15-degree temperature swing before lunch. I was also terrible at color matching. I’d stand in front of my closet for ten minutes, grab whatever was closest, and walk out looking like I got dressed in the dark. My fiancee would give me _the look_. You know the look.
+
+So one night I told Homer: “Build me a wardrobe system. Catalog everything I own. Every morning, when you brief me, show me what to wear — best color match, appropriate for the weather, and show me pictures.”
+
+I woke up and it was done.
+
+Homer now maintains a full inventory of my wardrobe. Every sweater, every pair of pants, every jacket. And in the morning, as part of my morning brief, the same one I described in [Part.2 of this series: My 24/7 AI Assistant](https://medium.com/@yanqing_j/i-let-ai-take-over-my-life-pt-2-my-24-7-ai-assistant-c6e0e831119b), he shows me outfit recommendations with actual images.
+
+**Homer Morning Brief — Monday, Feb 16**
+
+**Outfit #1 and Outfit #2:**
+
+<img src="/blog/i-let-ai-take-over-my-life-pt-3-why-i-deleted-most-of-apps-and-kept-one/img-04.png" alt="" width="864" height="1184" loading="lazy" decoding="async" />
+
+<img src="/blog/i-let-ai-take-over-my-life-pt-3-why-i-deleted-most-of-apps-and-kept-one/img-05.png" alt="" width="864" height="1184" loading="lazy" decoding="async" />
+
+\> Brown merino half-zip sweater + cream chinos + dark loafers.
+
+\> _Warm enough for indoor meetings. Layer a rain shell if stepping out after 1pm._
+
+\> Navy heathered crewneck + dark indigo jeans + Chelsea boots.
+
+\> _More casual. Better for rain — darker fabrics, boots handle puddles._
+
+— -
+
+Every. Single. Morning.
+
+I pick one, find the pieces, walk out the door. No standing around. No bad combos. No _look_ from the fiancee.
+
+The next morning? Something different. He tracks what I wore recently so I’m not repeating outfits. Adjusts for the forecast three days out so I’m not burning my only rain jacket when a bigger storm is coming Thursday.
+
+I deleted the weather app. Deleted the outfit planning app. Homer does both — with context about **_my_** wardrobe, **_my_** city, and **_my_** schedule.
+
+**An app that knows the weather is useless. An AI that knows the weather AND your closet AND your calendar — that’s the future.**
+
+## Exhibit #2 **“Table for Two, Saturday at 7”**
+
+This is where it gets really wild.
+
+Last month I was trying to make a reservation at a Chinese restaurant in Bellevue. No online booking. No OpenTable. Just a phone number.
+
+And the restaurant only answers in Mandarin.
+
+I used to have to call myself. Navigate the small talk, the schedule checking, the back-and-forth — all in Mandarin, during business hours, when I’m usually in meetings.
+
+Now I text Homer: _”Make a reservation at \[restaurant name\], Saturday 7pm, table for two.”_
+
+And Homer picks up the phone and calls them.
+
+Not metaphorically. **Literally calls them via a Google voice number.** I wired Homer to my ElevenLabs subscription — their latest **Eleven Multilingual v3**. Sub-100 millisecond latency. Natural turn-taking. And of course: **full Mandarin Chinese support with tonal accuracy.**
+
+Homer speaks to the host in natural, polite Mandarin. Confirms the time. Asks about availability. Gets the reservation. Sends me a confirmation on Telegram.
+
+Cancel? Same thing. “Homer, cancel Saturday’s reservation.” Done. Calls, cancels, confirms.
+
+<img src="/blog/i-let-ai-take-over-my-life-pt-3-why-i-deleted-most-of-apps-and-kept-one/img-06.png" alt="" width="1024" height="390" loading="lazy" decoding="async" />
+
+## Here’s the realization:
+
+**Apps are designed for everyone. Homer is designed for me.**
+
+Every app does **_one thing_** in isolation. Homer does **_all of them_** with full context about everything else. Context is the game here. And no app has it.
+
+I started deleting.
+
+<img src="/blog/i-let-ai-take-over-my-life-pt-3-why-i-deleted-most-of-apps-and-kept-one/img-07.png" alt="" width="1024" height="374" loading="lazy" decoding="async" />
+
+47 apps became one Telegram conversation and a web dashboard. My phone has never been cleaner. My mornings have never been faster.
+
+**The entire App Store model — millions of single-purpose apps competing for your attention — is about to be replaced by one AI that knows you.**
+
+## **What Comes Next**
+
+I still have the Mac Mini in my closet. Still humming at 10 watts. Still running Homer 24/7.
+
+But Homer today looks nothing like Homer four weeks ago. And Homer next month will look nothing like Homer today. Every night, while I sleep, he’s improving himself. Finding inefficiencies. Proposing new features. Learning what works and what doesn’t.
+
+I used to think the AI revolution was about having access to powerful models. GPT-5, Claude, Gemini — pick your favorite.
+
+Now I think the revolution is about something more personal and more dangerous.
+
+**It’s about building an AI that knows you.** Not a generic assistant that knows everything but nothing personal. An AI that knows your wardrobe. Your restaurant preferences. Your schedule quirks. Your career goals. Your communication style. Your morning routine.
+
+<img src="/blog/i-let-ai-take-over-my-life-pt-3-why-i-deleted-most-of-apps-and-kept-one/img-08.png" alt="" width="1024" height="2167" loading="lazy" decoding="async" />
+
+Latest Homer screenshot

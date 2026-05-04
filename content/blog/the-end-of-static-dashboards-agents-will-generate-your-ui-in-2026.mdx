@@ -1,0 +1,72 @@
+export const frontmatter = {
+  title: 'The End of Static Dashboards: Agents Will Generate Your UI in 2026',
+  slug: 'the-end-of-static-dashboards-agents-will-generate-your-ui-in-2026',
+  description:
+    'Agent-to-UI (A2UI): instead of users navigating static dashboards, agents generate the interface that matches the intent. The architecture, the trade-offs, the 2026 outlook.',
+  publishedAt: '2026-01-15',
+  tags: ['a2ui', 'agents', 'analytics', 'llm-eng'],
+  mediumUrl: 'https://medium.com/@yanqing_j/the-end-of-static-dashboards-agents-will-generate-your-ui-in-2026-a574e993f2e4',
+  author: 'yanqing-jiang',
+  wordCount: 635,
+  readingMinutes: 3,
+  hero: {
+    src: '/blog/the-end-of-static-dashboards-agents-will-generate-your-ui-in-2026/img-01.png',
+    alt: '',
+  },
+};
+
+<img src="/blog/the-end-of-static-dashboards-agents-will-generate-your-ui-in-2026/img-01.png" alt="" width="1020" height="555" loading="eager" fetchPriority="high" decoding="async" />
+
+## **The default answer**
+
+Picture your typical Monday morning. You have coffee in one hand and a mouse in the other. Sales are down last week and you’d like to know why: you open a dashboard. Then a CRM. Then a spreadsheet. Then another dashboard.
+
+You find a number you don’t have an answer. What do you do? Let’s build a dashboard. Or worse, multiple dashboards for the same question because another team leader saw this too. Next thing you know, the same KPI will be defined in 3 different ways, and people spending more time hunting the “right” page than acting on insights — because every new angle becomes a new report, a new semantic model, or a new workbook.
+
+## **The Problem**
+
+<img src="/blog/the-end-of-static-dashboards-agents-will-generate-your-ui-in-2026/img-02.png" alt="" width="405" height="246" loading="lazy" decoding="async" />
+
+The problem with current analytics is that dashboards are “artifacts.” Questions are living things. The business shifts, definitions drift, new data arrives, and suddenly your “single source of truth” becomes five sources of truth — each still refreshing dutifully, each still confident-looking, and none aligned to what people actually need _today_
+
+If you ask, _“Why did our sales are down last week?”_ a dashboard gives you a filter. You have to hunt for the specific drivers. In an **Agentic** world, the software shouldn’t just dump a table on you. It should understand your intent and **draw the interface you need to solve the problem, and the time is right now.**
+
+This is the concept of **Generative UI**. Instead of navigating to a “Settings” page or a “Reports” page, the AI generates a bespoke interface — a chart, a form, a map — specifically for that moment in your conversation.
+
+## The Solution
+
+<img src="/blog/the-end-of-static-dashboards-agents-will-generate-your-ui-in-2026/img-03.png" alt="" width="576" height="234" loading="lazy" decoding="async" />
+
+Google’s A2UI (Agent-to-UI) is a open-source project for “agent-driven interfaces,” designed for interoperable, cross-platform, updateable UIs that agents can generate or populate.
+
+Here is the difference between the old way and the “Agent to UI” way:
+
+• **The Old Way:** You ask a chatbot, “Why did Nvidia price went down?” It replies with a wall of text analyzing 10 different timeframe. You have to type back, “No, I mean last week” It asks, “What date?” This back-and-forth is exhausting.
+
+• **The “Agent to UI” Way:** You ask the same question. AI agent **instantly generates a graphical interactive card** with a date picker, a time selector, and a full-on dashboard base on your question.
+
+It is suppose to be that simple, the agent should be “speaking” in user interface elements.
+
+## **How It Works**
+
+**A2UI Makes “Let Users Build It” Real — Without Making Users Learn BI**
+
+The old self-service promise demanded users learn the tool. The A2UI-style promise is different: the agent chooses from a **prebuilt catalog** (like Power BI’s drag-and-drop visuals), binds it to data, and renders a decent dashboard fast — because the hard part (UI engineering) is already packaged into trusted components.
+
+**Human-in-the-Loop — It’s the Missing Requirement Workshop**
+
+<img src="/blog/the-end-of-static-dashboards-agents-will-generate-your-ui-in-2026/img-04.png" alt="" width="480" height="328" loading="lazy" decoding="async" />
+
+The underrated unlock is interaction: instead of guessing requirements, the agent can present UI it designs to ask targeted questions (filters, definitions, time windows, segment choices), then instantly adjust the dashboard when you correct it — compressing the classic stakeholder workshop into a tight feedback loop you can audit.
+
+**Project: Agent to UI**
+
+My project [https://yanqing.app/project/agent-to-ui](https://yanqing.app/project/agent-to-ui) implements the practical version of this idea: agent-driven UI composition using A2UI-style components, rapid dashboard generation, and iterative refinement — so the “dashboard backlog” stops being a queue and starts being a conversation that produces a saved, reusable interface.
+
+<img src="/blog/the-end-of-static-dashboards-agents-will-generate-your-ui-in-2026/img-05.png" alt="" width="550" height="865" loading="lazy" decoding="async" />
+
+## **2026 Prediction**
+
+**Standardize Agentic UI as a Platform Capability**
+
+Early 2026 is when this stops being a demo and becomes infrastructure: governed component catalogs, declarative UI protocols, streaming renderers, Human-in-the-loop checkpoints, and reusable “dashboard recipes” will turn into an internal platform — because the alternative is another year of dashboard sprawl, KPI drift, and confident-looking pages that keep refreshing while decisions rot.

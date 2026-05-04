@@ -1,0 +1,124 @@
+export const frontmatter = {
+  title: 'The Illusion of Knowing: Everyone Claims to Understand Agents & RAG',
+  slug: 'the-illusion-of-knowing-everyone-claims-to-understand-agents-rag',
+  description:
+    'Eight technical dimensions that separate genuine AI engineers from hype adopters. The illusion of knowing — and what production-grade agents and RAG actually require.',
+  publishedAt: '2025-08-03',
+  tags: ['agents', 'rag', 'evals', 'llm-eng'],
+  mediumUrl: 'https://medium.com/@yanqing_j/the-illusion-of-knowing-everyone-claims-to-understand-agents-rag-d8c5ecae5179',
+  author: 'yanqing-jiang',
+  wordCount: 729,
+  readingMinutes: 4,
+  hero: {
+    src: '/blog/the-illusion-of-knowing-everyone-claims-to-understand-agents-rag/img-01.png',
+    alt: '',
+  },
+};
+
+<img src="/blog/the-illusion-of-knowing-everyone-claims-to-understand-agents-rag/img-01.png" alt="" width="1024" height="683" loading="eager" fetchPriority="high" decoding="async" />
+
+Everyone but everyone knows about Large Language Model nowadays, and most of them call themselves “GenAI expert”, claiming expertise by trying out with a few GenAI playground tools. When I talk with professionals in Tech about deploying Agents and RAG in enterprise production environments, all of them can have a length conversation on their experience, but when I ask them a few deeper questions about production use case, their confident starts fading away.
+
+The reality is that most haven’t built anything production-grade — behind their flashy front end chatbot is the same “OpenAI Wrapper” that everyone is talking about 3 years ago.
+
+<img src="/blog/the-illusion-of-knowing-everyone-claims-to-understand-agents-rag/img-02.png" alt="" width="1024" height="683" loading="lazy" decoding="async" />
+
+## Familiar with AI? —Of course
+
+The rise of “vibe coding” gives the illusion that anyone can talk to a chatbot and magically produce a production-ready application. Sure, fancy front-end components and chatty interactions are captivating. But beneath the surface, the back ends are often dangerously unstable — built on poorly designed agent workflows and insecure RAG pipelines.
+
+[New AI tool counters health insurance denials decided by automated algorithms](https://www.theguardian.com/us-news/2025/jan/25/health-insurers-ai)
+
+What people don’t know: **LLM can turn a 10x engineers into a 100x engineer —** **but it also turns novices into walking security risks**. These tools offer speed, but speed without architectural understanding becomes a ticking time bomb, waiting to explode in a single accident then the whole system collapse.
+
+<img src="/blog/the-illusion-of-knowing-everyone-claims-to-understand-agents-rag/img-03.png" alt="" width="975" height="403" loading="lazy" decoding="async" />
+
+From a vibe coding website creator
+
+## Knowing Agents ≠ Running Agents in Production
+
+When you push beyond the buzzwords, specific technical questions quickly separate real AI engineers from the hype chasers.
+
+People say: “yeah I have memory build in.”
+
+-   But what kind of memory? Semantic memory via embedding + search?
+-   KV-based long-term memory capable of CRUD operations?
+
+When memory and tools create context conflicts (**yes, context engineering is somehow the new prompt engineering**) — how do you manage pollution and redundancy?
+
+-   Caching?
+-   Embedding filtering?
+-   Dedicated memory controllers?
+
+Have you tackled multi-agent task division, state isolation, and result merging?
+
+-   Do you know clearly how AutoGPT-style differs from planner-based execution?
+
+And when you push systems to production, non-technical challenges inevitably surface:
+
+-   Excessive token usage
+-   Slow memory indexing
+-   Tool chaining inefficiencies
+-   Robust fallback strategies
+-   Production tracing (e.g., LangSmith)
+
+## **Think You Know RAG? Think Again.**
+
+RAG isn’t about dumping data into a vector store and retrieving chunks — that’s what people were doing when GPT 3 first came out.
+
+Real questions to challenge your understanding:
+
+-   How exactly are you chunking your data?
+-   Fixed-length chunks or semantic-driven segmentation?
+-   Why and how did you choose your embedding model and dimensions?
+-   Do you properly implement reranking?
+-   How about combining sparse (BM25) with dense retrieval methods?
+-   Have you systematically optimized your prompts, evaluated hallucination risks, and managed precise context stitching?
+
+The initial stages of RAG parallel **Recommendation Systems**:
+
+-   Embedding → Vectorized Feature Modeling
+-   Retrieval → Multi-stage Recall
+-   Rerank → Scoring & Sorting
+
+But real-world RAG requires you to master deeper challenges: prompt engineering, context assembly, and precise control of generative behavior.
+
+## **Eight Dimensions to Separate Real AI Engineers from Hype**
+
+If you genuinely want to assess someone’s AI engineering depth, or simply want to study for AI engineering interviews, use this concise, practical checklist:
+
+**1️⃣ Design Patterns:**
+
+-   Clearly differentiate scenarios and logic of ReAct, CodeAct, and Agentic RAG.
+
+**2️⃣ Multi-Agent Collaboration:**
+
+-   Describe your strategy for task division, state isolation, result merging, and conflict resolution.
+
+**3️⃣ Memory Management:**
+
+-   Specify your memory type: scratchpad context, semantic embedding retrieval, or long-term KV memory.
+
+**4️⃣ Tooling and APIs:**
+
+-   Can you dynamically register tools, align parameters, parse schemas, and handle fallback effectively?
+
+**5️⃣ Workflow Control:**
+
+-   Have you built robust DAG workflows with state consistency, idempotent execution, failure recovery, and prioritization?
+
+**6️⃣ Performance and Monitoring:**
+
+-   Do you actively monitor token usage, response latency, and leverage tracing frameworks like LangSmith?
+
+**7️⃣ Security & Compliance:**
+
+-   Do you enforce clear access boundaries, audit trails, protect against prompt injections, and ensure data privacy?
+
+**8️⃣ Framework Mastery:**
+
+-   Can you critically evaluate open-source frameworks (LangGraph, CrewAI) and closed-source architectures (e.g., Manus), understanding their trade-offs for specific enterprise cases?
+
+These questions aren’t for gatekeeping — because there’s no single “correct answer,” but careful consideration reveals whether you’ve truly built and delivered at scale — or if you’re just “knowing AI”.
+
+And of course, feel free to ask ChatGPT.

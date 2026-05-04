@@ -373,6 +373,22 @@ export const fortuneClient = {
     },
 
     /**
+     * Pause / cancel an in-flight reading. Sets ``cancel_requested`` on the
+     * backend session; the SSE stream loop sees the flag on its next event
+     * boundary, calls the Agents SDK ``stream_result.cancel()`` gracefully,
+     * and closes the stream with a ``Reading paused by user`` progress event.
+     * Idempotent — safe to call if the reading already completed.
+     */
+    async cancelFortune(fortuneId: string): Promise<void> {
+        const base = _apiBase();
+        const authHeaders = await authService.getAuthHeaders();
+        await fetch(`${base}/api/fortune/${fortuneId}/cancel`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...authHeaders },
+        });
+    },
+
+    /**
      * Build the SSE stream URL. Kept as a string builder (not a fetch wrapper)
      * because the browser's EventSource consumes a URL directly.
      *

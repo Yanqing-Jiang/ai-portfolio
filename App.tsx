@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef, Suspense, lazy } from 'react';
 import {
   BrowserRouter,
   Routes,
@@ -30,6 +30,17 @@ import { FortuneAgentLandingA } from './components/generativeUiDashboard/Fortune
 import { FortuneAgentLandingB } from './components/generativeUiDashboard/FortuneAgentLandingB';
 import { FortuneAgentLandingC } from './components/generativeUiDashboard/FortuneAgentLandingC';
 import { ConsultingPage } from './components/consulting/ConsultingPage';
+import BlogIndexPage from './components/blog/BlogIndexPage';
+import BlogPostPage from './components/blog/BlogPostPage';
+
+// /homer — Homer Lite case-study landing. Lazy-loaded so /homer's section bundle
+// (Lenis init, Hero animations, etc.) doesn't load on the marketing landing.
+const HomerLitePage = lazy(() => import('./components/homer-lite/HomerLitePage'));
+// /homer/architecture[/:variant] — comparison pages for the 5 redesign variants.
+// Lazy-loaded for parity with /homer; each variant page itself further lazy-loads
+// only its own viz code via React.lazy in components/homer-lite/architecture-compare/variants.ts.
+const ArchitectureCompareIndex = lazy(() => import('./components/homer-lite/architecture-compare/ArchitectureCompareIndex'));
+const ArchitectureComparePage = lazy(() => import('./components/homer-lite/architecture-compare/ArchitectureComparePage'));
 
 import { PROJECT_DATA } from './constants';
 import type { Project } from './types';
@@ -100,7 +111,7 @@ const FortuneAgentCustomWishRoute: React.FC = () => {
   return (
     <FortuneAgentCustomWish
       onBack={() => navigate('/project/fortune-agent/explore')}
-      onComplete={(payload) => navigate(`/project/fortune-agent/custom-wish/result?q=${encodeURIComponent(payload.question)}`)}
+      onComplete={(payload) => navigate(`/project/fortune-agent/custom-wish/result?q=${encodeURIComponent(payload.question)}`, { state: payload })}
     />
   );
 };
@@ -248,8 +259,9 @@ const Layout: React.FC = () => {
   };
 
   // Function: goProject - used by SidebarV2 and LandingPageFlow; navigates to the requested project, treats repeat clicks as a full refresh, and collapses the sidebar on mobile; exists to centralize project navigation semantics.
+  // Honors `project.link` override so a project (e.g. Homer) can route to a custom path like `/homer`.
   const goProject = (p: Project) => {
-    const targetPath = `/project/${p.id}`;
+    const targetPath = p.link ?? `/project/${p.id}`;
     const isCurrent = location.pathname === targetPath;
     setActiveProject(findProject(p.id) ?? p);
     if (isMobile) setIsSidebarOpen(false); // Close sidebar on mobile after navigation
@@ -323,7 +335,7 @@ const Layout: React.FC = () => {
         )}
 
         {/* Main content area with fluid dimensions */}
-        <main ref={mainContentRef} className="flex-1 overflow-y-auto pt-16 md:pt-0">
+        <main ref={mainContentRef} className="flex-1 overflow-y-auto">
           <Routes>
             <Route
               path="/"
@@ -365,8 +377,61 @@ const Layout: React.FC = () => {
 
             <Route path="/project/:projectId" element={<ProjectRoute />} />
             <Route path="/consult" element={<ConsultingPage />} />
+
+            {/* Blog (Phase 1) */}
+            <Route path="/blog" element={<BlogIndexPage />} />
+            <Route path="/blog/tag/:tag" element={<BlogIndexPage />} />
+            <Route path="/blog/:slug" element={<BlogPostPage />} />
+
+            {/* Homer Lite case study (target: 2026-05-16) */}
+            <Route
+              path="/homer"
+              element={
+                <Suspense
+                  fallback={
+                    <div className="flex items-center justify-center h-screen text-sm text-slate-400">
+                      loading homer…
+                    </div>
+                  }
+                >
+                  <HomerLitePage />
+                </Suspense>
+              }
+            />
+
+            {/* Architecture redesign — 5-variant comparison pages.
+                /homer/architecture           → index of all 5 variants.
+                /homer/architecture/:variant  → single variant on dark bg w/ sticky top bar. */}
+            <Route
+              path="/homer/architecture"
+              element={
+                <Suspense
+                  fallback={
+                    <div className="flex items-center justify-center h-screen text-sm text-slate-400">
+                      loading variants…
+                    </div>
+                  }
+                >
+                  <ArchitectureCompareIndex />
+                </Suspense>
+              }
+            />
+            <Route
+              path="/homer/architecture/:variant"
+              element={
+                <Suspense
+                  fallback={
+                    <div className="flex items-center justify-center h-screen text-sm text-slate-400">
+                      loading variant…
+                    </div>
+                  }
+                >
+                  <ArchitectureComparePage />
+                </Suspense>
+              }
+            />
+
             <Route path="/auth/callback" element={<AuthCallback />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
 
         </main>

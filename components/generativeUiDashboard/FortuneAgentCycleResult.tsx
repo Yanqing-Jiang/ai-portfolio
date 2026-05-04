@@ -16,6 +16,7 @@ import { NowTab } from './fortune/luck/NowTab';
 import { TimelineTab } from './fortune/luck/TimelineTab';
 import { WhyTab } from './fortune/luck/WhyTab';
 import { AskTab } from './fortune/luck/AskTab';
+import { ThinkingPanel } from './fortune/ThinkingPanel';
 
 interface FortuneAgentCycleResultProps {
     onBack?: () => void;
@@ -39,7 +40,9 @@ export const FortuneAgentCycleResult: React.FC<FortuneAgentCycleResultProps> = (
         baseRoute: '/project/fortune-agent/luck-draw',
     });
 
-    const { isReplay, status, error } = session;
+    const { isReplay, status, error, dataModel, cancel, pausing } = session;
+    const thinkingStatus: 'streaming' | 'complete' =
+        status === 'complete' ? 'complete' : 'streaming';
 
     return (
         <FortuneAgentResultShell
@@ -51,6 +54,16 @@ export const FortuneAgentCycleResult: React.FC<FortuneAgentCycleResultProps> = (
             onTabChange={setActiveTab}
             onBack={onBack}
         >
+            {!error && (
+                <ThinkingPanel
+                    purpose="luck-draw"
+                    dataModel={dataModel as Record<string, unknown> | null}
+                    status={thinkingStatus}
+                    onPause={cancel}
+                    paused={pausing}
+                />
+            )}
+
             {error && (
                 <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-4 text-center text-sm text-red-400">
                     {error}

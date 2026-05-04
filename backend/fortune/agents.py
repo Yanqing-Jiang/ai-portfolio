@@ -6,7 +6,8 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
-from agents import Agent, Runner, RunConfig
+from agents import Agent, ModelSettings, Runner, RunConfig
+from openai.types.shared import Reasoning
 from pydantic import BaseModel, Field
 
 try:
@@ -162,6 +163,10 @@ class CompatMechanism(BaseModel):
     """Classical mechanism card for the Why tab."""
     id: str
     title: str = Field(description="Short serif title, e.g. 'Bing Fire warmed by Ji Earth'")
+    type: str | None = Field(
+        default=None,
+        description="Mechanism category for filtering, e.g. combination | clash | harm | support",
+    )
     icon: str = Field(description="Emoji or lucide icon name")
     bullets: list[str] = Field(min_length=1, max_length=4)
     citation_ids: list[str] = Field(default_factory=list, description="Classical reference ids")
@@ -172,6 +177,109 @@ class CompatibilityNarrativeFields(BaseModel):
     overview: CompatOverview
     pair_interactions: list[CompatPairInteraction] = Field(default_factory=list)
     mechanisms: list[CompatMechanism] = Field(default_factory=list)
+
+
+# --- Occasion (lucky-day) ---
+class OccasionMechanism(BaseModel):
+    id: str
+    title: str
+    type: str | None = Field(
+        default=None,
+        description="Mechanism category label for filtering, e.g. Timing | Element | Support | Caution",
+    )
+    icon: str
+    bullets: list[str] = Field(min_length=1, max_length=4)
+    citation_ids: list[str] = Field(default_factory=list)
+
+
+class OccasionPick(BaseModel):
+    rank: int = Field(ge=1, le=5)
+    date: str  # ISO YYYY-MM-DD
+    day_pillar_stem: str
+    day_pillar_branch: str
+    score: int = Field(ge=0, le=100)
+    one_line_reason: str = Field(description="Max 100 chars")
+    best_hours: list[str] = Field(default_factory=list, description="e.g. ['09:00-11:00']")
+    mechanisms: list[OccasionMechanism] = Field(
+        default_factory=list,
+        max_length=4,
+        description="Per-pick mechanism cards for inline expansion",
+    )
+
+
+class OccasionAnalysis(BaseModel):
+    occasion_type: str
+    key_elements: list[str]
+    avoid_elements: list[str]
+    description: str
+
+
+class OccasionNarrativeFields(BaseModel):
+    top_picks: list[OccasionPick] = Field(min_length=3, max_length=5)
+    analysis: OccasionAnalysis
+    mechanisms: list[OccasionMechanism] = Field(min_length=2, max_length=6)
+
+
+# --- Luck Cycle (luck-draw) ---
+class LuckCycleCurrentWindow(BaseModel):
+    decade: str  # e.g. "2020-2030"
+    score: int = Field(ge=0, le=100)
+    summary: str
+    element: str  # Wood|Fire|Earth|Metal|Water
+
+
+class LuckCycleMechanism(BaseModel):
+    id: str
+    title: str
+    icon: str
+    bullets: list[str] = Field(min_length=1, max_length=4)
+    citation_ids: list[str] = Field(default_factory=list)
+
+
+class LuckCycleNarrativeFields(BaseModel):
+    current_window: LuckCycleCurrentWindow
+    mechanisms: list[LuckCycleMechanism] = Field(min_length=2, max_length=6)
+
+
+# --- Wish (custom-wish) ---
+class WishCondition(BaseModel):
+    type: str = Field(description="check | warn | cross")
+    text: str
+
+
+class WishVerdict(BaseModel):
+    title: str
+    score: int = Field(ge=0, le=100)
+    summary: str
+    caution: str | None = None
+    conditions: list[WishCondition] = Field(default_factory=list, max_length=6)
+
+
+class WishAnchor(BaseModel):
+    id: str
+    label: str
+    symbol: str  # single char / emoji / hanzi
+    element: str | None = None
+    relevance: float = Field(ge=0.0, le=1.0)
+    bullets: list[str] = Field(min_length=1, max_length=4)
+
+
+class WishMechanism(BaseModel):
+    id: str
+    title: str
+    type: str | None = Field(
+        default=None,
+        description="Mechanism grouping, e.g. luck | interaction | chart",
+    )
+    icon: str
+    bullets: list[str] = Field(min_length=1, max_length=4)
+    citation_ids: list[str] = Field(default_factory=list)
+
+
+class WishNarrativeFields(BaseModel):
+    verdict: WishVerdict
+    anchors: list[WishAnchor] = Field(min_length=2, max_length=5)
+    mechanisms: list[WishMechanism] = Field(min_length=2, max_length=6)
 
 
 class EnrichedNarrativeOutput(BaseModel):
@@ -186,6 +294,9 @@ class EnrichedNarrativeOutput(BaseModel):
         default=None,
         description="Populated only when the focus is 'compatibility:*' and Person B data is available",
     )
+    occasion: OccasionNarrativeFields | None = None
+    luck_cycle: LuckCycleNarrativeFields | None = None
+    wish: WishNarrativeFields | None = None
 
 
 class FollowUpButton(BaseModel):
@@ -242,6 +353,8 @@ Guidelines:
 - Be concise — more insight per word, fewer words per insight.
 - For year_predictions, focus on years with clashes or combinations. Skip uneventful years.
 - Prefer actionable, practical bullets over abstract philosophy.
+- Emit ONLY the one specialized block that matches the current reading mode:
+  `compatibility`, `occasion`, `luck_cycle`, or `wish`. Leave the others null/omitted.
 
 COMPATIBILITY MODE (only when `person_b` is present in the input JSON):
 The focus string will start with "compatibility:" and you will receive Person A's \
@@ -278,6 +391,7 @@ chart as the top-level fields AND Person B's chart under `person_b`. Produce a \
 - compatibility.mechanisms: 3-6 classical mechanism cards. Each has:
   - id: snake_case slug
   - title: short serif-friendly title, e.g. "Bing Fire warmed by Ji Earth"
+  - type: "combination" | "clash" | "harm" | "support" | "punishment"
   - icon: one of flame, sparkles, heart, zap, layers, mountain, trees
   - bullets: 1-3 reasoning points tied to computed data
   - citation_ids: classical reference ids consulted (from the `references` field)
@@ -285,6 +399,88 @@ chart as the top-level fields AND Person B's chart under `person_b`. Produce a \
 When emitting in compatibility mode, the standard `insights` array should focus on \
 the PAIR DYNAMICS (not Person A in isolation). Do not repeat single-person insights \
 if they have no bearing on the pairing.
+
+OCCASION MODE (only when `focus` starts with "occasion:"):
+The focus string encodes `occasion:<type>:<windowStartISO>:<windowEndISO>`. Produce an \
+`occasion` object IN ADDITION TO the standard tldr/insights:
+
+- occasion.top_picks: 3-5 auspicious days chosen ONLY from the requested date window.
+  - rank: 1-5
+  - date: ISO date inside the provided window
+  - day_pillar_stem / day_pillar_branch: the selected day's pillar
+  - score: 0-100 integer based on how well the day supports the user's Day Master and the occasion type
+  - one_line_reason: max 100 chars, specific and concrete
+  - best_hours: list of favorable 2-hour windows such as "09:00-11:00"
+  - mechanisms: 2-4 short mechanism cards specific to THIS date, each with id, title, \
+    type, icon, bullets, and citation_ids
+  Pick from the date window given. Use pillar compatibility with the user's Day Master, \
+  seasonal strength, and any meaningful branch interactions. Do not suggest dates outside the window.
+- occasion.analysis:
+  - occasion_type: normalized occasion label from the focus string
+  - key_elements: favorable elements for this occasion in the user's chart context
+  - avoid_elements: unfavorable or destabilizing elements for this occasion
+  - description: 1-2 sentence explanation tied to the computed chart
+- occasion.mechanisms: 2-6 classical mechanism cards. Each has:
+  - id: snake_case slug
+  - title: short serif-friendly title
+  - type: short category label for filtering, e.g. Timing | Element | Support | Caution
+  - icon: one of flame, sparkles, heart, zap, layers, mountain, trees
+  - bullets: 1-4 reasoning points tied to computed data and the chosen dates
+  - citation_ids: classical reference ids consulted
+
+When emitting in occasion mode, the standard `insights` array should focus on WHY \
+these dates are favorable, how the occasion type changes the recommendation, and what \
+the user should watch for in timing.
+
+LUCK CYCLE MODE (only when `focus` starts with "luck_cycle:"):
+The focus string encodes `luck_cycle:<focus>:<horizon>`. Produce a `luck_cycle` object \
+IN ADDITION TO the standard tldr/insights:
+
+- luck_cycle.current_window: summarize the ACTIVE decade from `luck_pillars` by selecting \
+  the pillar whose year range contains the current year.
+  - decade: e.g. "2020-2030"
+  - score: 0-100 integer for how supportive the current decade is
+  - summary: 1-2 sentence interpretation anchored to the active pillar and chart
+  - element: the dominant element of the active decade window
+- luck_cycle.mechanisms: 2-6 classical mechanism cards. Each has:
+  - id: snake_case slug
+  - title: short serif-friendly title
+  - icon: one of flame, sparkles, heart, zap, layers, mountain, trees
+  - bullets: 1-4 reasoning points tied to the active luck pillar, nearby annual pillars, and chart interactions
+  - citation_ids: classical reference ids consulted
+
+When emitting in luck cycle mode, the standard `insights` array should focus on the \
+current decade, what lever is strongest right now, and what timing shift the horizon suggests.
+
+WISH MODE (only when a `question` is present and the focus does not start with \
+"compatibility:", "occasion:", or "luck_cycle:"):
+This is the custom wish / free-form intent bucket. Produce a `wish` object IN ADDITION \
+TO the standard tldr/insights:
+
+- wish.verdict:
+  - title: short verdict headline
+  - score: 0-100 integer
+  - summary: concise answer to the wish
+  - caution: optional short caveat
+  - conditions: 0-6 items, each with `type` = check | warn | cross and `text`
+- wish.anchors: 2-5 short interpretive cards tied to specific pillar features.
+  Each has:
+  - id: snake_case slug
+  - label: short title
+  - symbol: a single char / emoji / hanzi
+  - element: optional supporting element
+  - relevance: 0.0-1.0
+  - bullets: 1-4 reasoning points tied to specific pillars, ten gods, or interactions
+- wish.mechanisms: 2-6 classical mechanism cards. Each has:
+  - id: snake_case slug
+  - title: short serif-friendly title
+  - type: "luck" | "interaction" | "chart"
+  - icon: one of flame, sparkles, heart, zap, layers, mountain, trees
+  - bullets: 1-4 reasoning points tied to computed data
+  - citation_ids: classical reference ids consulted
+
+When emitting in wish mode, the standard `insights` array should answer the actual \
+question asked, stay specific to the user's chart, and avoid generic fortune-cookie language.
 """
 
 GUARDRAIL_INSTRUCTIONS = """\
@@ -308,9 +504,20 @@ def _model(setting_name: str) -> str:
     return getattr(get_settings(), setting_name)
 
 
+def _model_settings(reasoning_key: str) -> ModelSettings:
+    effort = getattr(get_settings(), reasoning_key, "low")
+    # summary="auto" asks the Responses API to emit reasoning summaries as
+    # `reasoning_item` stream events. This gives the thinking panel a live
+    # signal during otherwise-silent structured-output generation (the
+    # narrative agent has no tool calls, so without this the UI hangs on
+    # "Consulting the pillars…" for 20-40s).
+    return ModelSettings(reasoning=Reasoning(effort=effort, summary="auto"))
+
+
 INTAKE_AGENT: Agent[FortuneRunContext] = Agent(
     name="fortune_intake",
     model=_model("intake_model"),
+    model_settings=_model_settings("intake_reasoning"),
     instructions=(
         "Clarify the user intent for a BaZi reading. "
         "Summarize requested focus, tone, and any missing optional details."
@@ -320,6 +527,7 @@ INTAKE_AGENT: Agent[FortuneRunContext] = Agent(
 CHART_AGENT: Agent[FortuneRunContext] = Agent(
     name="fortune_chart",
     model=_model("chart_model"),
+    model_settings=_model_settings("chart_reasoning"),
     instructions=(
         "Use the chart tool to compute Four Pillars data. "
         "Explain what the raw element counts imply for downstream interpretation."
@@ -330,6 +538,7 @@ CHART_AGENT: Agent[FortuneRunContext] = Agent(
 CLASSICS_AGENT: Agent[FortuneRunContext] = Agent(
     name="fortune_classics",
     model=_model("classics_model"),
+    model_settings=_model_settings("classics_reasoning"),
     instructions=(
         "Use the classics retrieval tool to find concise, relevant textual "
         "support for the current reading focus."
@@ -340,6 +549,7 @@ CLASSICS_AGENT: Agent[FortuneRunContext] = Agent(
 NARRATIVE_AGENT: Agent[FortuneRunContext] = Agent(
     name="fortune_narrative",
     model=_model("narrative_model"),
+    model_settings=_model_settings("narrative_reasoning"),
     instructions=NARRATIVE_INSTRUCTIONS,
     output_type=EnrichedNarrativeOutput,
 )
@@ -347,6 +557,7 @@ NARRATIVE_AGENT: Agent[FortuneRunContext] = Agent(
 GUARDRAIL_AGENT: Agent[FortuneRunContext] = Agent(
     name="fortune_guardrail",
     model=_model("guardrail_model"),
+    model_settings=_model_settings("guardrail_reasoning"),
     instructions=GUARDRAIL_INSTRUCTIONS,
     output_type=GuardrailOutput,
 )

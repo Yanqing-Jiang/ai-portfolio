@@ -16,6 +16,7 @@ import { OverviewTab } from './fortune/compatibility/OverviewTab';
 import { PillarsTab } from './fortune/compatibility/PillarsTab';
 import { WhyTab } from './fortune/compatibility/WhyTab';
 import { AskTab } from './fortune/compatibility/AskTab';
+import { ThinkingPanel } from './fortune/ThinkingPanel';
 
 interface FortuneAgentCompatibilityResultProps {
     onBack?: () => void;
@@ -39,7 +40,9 @@ export const FortuneAgentCompatibilityResult: React.FC<FortuneAgentCompatibility
         baseRoute: '/project/fortune-agent/compatibility',
     });
 
-    const { isReplay, status, error } = session;
+    const { isReplay, status, error, dataModel, cancel, pausing } = session;
+    const thinkingStatus: 'streaming' | 'complete' =
+        status === 'complete' ? 'complete' : 'streaming';
 
     return (
         <FortuneAgentResultShell
@@ -51,6 +54,16 @@ export const FortuneAgentCompatibilityResult: React.FC<FortuneAgentCompatibility
             onTabChange={setActiveTab}
             onBack={onBack}
         >
+            {!error && (
+                <ThinkingPanel
+                    purpose="compatibility"
+                    dataModel={dataModel as Record<string, unknown> | null}
+                    status={thinkingStatus}
+                    onPause={cancel}
+                    paused={pausing}
+                />
+            )}
+
             {error && (
                 <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-4 text-center text-sm text-red-400">
                     {error}

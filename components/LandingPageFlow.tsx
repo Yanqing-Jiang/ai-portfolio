@@ -838,7 +838,7 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                                                             </p>
                                                             <div className="flex items-center gap-2 text-sm font-bold tracking-widest uppercase text-cyan-400 opacity-0 group-hover:opacity-100 transition-opacity duration-500 delay-100">
                                                                 <Link
-                                                                    to={`/project/${project.id}`}
+                                                                    to={project.link ?? `/project/${project.id}`}
                                                                     onClick={() => onSelectProject(project)}
                                                                 >
                                                                     <span>{project.linkText ?? project.title}</span>
@@ -890,7 +890,7 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                                         >
                                             {/* Project Image (clickable) */}
                                             <Link
-                                                to={`/project/${project.id}`}
+                                                to={project.link ?? `/project/${project.id}`}
                                                 onClick={() => onSelectProject(project)}
                                                 aria-label={`View ${project.title}`}
                                                 className="block relative h-48 overflow-hidden cursor-pointer"
@@ -934,7 +934,7 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
 
                                                 {/* CTA Button */}
                                                 <Link
-                                                    to={`/project/${project.id}`}
+                                                    to={project.link ?? `/project/${project.id}`}
                                                     onClick={() => onSelectProject(project)}
                                                     className="inline-flex items-center gap-2 text-sm font-semibold text-blue-400 hover:text-blue-300 transition-colors"
                                                 >
@@ -1031,7 +1031,7 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                                                         ))}
                                                     </div>
                                                     <Link
-                                                        to={`/project/${project.id}`}
+                                                        to={project.link ?? `/project/${project.id}`}
                                                         onClick={() => onSelectProject(project)}
                                                         className="inline-flex items-center gap-2 text-sm font-medium text-amber-400 hover:text-amber-300 transition-colors"
                                                     >

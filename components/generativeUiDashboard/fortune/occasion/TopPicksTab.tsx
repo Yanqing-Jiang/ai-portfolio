@@ -1,66 +1,88 @@
-import React from 'react';
-import { motion } from 'framer-motion';
+/**
+ * Tab 1: Top Picks
+ * Displays the Hero card and supporting picks with progressive reveal logic.
+ */
+import React, { useMemo } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { useShallow } from 'zustand/react/shallow';
 import { useFortuneStore } from '../../stores/fortuneStore';
-import { PickCard, StreamingText, GuardrailBanner } from '../shared';
-import { FLOW_ACCENTS } from '../designTokens';
-import { staggerContainer, tabContentVariants, pickVariants } from '../animations';
-import type { OccasionPick } from '../../lib/fortuneTypes';
-
-const ACCENT = FLOW_ACCENTS['lucky-day'];
+import { staggerContainer, pickVariants } from '../animations';
+import { HeroPickCard } from '../shared/HeroPickCard';
+import { ExpandablePickCard } from './ExpandablePickCard';
+import { AgentPhaseStrip } from '../shared/AgentPhaseStrip';
+import type { OccasionPick, Citation } from '../../lib/fortuneTypes';
 
 export const TopPicksTab: React.FC<{ isReplay?: boolean }> = ({ isReplay = false }) => {
-  const { dataModel } = useFortuneStore(useShallow((s) => ({ dataModel: s.dataModel })));
+  const { dataModel } = useFortuneStore(useShallow((s) => ({
+    dataModel: s.dataModel,
+  })));
 
-  const topPicks = (dataModel?.occasion?.topPicks || []) as OccasionPick[];
-  const narrative = dataModel?.narrative;
-  const guardrail = dataModel?.guardrail;
+  const picks = (dataModel?.occasion?.topPicks || []) as OccasionPick[];
+  const isComplete = dataModel?.narrative?.isComplete ?? false;
+  const citations = (dataModel?.classics?.references || []) as Citation[];
+
+  // Identify if rank #1 is currently being computed via trace
+  const isHeroComputing = useMemo(() => {
+    if (isComplete) return false;
+    const steps = dataModel?.trace?.steps;
+    if (!steps) return false;
+    const stepsArr = Array.isArray(steps) ? steps : Object.values(steps);
+    const currentStep = stepsArr.find((s: unknown) => {
+      if (!s || typeof s !== 'object') return false;
+      const rec = s as Record<string, unknown>;
+      return rec.status === 'running';
+    }) as Record<string, unknown> | undefined;
+    return currentStep?.tool === 'compute_day_score' && picks.length === 0;
+  }, [dataModel?.trace?.steps, picks.length, isComplete]);
 
   return (
-    <motion.div
-      key="top-picks"
-      variants={tabContentVariants}
-      initial="initial"
-      animate="animate"
-      exit="exit"
-      className="space-y-5"
-    >
-      {/* Narrative TLDR */}
-      {narrative?.tldr && (
-        <StreamingText
-          text={narrative.streamingText || narrative.tldr}
-          isStreaming={!narrative.isComplete}
-          isReplay={isReplay}
-          cursorColor={ACCENT.primary}
-          className="px-1"
-        />
-      )}
+    <div className="flex flex-col gap-6 pb-24">
+      <AgentPhaseStrip
+        progress={dataModel?.meta?.progress}
+        isComplete={isComplete}
+      />
 
-      {/* Top picks */}
-      {topPicks.length > 0 ? (
-        <motion.div
-          variants={pickVariants(isReplay, staggerContainer(0.1))}
-          initial="hidden"
-          animate="visible"
-          className="space-y-3"
-        >
-          {topPicks.map((pick) => (
-            <PickCard
-              key={pick.rank}
-              pick={pick}
-              rank={pick.rank}
-              accentColor={ACCENT.primary}
-              isReplay={isReplay}
-            />
-          ))}
-        </motion.div>
-      ) : (
-        <div className="text-center py-8 text-xs text-slate-500">
-          Searching for auspicious dates...
-        </div>
-      )}
+      <motion.div
+        variants={pickVariants(isReplay, staggerContainer(0.1))}
+        initial="hidden"
+        animate="visible"
+        className="flex flex-col gap-4"
+      >
+        <AnimatePresence mode="popLayout">
+          {picks.length > 0 ? (
+            <React.Fragment key="picks-content">
+              {/* Rank 1 Hero */}
+              <HeroPickCard
+                key="hero"
+                pick={picks[0]}
+                isComputing={isHeroComputing}
+                isReplay={isReplay}
+              />
 
-      {guardrail && <GuardrailBanner guardrail={guardrail} />}
-    </motion.div>
+              {/* Ranks 2-5 */}
+              <div key="supporting" className="flex flex-col gap-3">
+                {picks.slice(1, 5).map((pick, idx) => (
+                  <ExpandablePickCard
+                    key={pick.date}
+                    pick={pick}
+                    rank={idx + 2}
+                    citations={citations}
+                    isReplay={isReplay}
+                  />
+                ))}
+              </div>
+            </React.Fragment>
+          ) : (
+            /* Skeleton State */
+            <div key="skeleton" className="flex flex-col gap-4">
+              <div className="h-64 rounded-3xl bg-white/5 animate-pulse border border-white/10" />
+              {[1, 2, 3, 4].map((i) => (
+                <div key={i} className="h-20 rounded-2xl bg-white/5 animate-pulse border border-white/10" />
+              ))}
+            </div>
+          )}
+        </AnimatePresence>
+      </motion.div>
+    </div>
   );
 };

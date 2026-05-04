@@ -8,10 +8,10 @@ import { tabContentVariants } from '../animations';
 const ACCENT = FLOW_ACCENTS['luck-cycle'];
 
 const SUGGESTIONS = [
-  'When is the best time to change jobs?',
-  'What should I watch out for in 2027?',
-  'How does this decade affect my health?',
-  'Career or wealth — what peaks first?',
+  'Which decade is my financial peak?',
+  'Should I be cautious in 2028?',
+  'How does the Wood element affect me?',
+  'Best years for career transition?',
 ];
 
 export const AskTab: React.FC = () => {
@@ -24,7 +24,17 @@ export const AskTab: React.FC = () => {
       initial="initial"
       animate="animate"
       exit="exit"
+      className="pb-20"
     >
+      <div className="px-1 mb-4">
+        <h3 className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-400">
+          Cycle Inquiry
+        </h3>
+        <p className="text-[11px] text-slate-500 leading-tight mt-1">
+          Deep dive into specific timing or life domains.
+        </p>
+      </div>
+
       <OracleChat
         messages={history.map((h) => ({ id: h.id, role: h.role, content: h.content }))}
         input={input}

@@ -20,6 +20,7 @@ import { VerdictTab } from './fortune/wish/VerdictTab';
 import { AnchorTab } from './fortune/wish/AnchorTab';
 import { WhyTab } from './fortune/wish/WhyTab';
 import { AskTab } from './fortune/wish/AskTab';
+import { ThinkingPanel } from './fortune/ThinkingPanel';
 
 interface FortuneAgentCustomWishResultProps {
     onBack?: () => void;
@@ -48,7 +49,9 @@ export const FortuneAgentCustomWishResult: React.FC<FortuneAgentCustomWishResult
         baseRoute: '/project/fortune-agent/custom-wish',
     });
 
-    const { isReplay, status, error } = session;
+    const { isReplay, status, error, dataModel, cancel, pausing } = session;
+    const thinkingStatus: 'streaming' | 'complete' =
+        status === 'complete' ? 'complete' : 'streaming';
 
     return (
         <FortuneAgentResultShell
@@ -60,6 +63,16 @@ export const FortuneAgentCustomWishResult: React.FC<FortuneAgentCustomWishResult
             onTabChange={setActiveTab}
             onBack={onBack}
         >
+            {!error && (
+                <ThinkingPanel
+                    purpose="custom-wish"
+                    dataModel={dataModel as Record<string, unknown> | null}
+                    status={thinkingStatus}
+                    onPause={cancel}
+                    paused={pausing}
+                />
+            )}
+
             {/* Error state */}
             {error && (
                 <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-4 text-center text-sm text-red-400">
@@ -81,7 +94,7 @@ export const FortuneAgentCustomWishResult: React.FC<FortuneAgentCustomWishResult
                     {activeTab === 'Verdict' && <VerdictTab isReplay={isReplay} question={question} />}
                     {activeTab === 'Anchor' && <AnchorTab isReplay={isReplay} />}
                     {activeTab === 'Why' && <WhyTab isReplay={isReplay} />}
-                    {activeTab === 'Ask' && <AskTab />}
+                    {activeTab === 'Ask' && <AskTab question={question} />}
                 </AnimatePresence>
             )}
         </FortuneAgentResultShell>

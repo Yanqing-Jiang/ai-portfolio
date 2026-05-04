@@ -1,0 +1,77 @@
+export const frontmatter = {
+  title: 'Death by 1000 Dashboards: Why Agents Will Replace BI',
+  slug: 'death-by-1000-dashboards-why-agents-will-replace-bi',
+  description:
+    'Dashboards are artifacts. Questions are living things. Why agentic analytics — narrative answers with rationale and recommended actions — beats five sources of truth.',
+  publishedAt: '2026-01-05',
+  tags: ['analytics', 'agents', 'a2ui', 'llm-eng'],
+  mediumUrl: 'https://medium.com/@yanqing_j/death-by-1000-dashboards-why-agents-will-replace-bi-c2cfde173a8e',
+  author: 'yanqing-jiang',
+  wordCount: 766,
+  readingMinutes: 4,
+  hero: {
+    src: '/blog/death-by-1000-dashboards-why-agents-will-replace-bi/img-01.png',
+    alt: '',
+  },
+};
+
+**No one wants a dashboard. But Everyone is looking an answer**
+
+<img src="/blog/death-by-1000-dashboards-why-agents-will-replace-bi/img-01.png" alt="" width="1024" height="683" loading="eager" fetchPriority="high" decoding="async" />
+
+I’ve spent years building beautiful dashboards — some with on-the-fly forecasting, others have UI that able to email within the dashboard, and a few sitting on top of terabytes of data. They are quite impressive in demos.
+
+But the pattern was constant: **stakeholders didn’t want another grid; they wanted the _decision_.**
+
+Agentic analytics flips the script from “go find the data” to “here’s what changed, why, and what to do next.” The age of dashboard spelunking is over. The future is agentic, intent-aware, and outcome-driven.
+
+## Dashboards Promised a Cockpit; We Got a Control Room
+
+Dashboards were sold as the pilot’s view — clean gauges, single truth, instant situational awareness. Reality feels like a control room with 10,000 blinking lights. You open 5 different tabs, chase conflicting numbers, and forget why you started. The medium (tiles and tables) ends up dictating the message (surface-level KPIs), and the “so what?” is buried.
+
+## The Real Problems with Dashboards
+
+_Conflicting truths, endless scavenger hunts, and cognitive overload aren’t edge cases — they’re the default._
+
+“Self-service” tools multiplied artifacts without multiplying clarity. Metrics fractured across teams. Every SaaS app shipped its own analytics. BI success got measured in _output_ (more dashboards!) instead of _outcomes_ (better decisions). Old dashboards never die, new dashboards are coming to add more noise.
+
+And of course, at the end of the day, leadership will always offer this question: **_can we consolidate these dashboard together?_**
+
+## What Changes with Agentic Workflows
+
+Agents don’t show you where to look; they _look for you_ — against governed sources and a shared semantic layer — then return a **narrative + rationale** along with numbers. Instead of “open 3 dashboards and connect the dots,” an agent clarifies intent, queries the right sources, explains _why_ the metric moved, and proposes next actions — fast.
+
+**How agentic modes work (and why they beat dashboards):**
+
+-   **Single-agent** — A tool-using analyst in a box: it selects SQL/web/chart tools, iterates, and cites its steps. Better than dashboards because it adapts to your follow-ups in the same thread.
+-   **Multi-agent** — A supervisor coordinating specialists (planner, SQL, web, chart) in parallel with a transparent “thinking diagram.” Outperforms dashboards on **depth + latency** (parallelism) while preserving explainability.
+-   **Always-on briefs** — Scheduled “what changed, why, and what next” notes with links to underlying data. Replaces dashboard refresh rituals with **push insights** tailored to each role.
+
+## Lessons from Shipping Dozens of Dashboards
+
+I’ve built a lot of “wow”:
+
+-   A time-series Power BI with on-the-fly ML forecasting _(_[https://yanqing.app/project/time-series-forecasting-pre](https://yanqing.app/project/time-series-forecasting-pre)_)_.
+-   A dashboard with print and email functions build in_(_[https://yanqing.app/project/supplier-review-system](https://yanqing.app/project/supplier-review-system)_)_.
+-   A few that build on terabytes of data _(_[https://yanqing.app/project/global-inventory-dashboard](https://yanqing.app/project/global-inventory-dashboard)_)_.
+
+Here’s the honest takeaway: **nobody wants a dashboard — everybody wants insight that drives action, time needed is yesterday.**
+
+Most analytics use cases were ad hoc, hypothesis-testing, or “prove it once.” An agent does this better: it composes the exact SQL you need, runs it, explains the _why_, and tailors the story to the role (exec, PM, analyst). It’s personalization and depth, on demand.
+
+What makes agents win:
+
+1.  **Customization:** RAG for long-term context; short-term working memory with promotion rules to long-term. **Skills.md** is trending to replace RAG, see my articles [Don’t Build Agents, Build Skill](https://medium.com/@yanqing_j/dont-build-agents-build-skill-62b97b4eae30)
+2.  **Instant analysis:** skip “dataset assembly + dashboard build”; answer in one pass with charts and narrative.
+3.  **Always-on follow-ups:** scheduled digests with “what changed, why, and what to do,” plus clickable drill prompts if you want more.
+
+## My Vision: Agentic, Story-Driven Analytics
+
+“One more dashboard” is not going to save the day, analysts already have ~100 ad-hoc analyses they need to manage (root-cause of a metric move, A/B impact, churn cohort, descriptive growth, “aha” discovery). We can encode those patterns, combine deterministic methods with generative reasoning, and ship answers in minutes — not days.
+
+In this world, a Monday login greets you with:  
+_“_**_Share fell −0.6 pp YoY_** _despite_ **_sales +2.1%_**_;_ **_Competitor B_** _cut price −5% on 7 hero ASINs, pulling basket share in_ **_Household Paper_**_. To stabilize:_ **_(1)_** _targeted coupon in the Midwest DMAs,_ **_(2)_** _match price only on 3 overlap SKUs with highest elasticity,_ **_(3)_** _shift spend to high-ROAS keywords. SQL for overlap SKUs + elasticity table, plus PRD snippet for coupon rules attached.”_
+
+Don’t believe me? Check out my Next Gen Analytics project, you’ll see how agent answer your stock ticker question base on a custom SQL server in seconds:
+
+[Next Gen Analytics Agent | SKILL.MD driven Analytics | Claude Agent SDK](https://yanqing.app/project/next-gen-analytics-agent)

@@ -16,6 +16,7 @@ import { TopPicksTab } from './fortune/occasion/TopPicksTab';
 import { CalendarTab } from './fortune/occasion/CalendarTab';
 import { WhyTab } from './fortune/occasion/WhyTab';
 import { AskTab } from './fortune/occasion/AskTab';
+import { ThinkingPanel } from './fortune/ThinkingPanel';
 
 interface FortuneAgentOccasionResultProps {
     onBack?: () => void;
@@ -39,7 +40,9 @@ export const FortuneAgentOccasionResult: React.FC<FortuneAgentOccasionResultProp
         baseRoute: '/project/fortune-agent/lucky-day',
     });
 
-    const { isReplay, status, error } = session;
+    const { isReplay, status, error, dataModel, cancel, pausing } = session;
+    const thinkingStatus: 'streaming' | 'complete' =
+        status === 'complete' ? 'complete' : 'streaming';
 
     return (
         <FortuneAgentResultShell
@@ -51,6 +54,16 @@ export const FortuneAgentOccasionResult: React.FC<FortuneAgentOccasionResultProp
             onTabChange={setActiveTab}
             onBack={onBack}
         >
+            {!error && (
+                <ThinkingPanel
+                    purpose="lucky-day"
+                    dataModel={dataModel as Record<string, unknown> | null}
+                    status={thinkingStatus}
+                    onPause={cancel}
+                    paused={pausing}
+                />
+            )}
+
             {error && (
                 <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-4 text-center text-sm text-red-400">
                     {error}

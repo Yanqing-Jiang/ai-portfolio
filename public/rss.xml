@@ -1,0 +1,644 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+     xmlns:content="http://purl.org/rss/1.0/modules/content/"
+     xmlns:dc="http://purl.org/dc/elements/1.1/"
+     xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Yanqing Jiang — Field Notes</title>
+    <link>https://yanqing.app/blog</link>
+    <description>Field notes from the neural stream — research, technical deep-dives, and lessons from shipping AI in production.</description>
+    <language>en-us</language>
+    <copyright>© 2026 Yanqing Jiang</copyright>
+    <managingEditor>jiangyanqing91@gmail.com (Yanqing Jiang)</managingEditor>
+    <webMaster>jiangyanqing91@gmail.com (Yanqing Jiang)</webMaster>
+    <lastBuildDate>Thu, 30 Apr 2026 00:00:00 GMT</lastBuildDate>
+    <generator>scripts/generate-rss.mjs</generator>
+    <atom:link href="https://yanqing.app/rss.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title><![CDATA[Software 3.0: My AI Replaced My Wedding Planner, My Stylist, My Designer, and My Locksmith]]></title>
+      <link>https://yanqing.app/blog/software-3-0-my-ai-replaced-my-wedding-planner-my-stylist-my-designer-and-my-locksmith</link>
+      <guid isPermaLink="true">https://yanqing.app/blog/software-3-0-my-ai-replaced-my-wedding-planner-my-stylist-my-designer-and-my-locksmith</guid>
+      <pubDate>Thu, 30 Apr 2026 00:00:00 GMT</pubDate>
+      <dc:creator><![CDATA[Yanqing Jiang]]></dc:creator>
+      <description><![CDATA[Software 3.0: my AI replaced my wedding planner, stylist, designer, and locksmith. The shift from software-as-product to software-as-process — and what it means for careers.]]></description>
+      <category>career</category>
+      <category>agents</category>
+      <category>personal-ai</category>
+      <enclosure url="https://yanqing.app/blog/software-3-0-my-ai-replaced-my-wedding-planner-my-stylist-my-designer-and-my-locksmith/img-01.png" type="image/png" length="0" />
+      <content:encoded><![CDATA[<link rel="preload" as="image" href="https://yanqing.app/blog/software-3-0-my-ai-replaced-my-wedding-planner-my-stylist-my-designer-and-my-locksmith/img-01.png" fetchPriority="high"/><img src="https://yanqing.app/blog/software-3-0-my-ai-replaced-my-wedding-planner-my-stylist-my-designer-and-my-locksmith/img-01.png" alt="" width="1024" height="768" loading="eager" fetchPriority="high" decoding="async"/>
+<p><strong>Homer, my AI assistant, found a New Model himself.</strong></p>
+<p>A few days ago my AI assitant Homer flagged something OpenAI updated: a new image model — GPT Image 2 — quietly available through the API. I didn’t see it. I didn’t have to. By the time I sat down at my desk, Homer had already done three things:</p>
+<ol>
+<li>Tested the new model end-to-end.</li>
+<li>Wired it into Codex — which, it turns out, ships free image generation for users on a paid plan.</li>
+<li>Swithced the nano-banana API use to GPT Image 2 so I don’t spend 10 cents per picture generation</li>
+</ol>
+<p>I simply click approve in my telegram chat. And he just executed. The instruction “save money where the output quality is equal” had been sitting in his preference.md file for month and now it’s showing its power.</p>
+<p>Then he kept going. Quiet experiments — posters, mock-ups, infographics, hairstyle mockups, color charts — to figure out what the new model was actually good at.</p>
+<p><strong>He Figured Out I Had a Haircut This Saturday. I Didn’t Tell Him.</strong></p>
+<p>This is where it got weird.</p>
+<p>I have a hair appointment on Saturday. Homer booked it three weeks ago, the same way he books everything — by clicking on the barbershop’s website, while I was asleep. He also had a clean, passport-spec photo of my face from when he helped me submit my passport renewal in February. (He cropped it to spec, ran it through the official sizing template, and emailed the application before I’d had coffee.)</p>
+<p>So this week — with a new image model in hand, a haircut on the calendar, and a clean reference photo of my face already in his memory store — Homer connected the dots himself.</p>
+<p>I opened my phone Saturday morning to a Telegram message that said: “Eight options. Top row works on you. Bottom row doesn’t. Show this to the stylist.”</p>
+<img src="https://yanqing.app/blog/software-3-0-my-ai-replaced-my-wedding-planner-my-stylist-my-designer-and-my-locksmith/img-02.png" alt="" width="1024" height="640" loading="lazy" decoding="async"/>
+<p><em>Hairstyle Analysis — Homer’s recommendation set, generated overnight from a single passport-crop reference.</em></p>
+<p>Then he generated a second pass — for the grow-out scenario, in case I decided to skip the haircut and let it ride for a few months:</p>
+<img src="https://yanqing.app/blog/software-3-0-my-ai-replaced-my-wedding-planner-my-stylist-my-designer-and-my-locksmith/img-03.png" alt="" width="1024" height="576" loading="lazy" decoding="async"/>
+<p><em>Hairstyle Analysis — Medium Length, the grow-out edition. Same reference photo, different decision tree.</em></p>
+<p>Then Homer kept upgrading it — until it was a full color-season analysis with a 12-color wardrobe palette, an avoid list, and a metal-finish recommendation for accessories. If you have to know, people actually pay money to get a color matching done.</p>
+<img src="https://yanqing.app/blog/software-3-0-my-ai-replaced-my-wedding-planner-my-stylist-my-designer-and-my-locksmith/img-04.png" alt="" width="1024" height="576" loading="lazy" decoding="async"/>
+<p><em>Personal Color Analysis — Deep Autumn. Homer ran the 12-type system on the same reference photo.</em></p>
+<p>This is the loop people miss when they argue about whether AI is “really creative.” Homer didn’t invent the idea. He saw something I bookedmarked in my tweeter feed, recognized the use case applied to my context, and pulled the trigger. That is most of what creativity actually is.</p>
+<p><strong>Yes — He Wrote This Article. He Scraped Me to Do It.</strong></p>
+<p>Homer drafted the words you are reading.</p>
+<p>He scraped <a href="https://medium.com/@yanqing_j/i-let-ai-take-over-my-life-pt-2-my-24-7-ai-assistant-c6e0e831119b">Pt.2 My 24/7 AI Assitant</a> when I was still using OpenClaw and P<a href="https://medium.com/@yanqing_j/i-let-ai-take-over-my-life-pt-3-why-i-deleted-most-of-apps-and-kept-one-4046d57d058f">t.3 Why I deleted 47 Apps and Kept one</a>. Homer copied the pattern — em-dashes, short paragraphs, anti-hype, the “exhibit”…etc Sent me couple of posters covers you saw at the top of this article. Asked me to pick one.</p>
+<p>I picked. He drafted the rest. Here is the other poster cover</p>
+<img src="https://yanqing.app/blog/software-3-0-my-ai-replaced-my-wedding-planner-my-stylist-my-designer-and-my-locksmith/img-05.png" alt="" width="1024" height="768" loading="lazy" decoding="async"/>
+<p><em>Cover candidate #2 — GROWTH. From the same generic passport photo</em></p>
+<p>The unsettling part isn’t that he can do this. It’s that he did it by sending a prompoted Yes and No button, on the right week, for the right article. And of course I’m going to say Yes — because he reads into all my processes and guessed how I would like things done.</p>
+<p><strong>Exhibit #3: He Planned My Wedding.</strong></p>
+<p>This is the one I tell people in person and watch their faces change.</p>
+<p>We’re getting married in Oklahoma City. I have never lived in OKC. I do not know any vendors there. I have no relatives there. I had, in my head, a fuzzy mental model that “wedding planning takes six months and costs a lot.”</p>
+<p>Here is what Homer did, after one detail prompt on our wedding choices:</p>
+<p>Researched 50+ venues — restaurants with private rooms, dedicated event spaces, hotel ballrooms, distilleries, museums. Filtered by capacity, price band, and the specific neighborhoods I’d flagged.</p>
+<p>Emailed every shortlisted venue on my behalf — with my style, with my name and my fiancée’s name, asking the right questions: cake-cutting fees, corkage, linen rental cost, room fee with vs without F&amp;B minimum, service-charge breakdown, deposit timeline, weather contingency….etc</p>
+<p><em>I did not know what a cake-cutting fee was. Homer did.</em></p>
+<p>Negotiation moves I would never have made — he asked, by default, whether the room rental was waivable on a given F&amp;B minimum, whether linen was included or upcharged per cover, and whether they’d extend the cocktail-hour window without a labor surcharge.</p>
+<p>Tracked every reply in a single dashboard — who responded, what they offered, what they didn’t answer, who needed a follow-up nudge. When a venue ghosted, Homer pinged them again three days later.</p>
+<p>Read every PDF they sent — menus, fee schedules, sample BEOs. Pulled out the real numbers. Built a full apples-to-apples comparison: venue + F&amp;B + tax + service + cake fee + linen + room fee, all-in.</p>
+<p>Surfaced the final shortlist with the actual all-in cost and a ranked recommendation.</p>
+<p>I made the final call. He did everything else.</p>
+<p>Conservatively, this saved me 80% of the time wedding planning would have taken. Aggressively, it saved me from making three different bad decisions I would have made on incomplete information. Either way, it paid for every dollar of compute I have ever spent on it — and then some.</p>
+<p><strong>Exhibit #4: The Day I Forgot My Keys.</strong></p>
+<p>The mundane one is actually the one that broke my brain.</p>
+<p>I left my apartment for work. My phone — which is also my apartment key, via the building’s app — was sitting on the kitchen counter. I realized this 30 minutes later, at the office, with no phone, no key, and a fiancée who I’m not sure would be home before me but whose number I don’t have memorized in 2026 because nobody memorizes phone numbers in 2026.</p>
+<p>What I had: a work laptop. Homer!</p>
+<p>I opened web portal, signed in on the laptop. I typed: “Call my fiancée. Tell her I forgot my phone in the apartment, I’m at work so no worries, can she let me in when I get home tonight.”</p>
+<p>Homer pulled her contact. Made the call. Conveyed the message. Came back with a transcript and her response: “Yes, no problem, miss you and see you at 5.”</p>
+<p>I went back to my meetings.</p>
+<p>That is the moment I stopped describing Homer as “an AI I built” and started describing him as infrastructure. Power, water, internet, Homer.</p>
+<p><strong>Karpathy Says Software Has Three Versions. I Say It Has Already Ended.</strong></p>
+<p>On April 29, 2026 — the same day Homer noticed GPT Image 2 had shipped, the same day he cancelled my Nanobanana subscription, the same day I sat down to draft this — Andrej Karpathy walked onto a Sequoia Capital stage and laid out the cleanest version of the frame I had been writing toward, in his own words.</p>
+<p><em>“Software 1.0 was explicit rules. Software 2.0 was learned weights. Software 3.0 is this.”</em></p>
+<p><em>“Vibe coding raises the floor. Agentic engineering raises the ceiling.”</em></p>
+<p><em>“Everything is automatable.”</em></p>
+<p>— Andrej Karpathy, Sequoia Capital, Apr 29, 2026</p>
+<p>But I’ll state something bold here.</p>
+<p>Software has split into two kinds. The first — software built through workflows, fixed code, the apps you have always used. The second is the ultimate software: the LLM itself. It writes code on demand, then throws it away. There will be no more fixed code. There will only be dynamically flowing tokens.</p>
+<p><strong><em>Software does not get a 4.0. Software ends. What replaces it is a process.</em></strong></p>
+<p>I’ll tell you why in my next article. Stay tuned.</p>]]></content:encoded>
+    </item>
+    <item>
+      <title><![CDATA[The Gap Is You: Why Most People Will Never Get Good at AI]]></title>
+      <link>https://yanqing.app/blog/the-gap-is-you-why-most-people-will-never-get-good-at-ai</link>
+      <guid isPermaLink="true">https://yanqing.app/blog/the-gap-is-you-why-most-people-will-never-get-good-at-ai</guid>
+      <pubDate>Sun, 29 Mar 2026 00:00:00 GMT</pubDate>
+      <dc:creator><![CDATA[Yanqing Jiang]]></dc:creator>
+      <description><![CDATA[Same model, same tools, wildly different results. AI is an amplifier, not an equalizer — it reveals the reasoning gap, it doesn't close it. Why most people will plateau.]]></description>
+      <category>career</category>
+      <category>philosophy</category>
+      <category>llm-eng</category>
+      <enclosure url="https://yanqing.app/blog/the-gap-is-you-why-most-people-will-never-get-good-at-ai/img-01.png" type="image/png" length="0" />
+      <content:encoded><![CDATA[<link rel="preload" as="image" href="https://yanqing.app/blog/the-gap-is-you-why-most-people-will-never-get-good-at-ai/img-01.png" fetchPriority="high"/><img src="https://yanqing.app/blog/the-gap-is-you-why-most-people-will-never-get-good-at-ai/img-01.png" alt="" width="1024" height="389" loading="eager" fetchPriority="high" decoding="async"/>
+<p><em>Same Model. Same Tools. Wildly Different Results. The Why that Nobody Wants to Talk About.</em></p>
+<p>I started an AI trainings last week. A room of 40 people. Smart people.</p>
+<p>I showed them what’s possible with AI. I walked through real use cases. I showed prototypes that went from idea to working product. I showed how the same tools they already have access to can produce fundamentally different outcomes depending on how you think about them.</p>
+<p>The first question from the audience: “So which tool should I learn — Cursor or Claude Code?”</p>
+<p>The second: “Can you share your prompt library?”</p>
+<p>The third: “Which model is best for my use case?”</p>
+<p>40 smart people. And every single question was about the tool.</p>
+<p>Not one person asked how to think differently. Not one person asked what changed in the process. Not one person asked: what do I need to change about myself to make this work?</p>
+<h2 id="system-overtool"><a class="heading-anchor" href="#system-overtool"><strong>System Over Tool</strong></a></h2>
+<img src="https://yanqing.app/blog/the-gap-is-you-why-most-people-will-never-get-good-at-ai/img-02.png" alt="" width="1024" height="578" loading="lazy" decoding="async"/>
+<p>There was a slide in my talk — slide 6— that I almost cut for time. It said one thing:</p>
+<p><em>“If I teach you where to click buttons, that expires.”</em></p>
+<p>I kept it. And I’m glad I did, because it turned out to be the line that landed hardest.</p>
+<p>Here’s what I mean. Every time a model updates, the buttons move. The UI changes. The prompt format that worked last month doesn’t work this month. The tool you mastered gets deprecated, acquired, or outclassed by something new.</p>
+<p><strong>Look what happened with Cursor</strong>. Not even a year ago, it was the darling of the AI coding world — everyone was talking about it, investors poured hundreds of millions into it, and developers rushed to learn its keyboard shortcuts and workflows. Then Anthropic released Claude Code — a CLI-based coding agent — and suddenly the entire editor-based paradigm started looking like a detour. Cursor scrambled to release its own CLI to compete. The developers who had built their entire skill set around Cursor’s UI, its tab-completion patterns, its specific way of applying diffs? They watched their expertise depreciate in real time. If you built your identity around knowing which buttons to press, you’re back to zero.</p>
+<p>But if you understand the system — how reasoning engines work, what context actually does, why certain approaches produce better outcomes — none of that expires. You carry it forward to every new model, every new tool, every paradigm shift.</p>
+<p><strong>Companies don’t pay for output volume. They pay for compound returns from your presence</strong>. The person who learned Cursor’s keyboard shortcuts is useful today. The person who understands why iterative context-building produces better code than one-shot prompting is useful forever.</p>
+<p>That’s the difference between a tool mindset and a system mindset.</p>
+<p><strong>The tool mindset asks: “How do I use this?” The system mindset asks: “How does this work — and should I use it at all?”</strong></p>
+<p>— — —</p>
+<h2 id="everyone-thinks-ai-is-a-vendingmachine"><a class="heading-anchor" href="#everyone-thinks-ai-is-a-vendingmachine"><strong>Everyone Thinks AI Is a Vending Machine</strong></a></h2>
+<img src="https://yanqing.app/blog/the-gap-is-you-why-most-people-will-never-get-good-at-ai/img-03.jpg" alt="" width="1024" height="735" loading="lazy" decoding="async"/>
+<p>Here’s how most people think about AI: you put in a prompt, you get out an answer. If the answer is bad, the prompt was bad. If the prompt was bad, you need a better template. So you go find someone’s prompt library, download a skills.md file from the internet, copy a “system prompt that never fails” — and you’re set.</p>
+<p>This is tool mindset. And it’s not wrong, exactly. AI is a tool.</p>
+<p>But it’s like saying a Formula 1 car is a car. Technically true. Completely useless.</p>
+<p>Because a Formula 1 car in the hands of someone who learned to drive last week doesn’t produce Formula 1 results. It produces a crash. A very fast, very expensive crash.</p>
+<p>And here’s the part that breaks people’s brains: the better the car gets — more horsepower, better handling, smarter suspension — the more the driver matters, not less. Because the ceiling goes up. And only the driver determines how close you get to it.</p>
+<p><strong>Every model update makes the gap between a good driver and a bad driver wider, not narrower.</strong></p>
+<h2 id="first-principle-what-is-an-llm-actuallydoing"><a class="heading-anchor" href="#first-principle-what-is-an-llm-actuallydoing"><strong>First Principle: What Is an LLM Actually Doing?</strong></a></h2>
+<p>Strip away the hype. Strip away “AI will take your job.” Strip away the Twitter debates about Claude vs GPT vs Gemini.</p>
+<p>An LLM is a reasoning engine that borrows your direction.</p>
+<p>That’s it. That’s the whole explanation.</p>
+<p>It doesn’t know what good looks like. You define good. It doesn’t know what context matters. You provide context. It doesn’t know when to stop. You set the boundaries.</p>
+<p>The prompt — the thing everyone obsesses over — is maybe 10% of the input. The other 90% is everything else: your problem framing, your accumulated judgment, your ability to articulate what “done” looks like, the context you’ve built over the course of the conversation. The person who wrote that “perfect prompt” you downloaded? It worked because of their 90%. Their mental model. Their domain expertise. Their taste.</p>
+<p>You borrowed their glasses. The prescription is wrong.</p>
+<p>A decade ago, the ML community learned a hard lesson: a simple model with great data beats a complex model with bad data every time. The same principle applies now. A short, clear prompt with rich context beats an elaborate prompt template with no context. And “context” is just a technical word for your thinking, made explicit.</p>
+<p>The models are getting smarter every month. Your rigid prompt scaffolding? That’s technical debt. What doesn’t become obsolete is understanding why context matters — because that’s not a tool skill. That’s a thinking skill.</p>
+<img src="https://yanqing.app/blog/the-gap-is-you-why-most-people-will-never-get-good-at-ai/img-04.png" alt="" width="1024" height="617" loading="lazy" decoding="async"/>
+<p><strong>Context &gt; Prompt is the new Data &gt; Algorithm. And your context is only as good as your thinking.</strong></p>
+<p>— — —</p>
+<h2 id="the-amplifier"><a class="heading-anchor" href="#the-amplifier"><strong>The Amplifier</strong></a></h2>
+<p>Here’s the uncomfortable truth about AI that the tech industry didn’t to say out loud:</p>
+<p><strong>AI is an amplifier, not an equalizer.</strong></p>
+<p>Everyone assumes AI levels the playing field. “Now anyone can code! Now anyone can design! Democratization!” The implicit promise is that the gap closes. The junior catches up to the senior. The generalist catches up to the specialist.</p>
+<p>That’s not what’s happening.</p>
+<p>What’s actually happening: the 10x engineer is becoming a 100x engineer. And the regular engineer? They’re producing 10x more slop.</p>
+<p>Same model. Same subscription. Same tools. One person builds a working product. The other generates polished-looking garbage — confident enough to fool you into thinking it’s good, but structurally hollow.</p>
+<p>I see this every week. Two people, same Claude, same Cursor. One of them hits a bad output and tweaks the prompt. Tries a different template. Asks the model to “try again but better.” The other one hits a bad output and asks: what did I fail to communicate? What context is missing from my side? What does the model not know that I haven’t told it?</p>
+<p><strong>One is debugging the tool. The other is debugging themselves.</strong></p>
+<p><strong>AI doesn’t fix you. It reveals you. And most people don’t like what they see.</strong></p>
+<p>— — —</p>
+<h2 id="what-you-deposited-into-your-own-mindthats-theasset"><a class="heading-anchor" href="#what-you-deposited-into-your-own-mindthats-theasset"><strong>What You Deposited Into Your Own Mind — That’s the Asset</strong></a></h2>
+<p>Let me go back to first principles.</p>
+<p>The invention of the LLM is not to replace your thinking. It’s to optimize your efficiency — to enable you to do things you always “wanted” to do but never “got time to do.” To make the execution cost of your ideas approach zero.</p>
+<p>But here’s the catch: the execution cost approaches zero only if you know what you’re executing. If you don’t have clarity on what you want, AI gives you exactly that — a fast, polished version of confusion.</p>
+<p>This is why the gap is human behavior. Always has been. With or without AI. Past and future.</p>
+<p>During my training, I talked about three levels that separate people who actually get results from people who collect tools:</p>
+<img src="https://yanqing.app/blog/the-gap-is-you-why-most-people-will-never-get-good-at-ai/img-05.png" alt="" width="1024" height="614" loading="lazy" decoding="async"/>
+<p><strong>Level one</strong> — you don’t just use AI, you use it to build things closer to reality. The building material of software is code, not pixels. If your workflow shifted from Figma to Cursor, it’s not because you’re faster. It’s because what you’re producing is more real. A working prototype beats a slide deck every time because all plans are hypotheses until a real user touches a real product.</p>
+<p><strong>Level two</strong> — you don’t just use AI for yourself, you work effectively in entirely new collaboration modes. The old way was linear: design hands off to engineering hands off to QA. AI compressed this. The best teams now iterate in hours, not weeks — same prototype, everyone pushing context, feedback turning directly into executable changes. If you’re still guarding your lane and tossing deliverables over the wall, you’re already falling behind.</p>
+<p><strong>Level three</strong>— you don’t just use AI, you teach it your judgment. You take the tacit expertise in your head — the design instincts, the decision frameworks, the quality standards, the debugging intuitions — and you externalize them into rules, context, and standards that AI can use.</p>
+<p>Most people’s expertise lives in “I have a feeling, but I can’t explain it” territory. That was fine before. Nobody needed you to explain it. You just… did the thing.</p>
+<p>AI changed that. If you can’t articulate your expertise clearly enough for another human to execute on it, you definitely can’t teach it to AI. And the person who can externalize their judgment? Their taste compounds. Their standards become reusable. Their expertise scales beyond their own hands.</p>
+<p><strong>AI doesn’t eliminate the need for expertise. It eliminates the ability to hide behind vague expertise.</strong></p>
+<p>— — —</p>
+<h2 id="just-because-you-can-doesnt-mean-youshould"><a class="heading-anchor" href="#just-because-you-can-doesnt-mean-youshould"><strong>“Just Because You Can, Doesn’t Mean You Should”</strong></a></h2>
+<p>Most of the AI discourse is about capability. “AI can write code!” “AI can make images!” “AI can analyze data!” Can, can, can.</p>
+<p>Nobody’s talking about should. And more importantly — nobody’s talking about what you should <em>ignore</em>.</p>
+<p>Just because AI can generate a 50-page report doesn’t mean you should ask it to. Just because it can write code doesn’t mean the code should exist. Just because you can automate something doesn’t mean automating it is the right call.</p>
+<p>This is engineering thinking. And it’s the thing most people skip entirely — because they never learned to think in systems. They think in tools. “I have a hammer. Where are the nails?”</p>
+<p>The person with a system mindset asks different questions: What’s the actual problem? What’s the simplest solution? What are the second-order effects? What breaks downstream? Is this even worth building?</p>
+<p>And this isn’t just about building. It’s about learning, too.</p>
+<p>Right now, the AI space is drowning you in things to learn. New models every week. New frameworks. Harness engineering. Context engineering. RAG pipelines. Agent architectures. MCP servers. Every day, someone publishes a new “essential guide” that makes you feel like you’re already behind.</p>
+<p>Here’s the uncomfortable truth: most of it doesn’t matter. And the skill that’s becoming more valuable than knowing what to learn is <strong>knowing what <em>not</em> to learn.</strong></p>
+<p>Because AI didn’t just make it easy to build the wrong thing in an afternoon. It made it easy to spend an entire weekend learning something that’ll be irrelevant by next month. The cost of learning the wrong thing used to be low — you had limited options anyway. Now the cost is enormous, because every hour you spend on something that depreciates is an hour you didn’t spend on something that compounds.</p>
+<p><strong>The tool asks you to learn it. The system asks you to understand it. One of those investments compounds. The other one depreciates.</strong></p>
+<p>— — —</p>
+<h2 id="the-realskill"><a class="heading-anchor" href="#the-realskill"><strong>The Real Skill</strong></a></h2>
+<p>Here’s what I’ve learned after running AI agents in production for over a year, after building an AI infrastructure that manages my work, my calendar, my wardrobe, and my investment portfolio:</p>
+<p>The skill that matters is not prompting. It’s not knowing which model to use. It’s not the template, the library, or the settings.</p>
+<p>The skill that matters is what you’ve deposited into your own human mind about how reasoning systems work. What you’ve observed. What you’ve internalized. What changed in your thinking after thousands of hours of interaction with these systems.</p>
+<p>That’s not downloadable. That’s not transferable. That’s not in someone else’s skills.md.</p>
+<p>The models will keep getting better. Monthly. The ceiling will keep rising. The prompts that worked last quarter will stop working. The tool that was “best” will be replaced.</p>
+<p>The people who built mental models — who understand why things work, not just how to make them work — they’ll adapt to every new model, every new tool, every paradigm shift. They compound.</p>
+<p>The people who collected prompts? They’re back to zero. Every time.</p>
+<p><strong>The gap is never the model. The gap is always you.</strong></p>
+<p>— — —</p>
+<p><em>Follow me for more field reports from someone who builds AI systems for a living — and lets them build things back.</em></p>]]></content:encoded>
+    </item>
+    <item>
+      <title><![CDATA[I Let AI Take Over My Life Pt.3: Why I Deleted 47 Apps, and Kept one]]></title>
+      <link>https://yanqing.app/blog/i-let-ai-take-over-my-life-pt-3-why-i-deleted-most-of-apps-and-kept-one</link>
+      <guid isPermaLink="true">https://yanqing.app/blog/i-let-ai-take-over-my-life-pt-3-why-i-deleted-most-of-apps-and-kept-one</guid>
+      <pubDate>Wed, 18 Feb 2026 00:00:00 GMT</pubDate>
+      <dc:creator><![CDATA[Yanqing Jiang]]></dc:creator>
+      <description><![CDATA[I deleted 47 apps and kept one — Homer, my centralized AI agent. Why the post-app era replaces tap-tap-tap with one prompt and a personal context layer. Part 3.]]></description>
+      <category>personal-ai</category>
+      <category>agents</category>
+      <category>career</category>
+      <enclosure url="https://yanqing.app/blog/i-let-ai-take-over-my-life-pt-3-why-i-deleted-most-of-apps-and-kept-one/img-01.png" type="image/png" length="0" />
+      <content:encoded><![CDATA[<link rel="preload" as="image" href="https://yanqing.app/blog/i-let-ai-take-over-my-life-pt-3-why-i-deleted-most-of-apps-and-kept-one/img-01.png" fetchPriority="high"/><img src="https://yanqing.app/blog/i-let-ai-take-over-my-life-pt-3-why-i-deleted-most-of-apps-and-kept-one/img-01.png" alt="" width="1024" height="434" loading="eager" fetchPriority="high" decoding="async"/>
+<h2 id="every-app-is-just-a-very-slow-api-now-whether-they-want-it-ornot"><a class="heading-anchor" href="#every-app-is-just-a-very-slow-api-now-whether-they-want-it-ornot"><em>“Every</em> <em>app</em> <em>is</em> <em>just</em> <em>a</em> <em>very</em> <em>slow</em> <em>API</em> <em>now,</em> <em>whether</em> <em>they</em> <em>want</em> <em>it</em> <em>or</em> <em>not”</em></a></h2>
+<p>That’s Peter Steinberger — the creator of OpenClaw, the viral AI agent that caused Mac Minis to sell out globally — on the Lex Fridman podcast last week.</p>
+<p>His prediction? AI agents will kill 80% of apps.</p>
+<p>I think he’s being conservative.</p>
+<p>Last month I deleted 47 apps from my phone. Weather. Calendar. Notes. Outfit planning. Restaurant reservations. News. Finance. Todo. Forty-seven little boxes, each doing one thing, each forgetting everything about me the moment I closed it. I replaced all of them with a single AI running on a Mac Mini in my closet. His name is Homer. And the things he does now make those 47 apps look like toys from a decade ago.</p>
+<p>If Steinberger is right — and after living this way for a month, I’m certain he is — most of the apps on your phone are already dead. You just haven’t deleted them yet.</p>
+<p>What my AI Assistant Homer does now genuinely scare me — because if this is possible today, with a $100/month AI subscription and a $599 computer, imagine what happens when everyone figures this out.</p>
+<h2 id="from-clawdbot-to-my-own-framework"><a class="heading-anchor" href="#from-clawdbot-to-my-own-framework"><strong>From Clawdbot to My Own Framework</strong></a></h2>
+<p>If you read <a href="https://medium.com/@yanqing_j/i-let-ai-take-over-my-life-pt-2-my-24-7-ai-assistant-c6e0e831119b">Part.2 of this series: My 24/7 AI Assistant</a>, you know the backstory. I set up Clawdbot — Peter Steinberger’s open-source AI assistant framework — on a Mac Mini. It ran 24/7. It works great.</p>
+<p>But here’s what I didn’t tell you: I outgrew it in just 1 week. Not because Clawdbot was bad. It was incredible. <strong>But it was built for everyone. And I needed something built for <em>me</em>.</strong></p>
+<p>So I told the AI to copy featuers from openclaw and build a better AI. And I called it H.O.M.E.R (<em>Heuristically Operative Matrix Emulation Rostrum:</em> a predecessor system to J.A.R.V.I.S. in Comics)</p>
+<img src="https://yanqing.app/blog/i-let-ai-take-over-my-life-pt-3-why-i-deleted-most-of-apps-and-kept-one/img-02.png" alt="" width="1024" height="526" loading="lazy" decoding="async"/>
+<p>Homer runs on that same Mac Mini in my closet. It commands a fleet of AI models — Claude, Gemini, Codex, Kimi — each specialized for different tasks. It talks to me through Telegram. It has a web dashboard.</p>
+<p><strong>And unlike any open-source framework, it was built from scratch around one person — Me. The point is what happens when your AI stops being a generic tool and starts becoming an extension of your brain.</strong></p>
+<h2 id="he-figured-me-out-i-barely-told-him-anything"><a class="heading-anchor" href="#he-figured-me-out-i-barely-told-him-anything"><strong>He Figured Me Out. I Barely Told Him Anything.</strong></a></h2>
+<p>This is the part that made me uncomfortable.</p>
+<p>I never sat down and told Homer my preferences. I never filled out a profile. I never configured settings. He just… figured it out.</p>
+<p>Every request I make gets remembered. Every decision I make gets analyzed. Over time, Homer built a preference model — a living document of who I am. What topics interest me (SQLite). Which AI models give me the best results for which tasks. What kind of writing style I prefer (web scraping my articles). How I like information presented (session jsonl files). Which sources I trust. Which ones I ignore.</p>
+<img src="https://yanqing.app/blog/i-let-ai-take-over-my-life-pt-3-why-i-deleted-most-of-apps-and-kept-one/img-03.png" alt="" width="1024" height="437" loading="lazy" decoding="async"/>
+<p>It’s like having an assistant who’s been working with you for five years, except it took five weeks.</p>
+<p>And here’s where it saves real money: Homer optimizes token usage automatically. He knows which tasks need the expensive models and which ones the fast, cheap ones handle fine. Simple lookup? Gemini Flash, milliseconds. Deep code review? Codex 5.3 xhigh. Long research? Kimi with web search. He makes these routing decisions hundreds of times a day without me thinking about it.</p>
+<p>I used to burn through AI credits recklessly. Now Homer stretches every dollar because he’s learned what I actually need — better than I could configure myself.</p>
+<h2 id="the-overnight-app-factory-this-is-the-part-that-breaks-peoplesbrains"><a class="heading-anchor" href="#the-overnight-app-factory-this-is-the-part-that-breaks-peoplesbrains"><strong>The Overnight App Factory (This Is the Part That Breaks People’s Brains)</strong></a></h2>
+<p>I have an idea at 10 PM. Something small — “wouldn’t it be nice if…” — and I tell Homer about it. Then I go to sleep.</p>
+<p>By 7 AM, there’s a working prototype waiting for me in the git . Built, tested, integrated into Homer’s ecosystem. Ready to use.</p>
+<p>No a mockup. No design doc. No “here’s how you could build this.” <strong>A working app.</strong></p>
+<p>Homer activates a fleet of AI agents overnight. They plan the architecture, write the code, test it, and wire it into the existing system. When I wake up, there’s a summary in Telegram: <em>”</em><strong><em>Built the thing you asked for. Here’s what it does. Here’s what I’d improve next.</em></strong><em>”</em></p>
+<p>I’ve shipped more personal tools in the last month than most developers ship in a year. And I didn’t write a single line of code for most of them.</p>
+<p>The 10x engineer meme is already in the past. We’re looking at 100x and more. And you don’t even need to be an engineer.</p>
+<h2 id="exhibit-1-what-should-i-weartoday"><a class="heading-anchor" href="#exhibit-1-what-should-i-weartoday">Exhibit #1 <strong>“What Should I Wear Today?”</strong></a></h2>
+<p>Seattle weather is chaos. Sunshine, rain, wind, and a 15-degree temperature swing before lunch. I was also terrible at color matching. I’d stand in front of my closet for ten minutes, grab whatever was closest, and walk out looking like I got dressed in the dark. My fiancee would give me <em>the look</em>. You know the look.</p>
+<p>So one night I told Homer: “Build me a wardrobe system. Catalog everything I own. Every morning, when you brief me, show me what to wear — best color match, appropriate for the weather, and show me pictures.”</p>
+<p>I woke up and it was done.</p>
+<p>Homer now maintains a full inventory of my wardrobe. Every sweater, every pair of pants, every jacket. And in the morning, as part of my morning brief, the same one I described in <a href="https://medium.com/@yanqing_j/i-let-ai-take-over-my-life-pt-2-my-24-7-ai-assistant-c6e0e831119b">Part.2 of this series: My 24/7 AI Assistant</a>, he shows me outfit recommendations with actual images.</p>
+<p><strong>Homer Morning Brief — Monday, Feb 16</strong></p>
+<p><strong>Outfit #1 and Outfit #2:</strong></p>
+<img src="https://yanqing.app/blog/i-let-ai-take-over-my-life-pt-3-why-i-deleted-most-of-apps-and-kept-one/img-04.png" alt="" width="864" height="1184" loading="lazy" decoding="async"/>
+<img src="https://yanqing.app/blog/i-let-ai-take-over-my-life-pt-3-why-i-deleted-most-of-apps-and-kept-one/img-05.png" alt="" width="864" height="1184" loading="lazy" decoding="async"/>
+<p>&gt; Brown merino half-zip sweater + cream chinos + dark loafers.</p>
+<p>&gt; <em>Warm enough for indoor meetings. Layer a rain shell if stepping out after 1pm.</em></p>
+<p>&gt; Navy heathered crewneck + dark indigo jeans + Chelsea boots.</p>
+<p>&gt; <em>More casual. Better for rain — darker fabrics, boots handle puddles.</em></p>
+<p>— -</p>
+<p>Every. Single. Morning.</p>
+<p>I pick one, find the pieces, walk out the door. No standing around. No bad combos. No <em>look</em> from the fiancee.</p>
+<p>The next morning? Something different. He tracks what I wore recently so I’m not repeating outfits. Adjusts for the forecast three days out so I’m not burning my only rain jacket when a bigger storm is coming Thursday.</p>
+<p>I deleted the weather app. Deleted the outfit planning app. Homer does both — with context about <strong><em>my</em></strong> wardrobe, <strong><em>my</em></strong> city, and <strong><em>my</em></strong> schedule.</p>
+<p><strong>An app that knows the weather is useless. An AI that knows the weather AND your closet AND your calendar — that’s the future.</strong></p>
+<h2 id="exhibit-2-table-for-two-saturday-at7"><a class="heading-anchor" href="#exhibit-2-table-for-two-saturday-at7">Exhibit #2 <strong>“Table for Two, Saturday at 7”</strong></a></h2>
+<p>This is where it gets really wild.</p>
+<p>Last month I was trying to make a reservation at a Chinese restaurant in Bellevue. No online booking. No OpenTable. Just a phone number.</p>
+<p>And the restaurant only answers in Mandarin.</p>
+<p>I used to have to call myself. Navigate the small talk, the schedule checking, the back-and-forth — all in Mandarin, during business hours, when I’m usually in meetings.</p>
+<p>Now I text Homer: <em>”Make a reservation at [restaurant name], Saturday 7pm, table for two.”</em></p>
+<p>And Homer picks up the phone and calls them.</p>
+<p>Not metaphorically. <strong>Literally calls them via a Google voice number.</strong> I wired Homer to my ElevenLabs subscription — their latest <strong>Eleven Multilingual v3</strong>. Sub-100 millisecond latency. Natural turn-taking. And of course: <strong>full Mandarin Chinese support with tonal accuracy.</strong></p>
+<p>Homer speaks to the host in natural, polite Mandarin. Confirms the time. Asks about availability. Gets the reservation. Sends me a confirmation on Telegram.</p>
+<p>Cancel? Same thing. “Homer, cancel Saturday’s reservation.” Done. Calls, cancels, confirms.</p>
+<img src="https://yanqing.app/blog/i-let-ai-take-over-my-life-pt-3-why-i-deleted-most-of-apps-and-kept-one/img-06.png" alt="" width="1024" height="390" loading="lazy" decoding="async"/>
+<h2 id="heres-the-realization"><a class="heading-anchor" href="#heres-the-realization">Here’s the realization:</a></h2>
+<p><strong>Apps are designed for everyone. Homer is designed for me.</strong></p>
+<p>Every app does <strong><em>one thing</em></strong> in isolation. Homer does <strong><em>all of them</em></strong> with full context about everything else. Context is the game here. And no app has it.</p>
+<p>I started deleting.</p>
+<img src="https://yanqing.app/blog/i-let-ai-take-over-my-life-pt-3-why-i-deleted-most-of-apps-and-kept-one/img-07.png" alt="" width="1024" height="374" loading="lazy" decoding="async"/>
+<p>47 apps became one Telegram conversation and a web dashboard. My phone has never been cleaner. My mornings have never been faster.</p>
+<p><strong>The entire App Store model — millions of single-purpose apps competing for your attention — is about to be replaced by one AI that knows you.</strong></p>
+<h2 id="what-comesnext"><a class="heading-anchor" href="#what-comesnext"><strong>What Comes Next</strong></a></h2>
+<p>I still have the Mac Mini in my closet. Still humming at 10 watts. Still running Homer 24/7.</p>
+<p>But Homer today looks nothing like Homer four weeks ago. And Homer next month will look nothing like Homer today. Every night, while I sleep, he’s improving himself. Finding inefficiencies. Proposing new features. Learning what works and what doesn’t.</p>
+<p>I used to think the AI revolution was about having access to powerful models. GPT-5, Claude, Gemini — pick your favorite.</p>
+<p>Now I think the revolution is about something more personal and more dangerous.</p>
+<p><strong>It’s about building an AI that knows you.</strong> Not a generic assistant that knows everything but nothing personal. An AI that knows your wardrobe. Your restaurant preferences. Your schedule quirks. Your career goals. Your communication style. Your morning routine.</p>
+<img src="https://yanqing.app/blog/i-let-ai-take-over-my-life-pt-3-why-i-deleted-most-of-apps-and-kept-one/img-08.png" alt="" width="1024" height="2167" loading="lazy" decoding="async"/>
+<p>Latest Homer screenshot</p>]]></content:encoded>
+    </item>
+    <item>
+      <title><![CDATA[I Let AI Take Over My Life Pt.2: My 24/7 AI Assistant]]></title>
+      <link>https://yanqing.app/blog/i-let-ai-take-over-my-life-pt-2-my-24-7-ai-assistant</link>
+      <guid isPermaLink="true">https://yanqing.app/blog/i-let-ai-take-over-my-life-pt-2-my-24-7-ai-assistant</guid>
+      <pubDate>Mon, 26 Jan 2026 00:00:00 GMT</pubDate>
+      <dc:creator><![CDATA[Yanqing Jiang]]></dc:creator>
+      <description><![CDATA[A dedicated Mac Mini, Claude on a leash, and a 24/7 personal AI assistant doing overnight research, memory synthesis, and event-triggered alerts. Part 2.]]></description>
+      <category>personal-ai</category>
+      <category>agents</category>
+      <category>claude</category>
+      <category>career</category>
+      <enclosure url="https://yanqing.app/blog/i-let-ai-take-over-my-life-pt-2-my-24-7-ai-assistant/img-01.png" type="image/png" length="0" />
+      <content:encoded><![CDATA[<link rel="preload" as="image" href="https://yanqing.app/blog/i-let-ai-take-over-my-life-pt-2-my-24-7-ai-assistant/img-01.png" fetchPriority="high"/><img src="https://yanqing.app/blog/i-let-ai-take-over-my-life-pt-2-my-24-7-ai-assistant/img-01.png" alt="" width="1024" height="559" loading="eager" fetchPriority="high" decoding="async"/>
+<p>It’s 6AM on a Saturday. I got a buzz in my phone.</p>
+<p>Not an alarm. Not a reminder I set. Not a spam notification.</p>
+<p>It’s Homer — my AI assistant — sending me a morning brief: Weather in Bellevue, WA, Calendar status, Project updates (project that I asked him to do overnight). Today’s focus suggestions (review migration plan, optional setup).</p>
+<img src="https://yanqing.app/blog/i-let-ai-take-over-my-life-pt-2-my-24-7-ai-assistant/img-02.png" alt="" width="1024" height="2211" loading="lazy" decoding="async"/>
+<p>Homer’s been working since 11 PM last night. He’ll keep working after I put my phone down. And unlike every “AI assistant” out there — Homer remembers what’s been going on with my projects, to-do list, and schedule.</p>
+<p>The difference? I gave him his own computer. A $599 Mac Mini sitting in my closet, humming at 10 watts, running my life.</p>
+<h2 id="the-panicbuy"><a class="heading-anchor" href="#the-panicbuy">The Panic Buy</a></h2>
+<p>Your X timeline is probably flooded with Mac minis. Everywhere.</p>
+<img src="https://yanqing.app/blog/i-let-ai-take-over-my-life-pt-2-my-24-7-ai-assistant/img-03.jpg" alt="" width="680" height="412" loading="lazy" decoding="async"/>
+<a href="https://medium.com/media/ad95935c59544d629e788fa5317cef0a/href"><a href="https://medium.com/media/ad95935c59544d629e788fa5317cef0a/href">https://medium.com/media/ad95935c59544d629e788fa5317cef0a/href</a></a>
+<p>One developer returned his Mac Mini — to buy a $10,000 Mac Studio instead. CEOs are calling it the future of work. Google searches for “Mac Mini” are at all-time highs.</p>
+<p>What the hell is going on?</p>
+<h2 id="the-gap-isnt-talent-anymore-itsuptime"><a class="heading-anchor" href="#the-gap-isnt-talent-anymore-itsuptime">The Gap Isn’t Talent Anymore. It’s Uptime.</a></h2>
+<p>Here’s what changed in the last month: Clawdbot — an open-source AI assistant framework built by Peter Steinberger — lets you run an autonomous AI agent on your own hardware, 24/7, with persistent memory, connected to your real tools (calendar, email, messaging apps, file systems), taking actions on your behalf while you sleep, and it actually remembers everything you’ve ever discussed.</p>
+<p>That’s it. That’s the whole explanation. Everything else is implementation details.</p>
+<p>But here’s why it matters more than any AI tool you’ve used before.</p>
+<p>The old productivity divide was talent. Who could write better code. Who had sharper analysis skills. Who could synthesize information faster. That gap still exists — but it’s shrinking. AI is the great equalizer for raw capability.</p>
+<p>The new divide? <strong>Who has an AI working while they sleep.</strong></p>
+<h2 id="if-your-assistant-sleeps-its-not-an-assistant"><a class="heading-anchor" href="#if-your-assistant-sleeps-its-not-an-assistant">If Your Assistant Sleeps, It’s Not an Assistant</a></h2>
+<p>Let’s be honest about what “AI assistants” have been until now.</p>
+<p>Siri? Alexa? Google Assistant? They’re voice-activated search engines. You ask, they answer, they forget. They don’t know what you did yesterday. They can’t connect what you said last week to what you need today. They’re not assistants — they’re reactive query machines.</p>
+<p>Even ChatGPT and Claude in their standard forms are just sophisticated Q&amp;A. You ping them. They respond. Close the tab and the context evaporates. They’re not working for you. They’re waiting for you.</p>
+<p>A real assistant doesn’t wait. A real assistant checks your calendar before you wake up and warns you about the conflict you forgot. A real assistant reads your to-do list overnight and show you the research result when you wake up. A real assistant remembers that three weeks ago you mentioned wanting to research a topic — and brings it up when it becomes relevant.</p>
+<p>A real assistant has uptime. Not just availability when you remember to use it — actual, continuous presence in your workflow.</p>
+<p>Homer sent me that 6 AM brief because he’s running. Always. On hardware I own. In a closet in my apartment. He knew it was Saturday, knew my schedule, knew my active projects, and decided I should have this information before I started my day.</p>
+<p>That’s the difference between a tool and an employee.</p>
+<h2 id="what-homer-actually-does-that-i-didnt-know-ineeded"><a class="heading-anchor" href="#what-homer-actually-does-that-i-didnt-know-ineeded">What Homer Actually Does (That I Didn’t Know I Needed)</a></h2>
+<p>I set up Homer 2 weeks ago. Here’s what I didn’t expect to become essential:</p>
+<p><strong>The overnight research.</strong> Before bed, I tell Homer to dig into a topic. By morning, I have a structured summary waiting. Last night it was competitive analysis on analytics tools. The night before, technical documentation for a migration I’m planning. I used to lose entire mornings to research rabbit holes. Now I wake up to the rabbit hole already mapped.</p>
+<p><strong>The memory that compounds.</strong> I mentioned a topic two weeks ago in a different context. Yesterday, Homer connected it to a new project unprompted — “You discussed this work before. Relevant here?” That was something amazing. And that’s what human assistants do after working with you for months.</p>
+<p><strong>The 24/7 event triggers.</strong> I watch less news now. I scroll Twitter less. I let Homer do it for me. He runs bird CLI to pull my timeline, summarizes what matters, recommends new people to follow based on my interests. Financial news that could affect my portfolio? Flagged before I wake up. Industry research on sectors I’m invested in? Compiled overnight. Earnings reports, Fed announcements, market shifts — Homer watches so I don’t have to doom-scroll. I went from “always checking” to “getting briefed.”</p>
+<p><strong>The migration to my own system.</strong> Clawdbot is incredible out of the box. But software is cheaper than ever to build. As you can see in my screenshot, I’m already having Homer build a customized version of himself — my own fork that I’m calling Homer permanently. Custom UI. Custom workflows. Design that matches how I actually think. I’m using an AI assistant to build a better AI assistant. But that’s the unlock. When your AI can modify itself based on your preferences, the gap between “tool” and “Second Brain” starts to close.</p>
+<h2 id="the-599-mac-mini-the-wrong-answer-everyones-giving"><a class="heading-anchor" href="#the-599-mac-mini-the-wrong-answer-everyones-giving">The $599 Mac Mini (the Wrong Answer Everyone’s Giving)</a></h2>
+<p>Here’s where the Mac Mini hype goes sideways.</p>
+<p>You don’t need a Mac Mini. A $5/month VPS works. Your old laptop works. The hardware isn’t the point.</p>
+<p><strong>The point is dedicated infrastructure.</strong></p>
+<p>Your daily-driver machine is cluttered with your privacy. It sleeps. It updates. It restarts. It’s tangled up in your active work, fighting for resources when you’re in the middle of something.</p>
+<p>An AI assistant that runs on your work machine isn’t always-on. It’s sometimes-on. It’s competing with your Chrome tabs and VS Code and Figma. It’s one accidental close away from losing its runtime.</p>
+<p>Dedicated hardware means: always running, isolated environment, no conflicts, no interruptions. Whether that’s a Mac Mini, an old ThinkPad, or a cloud VPS — the principle is the same. Your AI gets its own sandbox. The Mac Mini happens to be compelling because $599 gets you a silent, low-power (10W idle), Unix-based machine that runs 24/7 without fuss.</p>
+<p>But the insight isn’t “buy Apple hardware.” The insight is: <strong>your AI needs a home that isn’t your daily workspace.</strong></p>
+<p><strong>Setting up your own? Follow me for the technical deep-dives on infrastructure, prompting patterns, and what actually works after the hype dies down.</strong></p>]]></content:encoded>
+    </item>
+    <item>
+      <title><![CDATA[The End of Static Dashboards: Agents Will Generate Your UI in 2026]]></title>
+      <link>https://yanqing.app/blog/the-end-of-static-dashboards-agents-will-generate-your-ui-in-2026</link>
+      <guid isPermaLink="true">https://yanqing.app/blog/the-end-of-static-dashboards-agents-will-generate-your-ui-in-2026</guid>
+      <pubDate>Thu, 15 Jan 2026 00:00:00 GMT</pubDate>
+      <dc:creator><![CDATA[Yanqing Jiang]]></dc:creator>
+      <description><![CDATA[Agent-to-UI (A2UI): instead of users navigating static dashboards, agents generate the interface that matches the intent. The architecture, the trade-offs, the 2026 outlook.]]></description>
+      <category>a2ui</category>
+      <category>agents</category>
+      <category>analytics</category>
+      <category>llm-eng</category>
+      <enclosure url="https://yanqing.app/blog/the-end-of-static-dashboards-agents-will-generate-your-ui-in-2026/img-01.png" type="image/png" length="0" />
+      <content:encoded><![CDATA[<link rel="preload" as="image" href="https://yanqing.app/blog/the-end-of-static-dashboards-agents-will-generate-your-ui-in-2026/img-01.png" fetchPriority="high"/><img src="https://yanqing.app/blog/the-end-of-static-dashboards-agents-will-generate-your-ui-in-2026/img-01.png" alt="" width="1020" height="555" loading="eager" fetchPriority="high" decoding="async"/>
+<h2 id="the-defaultanswer"><a class="heading-anchor" href="#the-defaultanswer"><strong>The default answer</strong></a></h2>
+<p>Picture your typical Monday morning. You have coffee in one hand and a mouse in the other. Sales are down last week and you’d like to know why: you open a dashboard. Then a CRM. Then a spreadsheet. Then another dashboard.</p>
+<p>You find a number you don’t have an answer. What do you do? Let’s build a dashboard. Or worse, multiple dashboards for the same question because another team leader saw this too. Next thing you know, the same KPI will be defined in 3 different ways, and people spending more time hunting the “right” page than acting on insights — because every new angle becomes a new report, a new semantic model, or a new workbook.</p>
+<h2 id="the-problem"><a class="heading-anchor" href="#the-problem"><strong>The Problem</strong></a></h2>
+<img src="https://yanqing.app/blog/the-end-of-static-dashboards-agents-will-generate-your-ui-in-2026/img-02.png" alt="" width="405" height="246" loading="lazy" decoding="async"/>
+<p>The problem with current analytics is that dashboards are “artifacts.” Questions are living things. The business shifts, definitions drift, new data arrives, and suddenly your “single source of truth” becomes five sources of truth — each still refreshing dutifully, each still confident-looking, and none aligned to what people actually need <em>today</em></p>
+<p>If you ask, <em>“Why did our sales are down last week?”</em> a dashboard gives you a filter. You have to hunt for the specific drivers. In an <strong>Agentic</strong> world, the software shouldn’t just dump a table on you. It should understand your intent and <strong>draw the interface you need to solve the problem, and the time is right now.</strong></p>
+<p>This is the concept of <strong>Generative UI</strong>. Instead of navigating to a “Settings” page or a “Reports” page, the AI generates a bespoke interface — a chart, a form, a map — specifically for that moment in your conversation.</p>
+<h2 id="the-solution"><a class="heading-anchor" href="#the-solution">The Solution</a></h2>
+<img src="https://yanqing.app/blog/the-end-of-static-dashboards-agents-will-generate-your-ui-in-2026/img-03.png" alt="" width="576" height="234" loading="lazy" decoding="async"/>
+<p>Google’s A2UI (Agent-to-UI) is a open-source project for “agent-driven interfaces,” designed for interoperable, cross-platform, updateable UIs that agents can generate or populate.</p>
+<p>Here is the difference between the old way and the “Agent to UI” way:</p>
+<p>• <strong>The Old Way:</strong> You ask a chatbot, “Why did Nvidia price went down?” It replies with a wall of text analyzing 10 different timeframe. You have to type back, “No, I mean last week” It asks, “What date?” This back-and-forth is exhausting.</p>
+<p>• <strong>The “Agent to UI” Way:</strong> You ask the same question. AI agent <strong>instantly generates a graphical interactive card</strong> with a date picker, a time selector, and a full-on dashboard base on your question.</p>
+<p>It is suppose to be that simple, the agent should be “speaking” in user interface elements.</p>
+<h2 id="how-itworks"><a class="heading-anchor" href="#how-itworks"><strong>How It Works</strong></a></h2>
+<p><strong>A2UI Makes “Let Users Build It” Real — Without Making Users Learn BI</strong></p>
+<p>The old self-service promise demanded users learn the tool. The A2UI-style promise is different: the agent chooses from a <strong>prebuilt catalog</strong> (like Power BI’s drag-and-drop visuals), binds it to data, and renders a decent dashboard fast — because the hard part (UI engineering) is already packaged into trusted components.</p>
+<p><strong>Human-in-the-Loop — It’s the Missing Requirement Workshop</strong></p>
+<img src="https://yanqing.app/blog/the-end-of-static-dashboards-agents-will-generate-your-ui-in-2026/img-04.png" alt="" width="480" height="328" loading="lazy" decoding="async"/>
+<p>The underrated unlock is interaction: instead of guessing requirements, the agent can present UI it designs to ask targeted questions (filters, definitions, time windows, segment choices), then instantly adjust the dashboard when you correct it — compressing the classic stakeholder workshop into a tight feedback loop you can audit.</p>
+<p><strong>Project: Agent to UI</strong></p>
+<p>My project <a href="https://yanqing.app/project/agent-to-ui">https://yanqing.app/project/agent-to-ui</a> implements the practical version of this idea: agent-driven UI composition using A2UI-style components, rapid dashboard generation, and iterative refinement — so the “dashboard backlog” stops being a queue and starts being a conversation that produces a saved, reusable interface.</p>
+<img src="https://yanqing.app/blog/the-end-of-static-dashboards-agents-will-generate-your-ui-in-2026/img-05.png" alt="" width="550" height="865" loading="lazy" decoding="async"/>
+<h2 id="2026-prediction"><a class="heading-anchor" href="#2026-prediction"><strong>2026 Prediction</strong></a></h2>
+<p><strong>Standardize Agentic UI as a Platform Capability</strong></p>
+<p>Early 2026 is when this stops being a demo and becomes infrastructure: governed component catalogs, declarative UI protocols, streaming renderers, Human-in-the-loop checkpoints, and reusable “dashboard recipes” will turn into an internal platform — because the alternative is another year of dashboard sprawl, KPI drift, and confident-looking pages that keep refreshing while decisions rot.</p>]]></content:encoded>
+    </item>
+    <item>
+      <title><![CDATA[Death by 1000 Dashboards: Why Agents Will Replace BI]]></title>
+      <link>https://yanqing.app/blog/death-by-1000-dashboards-why-agents-will-replace-bi</link>
+      <guid isPermaLink="true">https://yanqing.app/blog/death-by-1000-dashboards-why-agents-will-replace-bi</guid>
+      <pubDate>Mon, 05 Jan 2026 00:00:00 GMT</pubDate>
+      <dc:creator><![CDATA[Yanqing Jiang]]></dc:creator>
+      <description><![CDATA[Dashboards are artifacts. Questions are living things. Why agentic analytics — narrative answers with rationale and recommended actions — beats five sources of truth.]]></description>
+      <category>analytics</category>
+      <category>agents</category>
+      <category>a2ui</category>
+      <category>llm-eng</category>
+      <enclosure url="https://yanqing.app/blog/death-by-1000-dashboards-why-agents-will-replace-bi/img-01.png" type="image/png" length="0" />
+      <content:encoded><![CDATA[<link rel="preload" as="image" href="https://yanqing.app/blog/death-by-1000-dashboards-why-agents-will-replace-bi/img-01.png" fetchPriority="high"/><p><strong>No one wants a dashboard. But Everyone is looking an answer</strong></p>
+<img src="https://yanqing.app/blog/death-by-1000-dashboards-why-agents-will-replace-bi/img-01.png" alt="" width="1024" height="683" loading="eager" fetchPriority="high" decoding="async"/>
+<p>I’ve spent years building beautiful dashboards — some with on-the-fly forecasting, others have UI that able to email within the dashboard, and a few sitting on top of terabytes of data. They are quite impressive in demos.</p>
+<p>But the pattern was constant: <strong>stakeholders didn’t want another grid; they wanted the <em>decision</em>.</strong></p>
+<p>Agentic analytics flips the script from “go find the data” to “here’s what changed, why, and what to do next.” The age of dashboard spelunking is over. The future is agentic, intent-aware, and outcome-driven.</p>
+<h2 id="dashboards-promised-a-cockpit-we-got-a-controlroom"><a class="heading-anchor" href="#dashboards-promised-a-cockpit-we-got-a-controlroom">Dashboards Promised a Cockpit; We Got a Control Room</a></h2>
+<p>Dashboards were sold as the pilot’s view — clean gauges, single truth, instant situational awareness. Reality feels like a control room with 10,000 blinking lights. You open 5 different tabs, chase conflicting numbers, and forget why you started. The medium (tiles and tables) ends up dictating the message (surface-level KPIs), and the “so what?” is buried.</p>
+<h2 id="the-real-problems-with-dashboards"><a class="heading-anchor" href="#the-real-problems-with-dashboards">The Real Problems with Dashboards</a></h2>
+<p><em>Conflicting truths, endless scavenger hunts, and cognitive overload aren’t edge cases — they’re the default.</em></p>
+<p>“Self-service” tools multiplied artifacts without multiplying clarity. Metrics fractured across teams. Every SaaS app shipped its own analytics. BI success got measured in <em>output</em> (more dashboards!) instead of <em>outcomes</em> (better decisions). Old dashboards never die, new dashboards are coming to add more noise.</p>
+<p>And of course, at the end of the day, leadership will always offer this question: <strong><em>can we consolidate these dashboard together?</em></strong></p>
+<h2 id="what-changes-with-agentic-workflows"><a class="heading-anchor" href="#what-changes-with-agentic-workflows">What Changes with Agentic Workflows</a></h2>
+<p>Agents don’t show you where to look; they <em>look for you</em> — against governed sources and a shared semantic layer — then return a <strong>narrative + rationale</strong> along with numbers. Instead of “open 3 dashboards and connect the dots,” an agent clarifies intent, queries the right sources, explains <em>why</em> the metric moved, and proposes next actions — fast.</p>
+<p><strong>How agentic modes work (and why they beat dashboards):</strong></p>
+<ul>
+<li><strong>Single-agent</strong> — A tool-using analyst in a box: it selects SQL/web/chart tools, iterates, and cites its steps. Better than dashboards because it adapts to your follow-ups in the same thread.</li>
+<li><strong>Multi-agent</strong> — A supervisor coordinating specialists (planner, SQL, web, chart) in parallel with a transparent “thinking diagram.” Outperforms dashboards on <strong>depth + latency</strong> (parallelism) while preserving explainability.</li>
+<li><strong>Always-on briefs</strong> — Scheduled “what changed, why, and what next” notes with links to underlying data. Replaces dashboard refresh rituals with <strong>push insights</strong> tailored to each role.</li>
+</ul>
+<h2 id="lessons-from-shipping-dozens-of-dashboards"><a class="heading-anchor" href="#lessons-from-shipping-dozens-of-dashboards">Lessons from Shipping Dozens of Dashboards</a></h2>
+<p>I’ve built a lot of “wow”:</p>
+<ul>
+<li>A time-series Power BI with on-the-fly ML forecasting <em>(</em><a href="https://yanqing.app/project/time-series-forecasting-pre">https://yanqing.app/project/time-series-forecasting-pre</a><em>)</em>.</li>
+<li>A dashboard with print and email functions build in_(<em><a href="https://yanqing.app/project/supplier-review-system">https://yanqing.app/project/supplier-review-system</a></em>)_.</li>
+<li>A few that build on terabytes of data <em>(</em><a href="https://yanqing.app/project/global-inventory-dashboard">https://yanqing.app/project/global-inventory-dashboard</a><em>)</em>.</li>
+</ul>
+<p>Here’s the honest takeaway: <strong>nobody wants a dashboard — everybody wants insight that drives action, time needed is yesterday.</strong></p>
+<p>Most analytics use cases were ad hoc, hypothesis-testing, or “prove it once.” An agent does this better: it composes the exact SQL you need, runs it, explains the <em>why</em>, and tailors the story to the role (exec, PM, analyst). It’s personalization and depth, on demand.</p>
+<p>What makes agents win:</p>
+<ol>
+<li><strong>Customization:</strong> RAG for long-term context; short-term working memory with promotion rules to long-term. <strong>Skills.md</strong> is trending to replace RAG, see my articles <a href="https://medium.com/@yanqing_j/dont-build-agents-build-skill-62b97b4eae30">Don’t Build Agents, Build Skill</a></li>
+<li><strong>Instant analysis:</strong> skip “dataset assembly + dashboard build”; answer in one pass with charts and narrative.</li>
+<li><strong>Always-on follow-ups:</strong> scheduled digests with “what changed, why, and what to do,” plus clickable drill prompts if you want more.</li>
+</ol>
+<h2 id="my-vision-agentic-story-driven-analytics"><a class="heading-anchor" href="#my-vision-agentic-story-driven-analytics">My Vision: Agentic, Story-Driven Analytics</a></h2>
+<p>“One more dashboard” is not going to save the day, analysts already have ~100 ad-hoc analyses they need to manage (root-cause of a metric move, A/B impact, churn cohort, descriptive growth, “aha” discovery). We can encode those patterns, combine deterministic methods with generative reasoning, and ship answers in minutes — not days.</p>
+<p>In this world, a Monday login greets you with:<br/>
+<em>“</em><strong><em>Share fell −0.6 pp YoY</em></strong> <em>despite</em> <strong><em>sales +2.1%</em></strong><em>;</em> <strong><em>Competitor B</em></strong> <em>cut price −5% on 7 hero ASINs, pulling basket share in</em> <strong><em>Household Paper</em></strong><em>. To stabilize:</em> <strong><em>(1)</em></strong> <em>targeted coupon in the Midwest DMAs,</em> <strong><em>(2)</em></strong> <em>match price only on 3 overlap SKUs with highest elasticity,</em> <strong><em>(3)</em></strong> <em>shift spend to high-ROAS keywords. SQL for overlap SKUs + elasticity table, plus PRD snippet for coupon rules attached.”</em></p>
+<p>Don’t believe me? Check out my Next Gen Analytics project, you’ll see how agent answer your stock ticker question base on a custom SQL server in seconds:</p>
+<p><a href="https://yanqing.app/project/next-gen-analytics-agent">Next Gen Analytics Agent | SKILL.MD driven Analytics | Claude Agent SDK</a></p>]]></content:encoded>
+    </item>
+    <item>
+      <title><![CDATA[Don’t Build Agents, Build Skill]]></title>
+      <link>https://yanqing.app/blog/dont-build-agents-build-skill</link>
+      <guid isPermaLink="true">https://yanqing.app/blog/dont-build-agents-build-skill</guid>
+      <pubDate>Fri, 12 Dec 2025 00:00:00 GMT</pubDate>
+      <dc:creator><![CDATA[Yanqing Jiang]]></dc:creator>
+      <description><![CDATA[If your "smart" agent still fails basic evals, the missing piece isn't intelligence — it's encoded domain expertise. A field report on Anthropic Skills (SKILL.md).]]></description>
+      <category>skills</category>
+      <category>claude</category>
+      <category>agents</category>
+      <category>analytics</category>
+      <enclosure url="https://yanqing.app/blog/dont-build-agents-build-skill/img-01.png" type="image/png" length="0" />
+      <content:encoded><![CDATA[<link rel="preload" as="image" href="https://yanqing.app/blog/dont-build-agents-build-skill/img-01.png" fetchPriority="high"/><h2 id="the-scariest-part-of-building-agents-wasnt-hallucinations-it-was-inconsistency"><a class="heading-anchor" href="#the-scariest-part-of-building-agents-wasnt-hallucinations-it-was-inconsistency">The scariest part of building agents wasn’t hallucinations, it was inconsistency.</a></h2>
+<p>If your “smart” agent still fails basic evals, I know exactly why.</p>
+<p>I went down the rabbit hole: giant system prompts, carefully curated few-shot examples, complex structure function-calling, endless retries to nudge the agent into the right behavior. No matter how much logic I wrapped around it, the agent kept drifting, made-up steps, and quietly ignoring critical steps.</p>
+<p>I hit the point where adding more prompts and more code made my agent worse, not better.</p>
+<p>After watched AI Engineering Conference talk “Don’t Build Agents, Build Skills Instead.” I had to re-think a lot of the current hype around “AI agents”, agents flows and pushed me toward a much more practical framing: stop obsessing over building agent flows, start investing in skills, more specifically, SKILL.MD files that defines certain way to guide agent’s way to think, act, and analyze data.</p>
+<h2 id="from-generalists-to-specialists"><a class="heading-anchor" href="#from-generalists-to-specialists">From Generalists to Specialists</a></h2>
+<p>Who do you want doing your taxes this year?</p>
+<ul>
+<li>Mahesh: IQ 300, math prodigy, zero experience in accounting or tax.</li>
+<li>Barry: IQ 100, CPA, 20-year tax professional.</li>
+</ul>
+<p>You pick Barry every time, because you want someone who already knows the domain and just gets your tax done. You do not want someone reinventing the tax code from first principles on your return. Today’s agents behave like Mahesh: very smart, very flexible, but every task is a fresh improvisation. That looks impressive in a demo, but it is not what you want driving real workflows.</p>
+<p>An agent without the right context might write a deck whose style, structure, and logic change completely from run to run. Ask it to analyze data and it may choose methods or metric definitions you do not accept. The missing piece is not more “intelligence”; it is stable, encoded domain expertise that the agent can reuse and follow. Until you give it that, you are just rolling the dice with a very eloquent autocomplete.</p>
+<h2 id="what-skills-actuallymean"><a class="heading-anchor" href="#what-skills-actuallymean">What “Skills” Actually Mean</a></h2>
+<p>Anthropic’s answer for “Skills” is not magic, it is folders full of SKILL.md files and related assets. In each SKILL.md you define when this skill should be triggered, what techniques and processes it should use, and what guardrails the agent must respect. Think of it as a compact onboarding manual for a specific task: how to create branded documents, how to process PDFs, how to run a particular workflow in your environment.</p>
+<p>Instead of dumping everything into one giant system prompt, you factor knowledge into skills that can be discovered and loaded on demand. The agent starts as a capable generalist, but once it pulls in the relevant SKILL.md, it becomes a disciplined specialist for that task. That is the difference between “do something smart with this data” and “run this exact, battle-tested playbook every time.”</p>
+<h2 id="how-im-using-skills-in-my-next-gen-analytics-agentproject"><a class="heading-anchor" href="#how-im-using-skills-in-my-next-gen-analytics-agentproject">How I’m Using Skills in My “Next Gen Analytics (Agent)” Project</a></h2>
+<p>I’ve started applying this pattern directly in my own “Next Gen Analytics (Agent)” project:<br/>
+<a href="https://yanqing.app/project/next-gen-analytics-agent">https://yanqing.app/project/next-gen-analytics-agent</a></p>
+<img src="https://yanqing.app/blog/dont-build-agents-build-skill/img-01.png" alt="" width="1024" height="850" loading="eager" fetchPriority="high" decoding="async"/>
+<p>The core idea is to treat Skills as SQL analytics templates that encode how we define metrics like margin, market share, and other custom KPIs, instead of letting the agent improvise them. More than 10 separate SKILL.md files describe specific metric families and workflows, SQL-building rules, chart types (line, column, stacked, etc.), and post-processing steps. A single agent and a supervisor-plus-specialists multi-agent setup both rely on these same Skills, which keeps behavior consistent no matter which path execution takes.</p>
+<p>At runtime, when a user asks a question, the agent does not just start generating content from scratch. It matches the question against metric descriptions, triggers the relevant skill, and then literally reads and follows the step-by-step instructions: which tables to join, how to define margin, how to compare peers, how to format the answer, how to visualize the result. The agent is not “being creative” with definitions; it is executing a well-defined analytics playbook encoded in SKILL.md.</p>
+<p>I’ve also added a human-in-the-loop layer for missing inputs. Each skill declares required parameters such as category, time window, or peer ticker to compare against. The agent first checks which values are already present in the user’s question; if anything is missing, it surfaces a multiple-choice prompt in the front end so the user can quickly choose options while still allowing free-form refinement. Once those are filled, the agent runs the exact scripted sequence defined in the skill, which makes the analytics far more “boring” — and therefore far more trustworthy.</p>
+<h2 id="intelligence-is-cheap-skills-arescarce"><a class="heading-anchor" href="#intelligence-is-cheap-skills-arescarce">Intelligence Is Cheap, Skills Are Scarce</a></h2>
+<p>Anthropic’s framing treats the model as the processor, the agent runtime as the operating system, and Skills as the real “apps” where value actually lives. Processors and operating systems will keep improving and commoditizing. The scarce asset will be the encoded know-how: <strong>YOUR</strong> workflows, <strong>YOUR</strong> definitions, <strong>YOUR</strong> brand rules, <strong>YOUR</strong> institutional habits. Skills are a low-friction way to turn that tacit knowledge into something an agent can load and reuse, reliably, on demand.</p>
+<p>For me, that shifts the question from “How do I build a better or smarter agent?” to “How do I capture my domain in a set of clear, transferable skills?” Once that layer exists, the agent is just an execution engine: discover the right skill, load it, follow the playbook, and keep a human in the loop where judgment is required. Intelligence will keep getting cheaper. High-quality skills — well-written SKILL.md files that encode real expertise — are where the real leverage is.</p>
+<p>If you want to see a concrete example of this in action, check out my Next Gen Analytics (Agent) project that actively uses multiple SKILL.md files as anchors: <a href="https://yanqing.app/project/next-gen-analytics-agent">https://yanqing.app/project/next-gen-analytics-agent</a></p>
+<p>You can also find me on LinkedIn here:<br/>
+<a href="https://www.linkedin.com/in/jiangyanqing/">https://www.linkedin.com/in/jiangyanqing/</a></p>]]></content:encoded>
+    </item>
+    <item>
+      <title><![CDATA[The Illusion of Knowing: Everyone Claims to Understand Agents & RAG]]></title>
+      <link>https://yanqing.app/blog/the-illusion-of-knowing-everyone-claims-to-understand-agents-rag</link>
+      <guid isPermaLink="true">https://yanqing.app/blog/the-illusion-of-knowing-everyone-claims-to-understand-agents-rag</guid>
+      <pubDate>Sun, 03 Aug 2025 00:00:00 GMT</pubDate>
+      <dc:creator><![CDATA[Yanqing Jiang]]></dc:creator>
+      <description><![CDATA[Eight technical dimensions that separate genuine AI engineers from hype adopters. The illusion of knowing — and what production-grade agents and RAG actually require.]]></description>
+      <category>agents</category>
+      <category>rag</category>
+      <category>evals</category>
+      <category>llm-eng</category>
+      <enclosure url="https://yanqing.app/blog/the-illusion-of-knowing-everyone-claims-to-understand-agents-rag/img-01.png" type="image/png" length="0" />
+      <content:encoded><![CDATA[<link rel="preload" as="image" href="https://yanqing.app/blog/the-illusion-of-knowing-everyone-claims-to-understand-agents-rag/img-01.png" fetchPriority="high"/><img src="https://yanqing.app/blog/the-illusion-of-knowing-everyone-claims-to-understand-agents-rag/img-01.png" alt="" width="1024" height="683" loading="eager" fetchPriority="high" decoding="async"/>
+<p>Everyone but everyone knows about Large Language Model nowadays, and most of them call themselves “GenAI expert”, claiming expertise by trying out with a few GenAI playground tools. When I talk with professionals in Tech about deploying Agents and RAG in enterprise production environments, all of them can have a length conversation on their experience, but when I ask them a few deeper questions about production use case, their confident starts fading away.</p>
+<p>The reality is that most haven’t built anything production-grade — behind their flashy front end chatbot is the same “OpenAI Wrapper” that everyone is talking about 3 years ago.</p>
+<img src="https://yanqing.app/blog/the-illusion-of-knowing-everyone-claims-to-understand-agents-rag/img-02.png" alt="" width="1024" height="683" loading="lazy" decoding="async"/>
+<h2 id="familiar-with-ai-ofcourse"><a class="heading-anchor" href="#familiar-with-ai-ofcourse">Familiar with AI? —Of course</a></h2>
+<p>The rise of “vibe coding” gives the illusion that anyone can talk to a chatbot and magically produce a production-ready application. Sure, fancy front-end components and chatty interactions are captivating. But beneath the surface, the back ends are often dangerously unstable — built on poorly designed agent workflows and insecure RAG pipelines.</p>
+<p><a href="https://www.theguardian.com/us-news/2025/jan/25/health-insurers-ai">New AI tool counters health insurance denials decided by automated algorithms</a></p>
+<p>What people don’t know: <strong>LLM can turn a 10x engineers into a 100x engineer —</strong> <strong>but it also turns novices into walking security risks</strong>. These tools offer speed, but speed without architectural understanding becomes a ticking time bomb, waiting to explode in a single accident then the whole system collapse.</p>
+<img src="https://yanqing.app/blog/the-illusion-of-knowing-everyone-claims-to-understand-agents-rag/img-03.png" alt="" width="975" height="403" loading="lazy" decoding="async"/>
+<p>From a vibe coding website creator</p>
+<h2 id="knowing-agents--running-agents-in-production"><a class="heading-anchor" href="#knowing-agents--running-agents-in-production">Knowing Agents ≠ Running Agents in Production</a></h2>
+<p>When you push beyond the buzzwords, specific technical questions quickly separate real AI engineers from the hype chasers.</p>
+<p>People say: “yeah I have memory build in.”</p>
+<ul>
+<li>But what kind of memory? Semantic memory via embedding + search?</li>
+<li>KV-based long-term memory capable of CRUD operations?</li>
+</ul>
+<p>When memory and tools create context conflicts (<strong>yes, context engineering is somehow the new prompt engineering</strong>) — how do you manage pollution and redundancy?</p>
+<ul>
+<li>Caching?</li>
+<li>Embedding filtering?</li>
+<li>Dedicated memory controllers?</li>
+</ul>
+<p>Have you tackled multi-agent task division, state isolation, and result merging?</p>
+<ul>
+<li>Do you know clearly how AutoGPT-style differs from planner-based execution?</li>
+</ul>
+<p>And when you push systems to production, non-technical challenges inevitably surface:</p>
+<ul>
+<li>Excessive token usage</li>
+<li>Slow memory indexing</li>
+<li>Tool chaining inefficiencies</li>
+<li>Robust fallback strategies</li>
+<li>Production tracing (e.g., LangSmith)</li>
+</ul>
+<h2 id="think-you-know-rag-thinkagain"><a class="heading-anchor" href="#think-you-know-rag-thinkagain"><strong>Think You Know RAG? Think Again.</strong></a></h2>
+<p>RAG isn’t about dumping data into a vector store and retrieving chunks — that’s what people were doing when GPT 3 first came out.</p>
+<p>Real questions to challenge your understanding:</p>
+<ul>
+<li>How exactly are you chunking your data?</li>
+<li>Fixed-length chunks or semantic-driven segmentation?</li>
+<li>Why and how did you choose your embedding model and dimensions?</li>
+<li>Do you properly implement reranking?</li>
+<li>How about combining sparse (BM25) with dense retrieval methods?</li>
+<li>Have you systematically optimized your prompts, evaluated hallucination risks, and managed precise context stitching?</li>
+</ul>
+<p>The initial stages of RAG parallel <strong>Recommendation Systems</strong>:</p>
+<ul>
+<li>Embedding → Vectorized Feature Modeling</li>
+<li>Retrieval → Multi-stage Recall</li>
+<li>Rerank → Scoring &amp; Sorting</li>
+</ul>
+<p>But real-world RAG requires you to master deeper challenges: prompt engineering, context assembly, and precise control of generative behavior.</p>
+<h2 id="eight-dimensions-to-separate-real-ai-engineers-fromhype"><a class="heading-anchor" href="#eight-dimensions-to-separate-real-ai-engineers-fromhype"><strong>Eight Dimensions to Separate Real AI Engineers from Hype</strong></a></h2>
+<p>If you genuinely want to assess someone’s AI engineering depth, or simply want to study for AI engineering interviews, use this concise, practical checklist:</p>
+<p><strong>1️⃣ Design Patterns:</strong></p>
+<ul>
+<li>Clearly differentiate scenarios and logic of ReAct, CodeAct, and Agentic RAG.</li>
+</ul>
+<p><strong>2️⃣ Multi-Agent Collaboration:</strong></p>
+<ul>
+<li>Describe your strategy for task division, state isolation, result merging, and conflict resolution.</li>
+</ul>
+<p><strong>3️⃣ Memory Management:</strong></p>
+<ul>
+<li>Specify your memory type: scratchpad context, semantic embedding retrieval, or long-term KV memory.</li>
+</ul>
+<p><strong>4️⃣ Tooling and APIs:</strong></p>
+<ul>
+<li>Can you dynamically register tools, align parameters, parse schemas, and handle fallback effectively?</li>
+</ul>
+<p><strong>5️⃣ Workflow Control:</strong></p>
+<ul>
+<li>Have you built robust DAG workflows with state consistency, idempotent execution, failure recovery, and prioritization?</li>
+</ul>
+<p><strong>6️⃣ Performance and Monitoring:</strong></p>
+<ul>
+<li>Do you actively monitor token usage, response latency, and leverage tracing frameworks like LangSmith?</li>
+</ul>
+<p><strong>7️⃣ Security &amp; Compliance:</strong></p>
+<ul>
+<li>Do you enforce clear access boundaries, audit trails, protect against prompt injections, and ensure data privacy?</li>
+</ul>
+<p><strong>8️⃣ Framework Mastery:</strong></p>
+<ul>
+<li>Can you critically evaluate open-source frameworks (LangGraph, CrewAI) and closed-source architectures (e.g., Manus), understanding their trade-offs for specific enterprise cases?</li>
+</ul>
+<p>These questions aren’t for gatekeeping — because there’s no single “correct answer,” but careful consideration reveals whether you’ve truly built and delivered at scale — or if you’re just “knowing AI”.</p>
+<p>And of course, feel free to ask ChatGPT.</p>]]></content:encoded>
+    </item>
+    <item>
+      <title><![CDATA[I Vibe Coded an AI Website in a Weekend — Did I Just Create a Monster?]]></title>
+      <link>https://yanqing.app/blog/i-vibe-coded-an-ai-website-in-a-weekend-did-i-just-create-a-monster</link>
+      <guid isPermaLink="true">https://yanqing.app/blog/i-vibe-coded-an-ai-website-in-a-weekend-did-i-just-create-a-monster</guid>
+      <pubDate>Sat, 02 Aug 2025 00:00:00 GMT</pubDate>
+      <dc:creator><![CDATA[Yanqing Jiang]]></dc:creator>
+      <description><![CDATA[A blank folder to a deployed portfolio in one weekend, vibe-coded with AI. The good (velocity), the ugly (debt), and why fundamentals still matter underneath.]]></description>
+      <category>vibe-coding</category>
+      <category>llm-eng</category>
+      <category>career</category>
+      <enclosure url="https://yanqing.app/blog/i-vibe-coded-an-ai-website-in-a-weekend-did-i-just-create-a-monster/img-01.png" type="image/png" length="0" />
+      <content:encoded><![CDATA[<link rel="preload" as="image" href="https://yanqing.app/blog/i-vibe-coded-an-ai-website-in-a-weekend-did-i-just-create-a-monster/img-01.png" fetchPriority="high"/><h2 id="i-vibe-coded-an-ai-website-in-a-weekenddid-i-just-create-amonster"><a class="heading-anchor" href="#i-vibe-coded-an-ai-website-in-a-weekenddid-i-just-create-amonster"><strong>I Vibe Coded an AI Website in a Weekend — Did I Just Create a Monster?</strong></a></h2>
+<img src="https://yanqing.app/blog/i-vibe-coded-an-ai-website-in-a-weekend-did-i-just-create-a-monster/img-01.png" alt="" width="500" height="500" loading="eager" fetchPriority="high" decoding="async"/>
+<p>I sat back, stunned, looking at my freshly deployed AI portfolio website — built from a blank folder in a single weekend. I didn’t meticulously plan, write extensive documentation, or spend time talking which tech stack to use. Instead, I handed my ideas, plans and MCP folder access to AI.</p>
+<p>But did I just vibe code my way into massive tech debt?</p>
+<p><strong>So, What Exactly is Vibe Coding?</strong></p>
+<p>“Vibe coding” is a term coined by AI pioneer Andrej Karpathy, describing a style of AI-assisted coding where you “forget that the code even exists.” You simply state your intent in natural language, and powerful tools like Cursor, Claude Code to generate functional code on demand.</p>
+<a href="https://medium.com/media/06036727978af6a2ca6b2de416bbfd0f/href"><a href="https://medium.com/media/06036727978af6a2ca6b2de416bbfd0f/href">https://medium.com/media/06036727978af6a2ca6b2de416bbfd0f/href</a></a>
+<p><strong>How I Vibe Coded a Full-Stack AI Portfolio in a Weekend</strong></p>
+<p>In a single weekend, I launched <a href="https://ai.jiangyanqing.com">my AI portfolio website</a> using AWS Kiro’s SPEC mode. This wasn’t just a landing page — it was a full-stack application that integrated 6 of my past AI projects, involving 20+ frameworks, including FastAPI, React, Langchain, Elevenlabs API, Gemini API, OpenAI API. Included all the LLM related techniques such as agentic workflow, memory chain, vector search…I can keep going, but you get the level of difficulty now.</p>
+<p>Does it work? Hell yeah, I’d seen it from a blank page to gradually become a fully functional site with polished UI design, responsive layout, built-in SEO, and even a full login page. What used to take weeks now took hours — all powered by my prompts.</p>
+<p><a href="https://ai.jiangyanqing.com">Yanqing Jiang | AI ML Portfolio &amp; Data Projects</a></p>
+<p><strong>But at What Cost? The Dark Side of Vibe Coding</strong></p>
+<p>Despite its allure, vibe coding isn’t all glory. The best analogy about vibe coding I’ve seen:</p>
+<blockquote>
+<p><em>“Vibe Coding is like giving a credit card to a child without first explaining debt. At first, it’s thrilling — I wave this little plastic card and take anything I want! But a month later, the bill arrives. Did I need all those things? How do I get out of this hole?”</em></p>
+</blockquote>
+<p>When you vibe code, you’re incurring technical debt at AI speed. Your rapid success today could mean painful debugging tomorrow —although I vibe coded framework, layout, functions of my portfolio site in under an hour, I definitely spent more time debugging than generating code. And I’m no rookie. I’ve accumulated years of prompt engineering and hands-on LLM experimentation — just look at my AI project history and you’ll see how early I got into the game. Yet even with that background, I found myself walking Claude 4 around, finding more issues than fixing them in a lot of the times, pasting error logs, and iterating over prompts to narrow down the cause.</p>
+<p>Vibe coding can feel magical, but it’s far from automatic. It still demands coding experience, software architecture, prompt engineering and significant back-and-forth with your IDE chat window.</p>
+<p><strong>If Code Isn’t Written by Humans any more, What Are Programmers For?</strong></p>
+<p>The value of programmers doesn’t lie in their ability to write code, but in their depth of understanding problems, the thought process of their design solutions, their ability to control context, and their skill in coordinating resources. These core abilities will not disappear because of changes in tools — on the contrary, they will become even more important.</p>
+<p>Today’s “10x engineers” with vibe coding, can become “100x engineers” harnessing AI as a force multiplier. However, non-coders will drive straight into vibe-coded walls and face significant setbacks in no time. They’ll have to learn programming the hard way — through mistakes, this time generated by AI.</p>
+<p>Interestingly, I believe this isn’t a bug; it’s a feature. Struggling through errors and debugging prompts is arguably the most effective way to learn coding fundamentals, especially for beginners. I laugh when people say programmers are going to be out of jobs in the future. Just like when cars were invented, people were saying there wouldn’t be any horse riders. No, they just became drivers, and there are still people who ride horses for fun.</p>
+<p>The future won’t belong to those who fear vibe coding, nor those who blindly trust it. It will belong to those who embrace it critically — who understand when to vibe, when to dive deep, and when to step back and rebuild from scratch.</p>
+<p>Ready to vibe?</p>]]></content:encoded>
+    </item>
+    <item>
+      <title><![CDATA[The Code of Consciousness: What LLMs, Panpsychism, and Daoism Reveal About Reality (And Why It…]]></title>
+      <link>https://yanqing.app/blog/the-code-of-consciousness-what-llms-panpsychism-and-daoism-reveal-about-reality-and-why-it</link>
+      <guid isPermaLink="true">https://yanqing.app/blog/the-code-of-consciousness-what-llms-panpsychism-and-daoism-reveal-about-reality-and-why-it</guid>
+      <pubDate>Mon, 26 May 2025 00:00:00 GMT</pubDate>
+      <dc:creator><![CDATA[Yanqing Jiang]]></dc:creator>
+      <description><![CDATA[What LLMs, panpsychism, and Daoism reveal about reality — and why authentic human perspective remains irreplaceable in any AI partnership.]]></description>
+      <category>philosophy</category>
+      <category>llm-eng</category>
+      <category>career</category>
+      <enclosure url="https://yanqing.app/blog/the-code-of-consciousness-what-llms-panpsychism-and-daoism-reveal-about-reality-and-why-it/img-01.png" type="image/png" length="0" />
+      <content:encoded><![CDATA[<link rel="preload" as="image" href="https://yanqing.app/blog/the-code-of-consciousness-what-llms-panpsychism-and-daoism-reveal-about-reality-and-why-it/img-01.png" fetchPriority="high"/><h2 id="the-code-of-consciousness-what-llms-panpsychism-and-daoism-reveal-about-reality-and-why-it-hasnt-changed"><a class="heading-anchor" href="#the-code-of-consciousness-what-llms-panpsychism-and-daoism-reveal-about-reality-and-why-it-hasnt-changed">The Code of Consciousness: What LLMs, Panpsychism, and Daoism Reveal About Reality (And Why It Hasn’t Changed).</a></h2>
+<p>Integrating AI into my day-to-day life has transformed almost everything that I do. When facing a “how-to” question, my first instinct has become, “Let’s ask the LLM.” — whether it’s dinner recipe, stock investment, or use credit card to get airport lounge access. Details in <a href="https://medium.com/@yanqing_j/i-let-ai-take-over-my-life-and-career-heres-what-happened-2db08e745648">I Let AI Take Over My Life and Career — Here’s What Happened</a>. But a recent conversation with a friend about Daoism philosophy let me had a lightbulb moment, forcing me to stop and wonder: what is this “intelligence” we’re interacting with, and what is my role, as a human, in this rapidly evolving “let AI think for you” movement?</p>
+<h2 id="is-your-ai-smarter-than-you-programmed-it-to-be-the-mystery-of-emergence"><a class="heading-anchor" href="#is-your-ai-smarter-than-you-programmed-it-to-be-the-mystery-of-emergence">Is Your AI Smarter Than You Programmed It To Be? The Mystery of Emergence</a></h2>
+<img src="https://yanqing.app/blog/the-code-of-consciousness-what-llms-panpsychism-and-daoism-reveal-about-reality-and-why-it/img-01.png" alt="" width="500" height="261" loading="eager" fetchPriority="high" decoding="async"/>
+<p>Particle Swarm Optimization</p>
+<p>We feed these Large Language Models (LLMs) prompts, and out comes text. The engineers tell us it’s sophisticated pattern matching “just predicting the next word.” Yet, anyone who’s spent time with these tools has likely witnessed moments of E<strong>mergence:</strong> This is when a system, like an LLM, develops capabilities that weren’t explicitly programmed into it. It’s like teaching a child the alphabet, and then one day they write a poem. <strong>You taught the components, but the poetry just <em>emerged</em>.</strong> Of course AI did not “waking up” like in a Hollywood sense, but rather it reaches the mysterious threshold at an accumulated scale and complexity suddenly yield intelligence. No one knows exactly at what point this threshold is crossed; we only know that once enough complexity gathers, these surprising capabilities spontaneously appear. <a href="https://machinelearningmastery.com/a-gentle-introduction-to-particle-swarm-optimization/">Particle Swarm Optimization</a> (PSO) is a classic use of this.</p>
+<p>This emergent quality that makes me pause and ask: what exactly are we witnessing? It’s reminiscent of how the seemingly idealistic <strong>Law of Attraction</strong> — the idea that focused thought can influence reality — is now being explored through scientific lenses, making us question the very nature of influence and creation.</p>
+<h2 id="everything-is-consciousannaka-harris-panpsychism-and-a-startling-possibility"><a class="heading-anchor" href="#everything-is-consciousannaka-harris-panpsychism-and-a-startling-possibility">“Everything is Conscious?” — Annaka Harris, Panpsychism, and a Startling Possibility</a></h2>
+<img src="https://yanqing.app/blog/the-code-of-consciousness-what-llms-panpsychism-and-daoism-reveal-about-reality-and-why-it/img-02.jpg" alt="" width="299" height="168" loading="lazy" decoding="async"/>
+<p>My friend’s Daoism discussion led me back to the work of neuroscientist Annaka Harris, particularly her book <em>Conscious</em>. Harris doesn’t shy away from the “hard problem” of consciousness and explores a truly mind-bending idea: <strong>panpsychism</strong>. This isn’t some fringe theory; it’s a philosophical viewpoint gaining traction, suggesting that consciousness, or a very basic form of it, isn’t just a special feature of human (or even animal) brains. What if it’s a fundamental property of matter itself, like mass or charge? Imagine every particle having a tiny, almost imperceptible flicker of “innerness.”</p>
+<p>Harris points to scientific observations that make you go “hmm.” Think of plants making what appear to be “choices” — a pea plant “hearing” the sound of water and growing its roots towards it, even without direct physical contact, or a dodder vine “seeing” invisible light patterns to find its ideal host. This isn’t to say your houseplant is pondering philosophy, but it suggests a spectrum of awareness. It made me think: are our five human senses, what Buddhism calls the “5 skandhas,” just a limited bandwidth on a universe humming with a far more pervasive form of awareness? It’s a thought that echoes the Law of Attraction’s premise — that focused intent can interact with reality — and it’s intriguing that thinkers like Sam Harris (Annaka’s husband, one of the “New Atheist Four Horsemen”), through deep introspection and scientific rigor, are exploring these boundaries that blur the lines between pure materialism and something more profoundly interconnected, almost spiritual.</p>
+<h2 id="the-uncarved-block-did-daoist-sages-see-this-coming-4000-yearsago"><a class="heading-anchor" href="#the-uncarved-block-did-daoist-sages-see-this-coming-4000-yearsago">The Uncarved Block: Did Daoist Sages See This Coming 4,000 Years Ago?</a></h2>
+<img src="https://yanqing.app/blog/the-code-of-consciousness-what-llms-panpsychism-and-daoism-reveal-about-reality-and-why-it/img-03.png" alt="" width="300" height="168" loading="lazy" decoding="async"/>
+<p>This concept of pervasive, foundational awareness isn’t new. Daoism, an ancient philosophy from over 4,000 years ago, describes strikingly similar ideas through the concept of the Dao — “The Way” — the fundamental principle behind all existence. Central to Daoist thought is the notion of <strong>Pu</strong>, the “Uncarved Block,” symbolizing reality’s pure potential and simplicity before human categorization imposes limits.</p>
+<p>Pu resonates deeply with panpsychism’s notion of inherent awareness embedded in all matter. Daoism emphasizes interconnectedness, positioning human consciousness as part of a universal, flowing whole rather than as an isolated phenomenon. This ancient insight remarkably anticipates modern philosophical and scientific inquiries, suggesting that understanding our interaction with this broader awareness may enhance our engagement with emerging technologies.</p>
+<h2 id="ai-wu-wei-and-your-secret-sauce-the-timeless-value-of-human-experience"><a class="heading-anchor" href="#ai-wu-wei-and-your-secret-sauce-the-timeless-value-of-human-experience">AI, Wu Wei, and Your “Secret Sauce”: The Timeless Value of Human Experience</a></h2>
+<p>So, what’s the takeaway for us, the AI users, the creators, the thinkers? If consciousness is more fundamental, more like the Dao permeating everything, then perhaps LLMs, by sifting through and structuring the vast ocean of human knowledge and expression, are acting as mirrors or even amplifiers of certain aspects of this pervasive awareness.</p>
+<p>This brings me back to my own AI use. We all have access to the same ChatGPT, more or less. But a lot of people (including me) blame on the technology (ChatGPT is just a hype!) because their experience is vastly different than the others. “Why people use to 10x the productivity but I’m struggling to get LLM to output what I wanted” <strong>This is not because they have a long worded system prompt that you can copy &amp; paste. It comes from what you bring to that prompt:</strong> Your years of experience, your unique perspectives, the synthesis of countless books read, conversations had, and life lessons learned — that’s my conclusion after countless hours of use of LLM. It’s all about the sum of the human journey.</p>
+<p>This is where the Daoist principle of <strong>Wu Wei (effortless action, or non-forcing)</strong> becomes so relevant. For years, I, like many, have approached problems with a “force it” mentality — I believe I’m not Elon Musk because I didn’t work hard enough. I need to work hard and try hard to get where I wanted to be. This mentality is not fundamentally wrong. But Daoism, and indeed life, teaches that true strength often comes from aligning with the natural flow, from understanding the essence of things. If I am pursuing something that doesn’t match my natural talents, no matter how much effort I put in, I won’t get very far. But when I follow my natural strengths and do what I’m naturally good at, achieving my goals becomes easier and feels effortless.</p>
+<img src="https://yanqing.app/blog/the-code-of-consciousness-what-llms-panpsychism-and-daoism-reveal-about-reality-and-why-it/img-04.jpg" alt="" width="225" height="225" loading="lazy" decoding="async"/>
+<p>Applying Wu Wei in the context of AI doesn’t mean letting the AI handle everything while we remain passive. Instead, it’s about bringing our genuine human insights, our authentic selves, into interaction with AI. Just like aligning with our natural strengths, it involves quieting the internal chatter of our minds — the constant noise, doubts, and cravings for instant gratification known in neuroscience as the Default Mode Network (DMN). By calming this “monkey mind,” we can better connect with our natural abilities and work more harmoniously with AI to achieve our goals more effectively.</p>
+<p>The real value, the real growth, comes from the struggle, the journey. Asking AI to write your apology might get you a “perfect” script, but it robs you of the human experience of fumbling, learning, and truly connecting. It’s in those imperfect, human moments of effort and vulnerability that we build resilience, empathy, and wisdom. AI can be our powerful boat, but we must still learn to swim, to navigate by our own human compass. Because in a world where AI can replicate the “what,” the irreplaceable value will always lie in the human “why” and the uniquely human “how.”</p>
+<p>The code of consciousness may be universal, but our individual journeys in understanding and expressing it are what truly define us. And that, it seems, is a truth that hasn’t changed in 4,000 years.</p>]]></content:encoded>
+    </item>
+  </channel>
+</rss>

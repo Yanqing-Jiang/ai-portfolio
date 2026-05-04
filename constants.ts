@@ -6,6 +6,46 @@ export const PROJECT_DATA: ProjectYear[] = [
     subtitle: '(Generative UI & Agent Harness)',
     projects: [
       {
+        id: 'homer',
+        title: 'Homer — Personal AI OS',
+        description: `Homer is my personal AI operating system. It runs autonomously on a Mac Mini, manages a SQLite-backed memory layer, orchestrates five different CLI agents (Claude, Codex, Gemini, Kimi, OpenCode), and runs a launchd-based scheduler that handles dozens of recurring jobs.
+
+What it does day-to-day:
+• Maintains a hybrid (FTS5 + vector) memory of decisions, facts, and lessons across every CLI session
+• Schedules and executes background jobs via MCP tools shared across CLIs
+• Talks to me on the phone via ElevenLabs Managed Agent + Twilio
+• Books dinner reservations, drafts LinkedIn posts, monitors the portfolio, runs nightly research
+
+It's been live in production for 6+ months. The /homer page is the live console — you can run a few real commands.`,
+        cardDescription: 'A live personal AI OS — SQLite memory, multi-CLI orchestration, scheduler, MCP tools. Try it directly from the landing page.',
+        technologies: ['Personal AI OS', 'Multi-CLI Orchestration', 'MCP', 'SQLite + FTS5', 'launchd Scheduler'],
+        systemInstruction: '',
+        defaultPrompts: [],
+        link: '/homer',
+        coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/homer-hero.png',
+        imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/homer-hero.png',
+        ogImage: 'https://yanqinghot.blob.core.windows.net/public-access/homer-hero.png',
+        seoTitle: 'Homer — Personal AI Operating System | Yanqing Jiang',
+        seoDescription: 'Homer is my live personal AI OS — multi-CLI orchestration, hybrid memory, scheduled agents, MCP tools. Try it from the public console.',
+        seoKeywords: [
+          'personal AI OS',
+          'agent harness',
+          'multi-CLI orchestration',
+          'MCP server',
+          'agent memory',
+          'launchd scheduler',
+          'production agent system',
+        ],
+        datePublished: '2025-11-01',
+        dateModified: '2026-05-03',
+        serviceTags: ['Agent Harness', 'Production AI', 'Memory Systems'],
+        linkText: 'Open Homer console',
+        statHighlights: [
+          'Live in production for 6+ months — runs 24/7 on a Mac Mini',
+          '5 CLI executors, 8 active agents, ~12k memory claims',
+        ],
+      },
+      {
         id: 'agent-to-ui',
         title: 'Agent to UI',
         description: `AI-powered dashboard generation using the A2UI v0.8 protocol.

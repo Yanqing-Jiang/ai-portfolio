@@ -1,0 +1,33 @@
+{
+  "generatedAt": "2026-05-03T17:24:59.482Z",
+  "schemaVersion": 1,
+  "hero": {
+    "uptimeDays": 0,
+    "claims": 183,
+    "sessions": 125,
+    "runs": 1421,
+    "scheduledRuns": 46307,
+    "executorCount": 0,
+    "executors": [
+      "claude",
+      "codex",
+      "gemini",
+      "kimi",
+      "opencode"
+    ]
+  },
+  "series": {
+    "claimsByDay": [
+      {
+        "day": null,
+        "n": 183
+      }
+    ],
+    "runsByDay": []
+  },
+  "breakdowns": {
+    "executors": [],
+    "reliability": []
+  },
+  "notice": "Aggregates only. No claim text, source paths, prompts, or output bodies are exported here."
+}

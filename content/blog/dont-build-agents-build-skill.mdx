@@ -1,0 +1,67 @@
+export const frontmatter = {
+  title: 'Don’t Build Agents, Build Skill',
+  slug: 'dont-build-agents-build-skill',
+  description:
+    'If your "smart" agent still fails basic evals, the missing piece isn\'t intelligence — it\'s encoded domain expertise. A field report on Anthropic Skills (SKILL.md).',
+  publishedAt: '2025-12-12',
+  tags: ['skills', 'claude', 'agents', 'analytics'],
+  mediumUrl: 'https://medium.com/@yanqing_j/dont-build-agents-build-skill-62b97b4eae30',
+  author: 'yanqing-jiang',
+  wordCount: 944,
+  readingMinutes: 5,
+  hero: {
+    src: '/blog/dont-build-agents-build-skill/img-01.png',
+    alt: '',
+  },
+};
+
+## The scariest part of building agents wasn’t hallucinations, it was inconsistency.
+
+If your “smart” agent still fails basic evals, I know exactly why.
+
+I went down the rabbit hole: giant system prompts, carefully curated few-shot examples, complex structure function-calling, endless retries to nudge the agent into the right behavior. No matter how much logic I wrapped around it, the agent kept drifting, made-up steps, and quietly ignoring critical steps.
+
+I hit the point where adding more prompts and more code made my agent worse, not better.
+
+After watched AI Engineering Conference talk “Don’t Build Agents, Build Skills Instead.” I had to re-think a lot of the current hype around “AI agents”, agents flows and pushed me toward a much more practical framing: stop obsessing over building agent flows, start investing in skills, more specifically, SKILL.MD files that defines certain way to guide agent’s way to think, act, and analyze data.
+
+## From Generalists to Specialists
+
+Who do you want doing your taxes this year?
+
+-   Mahesh: IQ 300, math prodigy, zero experience in accounting or tax.
+-   Barry: IQ 100, CPA, 20-year tax professional.
+
+You pick Barry every time, because you want someone who already knows the domain and just gets your tax done. You do not want someone reinventing the tax code from first principles on your return. Today’s agents behave like Mahesh: very smart, very flexible, but every task is a fresh improvisation. That looks impressive in a demo, but it is not what you want driving real workflows.
+
+An agent without the right context might write a deck whose style, structure, and logic change completely from run to run. Ask it to analyze data and it may choose methods or metric definitions you do not accept. The missing piece is not more “intelligence”; it is stable, encoded domain expertise that the agent can reuse and follow. Until you give it that, you are just rolling the dice with a very eloquent autocomplete.
+
+## What “Skills” Actually Mean
+
+Anthropic’s answer for “Skills” is not magic, it is folders full of SKILL.md files and related assets. In each SKILL.md you define when this skill should be triggered, what techniques and processes it should use, and what guardrails the agent must respect. Think of it as a compact onboarding manual for a specific task: how to create branded documents, how to process PDFs, how to run a particular workflow in your environment.
+
+Instead of dumping everything into one giant system prompt, you factor knowledge into skills that can be discovered and loaded on demand. The agent starts as a capable generalist, but once it pulls in the relevant SKILL.md, it becomes a disciplined specialist for that task. That is the difference between “do something smart with this data” and “run this exact, battle-tested playbook every time.”
+
+## How I’m Using Skills in My “Next Gen Analytics (Agent)” Project
+
+I’ve started applying this pattern directly in my own “Next Gen Analytics (Agent)” project:  
+[https://yanqing.app/project/next-gen-analytics-agent](https://yanqing.app/project/next-gen-analytics-agent)
+
+<img src="/blog/dont-build-agents-build-skill/img-01.png" alt="" width="1024" height="850" loading="eager" fetchPriority="high" decoding="async" />
+
+The core idea is to treat Skills as SQL analytics templates that encode how we define metrics like margin, market share, and other custom KPIs, instead of letting the agent improvise them. More than 10 separate SKILL.md files describe specific metric families and workflows, SQL-building rules, chart types (line, column, stacked, etc.), and post-processing steps. A single agent and a supervisor-plus-specialists multi-agent setup both rely on these same Skills, which keeps behavior consistent no matter which path execution takes.
+
+At runtime, when a user asks a question, the agent does not just start generating content from scratch. It matches the question against metric descriptions, triggers the relevant skill, and then literally reads and follows the step-by-step instructions: which tables to join, how to define margin, how to compare peers, how to format the answer, how to visualize the result. The agent is not “being creative” with definitions; it is executing a well-defined analytics playbook encoded in SKILL.md.
+
+I’ve also added a human-in-the-loop layer for missing inputs. Each skill declares required parameters such as category, time window, or peer ticker to compare against. The agent first checks which values are already present in the user’s question; if anything is missing, it surfaces a multiple-choice prompt in the front end so the user can quickly choose options while still allowing free-form refinement. Once those are filled, the agent runs the exact scripted sequence defined in the skill, which makes the analytics far more “boring” — and therefore far more trustworthy.
+
+## Intelligence Is Cheap, Skills Are Scarce
+
+Anthropic’s framing treats the model as the processor, the agent runtime as the operating system, and Skills as the real “apps” where value actually lives. Processors and operating systems will keep improving and commoditizing. The scarce asset will be the encoded know-how: **YOUR** workflows, **YOUR** definitions, **YOUR** brand rules, **YOUR** institutional habits. Skills are a low-friction way to turn that tacit knowledge into something an agent can load and reuse, reliably, on demand.
+
+For me, that shifts the question from “How do I build a better or smarter agent?” to “How do I capture my domain in a set of clear, transferable skills?” Once that layer exists, the agent is just an execution engine: discover the right skill, load it, follow the playbook, and keep a human in the loop where judgment is required. Intelligence will keep getting cheaper. High-quality skills — well-written SKILL.md files that encode real expertise — are where the real leverage is.
+
+If you want to see a concrete example of this in action, check out my Next Gen Analytics (Agent) project that actively uses multiple SKILL.md files as anchors: [https://yanqing.app/project/next-gen-analytics-agent](https://yanqing.app/project/next-gen-analytics-agent)
+
+You can also find me on LinkedIn here:  
+[https://www.linkedin.com/in/jiangyanqing/](https://www.linkedin.com/in/jiangyanqing/)

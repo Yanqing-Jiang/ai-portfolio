@@ -1,8 +1,8 @@
-import React, { useState } from 'react';
-import { motion } from 'framer-motion';
+import React, { useState, useMemo } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { useShallow } from 'zustand/react/shallow';
 import { useFortuneStore } from '../../stores/fortuneStore';
-import { TimelineBar, YearCard, Sparkline, ChineseToggle } from '../shared';
+import { LuckFilmStrip, YearCard, ChineseToggle, Sparkline } from '../shared';
 import { FLOW_ACCENTS } from '../designTokens';
 import { staggerContainer, tabContentVariants, pickVariants } from '../animations';
 import type { LuckPillar, AnnualPillar } from '../../lib/fortuneTypes';
@@ -11,16 +11,34 @@ const ACCENT = FLOW_ACCENTS['luck-cycle'];
 
 export const TimelineTab: React.FC<{ isReplay?: boolean }> = ({ isReplay = false }) => {
   const [showChinese, setShowChinese] = useState(false);
-  const [selectedDecade, setSelectedDecade] = useState<number>(-1);
+  const [selectedDecadeIdx, setSelectedDecadeIdx] = useState<number>(-1);
   const [expandedYear, setExpandedYear] = useState<number | null>(null);
-  const { dataModel } = useFortuneStore(useShallow((s) => ({ dataModel: s.dataModel })));
 
-  const decades = (dataModel?.luckPillars?.items || []) as LuckPillar[];
-  const years = (dataModel?.annualPillars?.items || []) as AnnualPillar[];
+  const { dataModel, status } = useFortuneStore(useShallow((s) => ({
+    dataModel: s.dataModel,
+    status: s.status,
+  })));
+
+  const decades = (dataModel?.luckPillars?.items || dataModel?.luckCycle?.timeline?.decades || []) as LuckPillar[];
+  const allYears = (dataModel?.annualPillars?.items || dataModel?.luckCycle?.timeline?.years || []) as AnnualPillar[];
+
   const currentDecadeIdx = decades.findIndex((d) => d.isCurrent);
-  void (selectedDecade >= 0 ? selectedDecade : currentDecadeIdx); // reserved for per-decade detail
+  const activeIdx = selectedDecadeIdx >= 0 ? selectedDecadeIdx : currentDecadeIdx;
+  const activeDecade = decades[activeIdx];
 
-  // Sparkline data from decade scores
+  // Filter years by decade. startAge/endAge are ages (not calendar years), so we
+  // can only filter when the values happen to be calendar years (> 1900). Otherwise
+  // fall back to showing all years for context.
+  const filteredYears = useMemo(() => {
+    if (!activeDecade || allYears.length === 0) return allYears;
+    const looksLikeYears = activeDecade.startAge > 1900;
+    if (!looksLikeYears) return allYears;
+    const matched = allYears.filter(
+      (y) => y.year >= activeDecade.startAge && y.year <= activeDecade.endAge,
+    );
+    return matched.length > 0 ? matched : allYears;
+  }, [activeDecade, allYears]);
+
   const sparkData = decades.map((d) => d.score ?? 50);
 
   return (
@@ -30,62 +48,83 @@ export const TimelineTab: React.FC<{ isReplay?: boolean }> = ({ isReplay = false
       initial="initial"
       animate="animate"
       exit="exit"
-      className="space-y-5"
+      className="space-y-6 pb-24"
     >
-      <div className="flex items-center justify-between">
-        <h3 className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-400">
-          Decade Pillars
-        </h3>
+      <div className="flex items-center justify-between px-1">
+        <div>
+          <h3 className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-400">
+            Life Chapters
+          </h3>
+          <p className="text-[11px] text-indigo-400/80 font-medium">10-Year Luck Pillars</p>
+        </div>
         <ChineseToggle showChinese={showChinese} onToggle={() => setShowChinese(!showChinese)} />
       </div>
 
-      {/* Decade timeline */}
-      {decades.length > 0 ? (
-        <TimelineBar
-          decades={decades}
-          currentDecadeIndex={currentDecadeIdx}
-          accentColor={ACCENT.primary}
-          showChinese={showChinese}
-          onDecadeSelect={setSelectedDecade}
-          isReplay={isReplay}
-        />
-      ) : (
-        <div className="text-center py-6 text-xs text-slate-500">
-          Decade pillars loading...
-        </div>
-      )}
+      {/* Main Film Strip Component */}
+      <LuckFilmStrip
+        decades={decades}
+        currentDecadeIndex={currentDecadeIdx}
+        selectedIndex={selectedDecadeIdx >= 0 ? selectedDecadeIdx : undefined}
+        onDecadeSelect={setSelectedDecadeIdx}
+        showChinese={showChinese}
+        isReplay={isReplay}
+        isStreaming={status === 'streaming'}
+      />
 
-      {/* Sparkline */}
+      {/* Sparkline for Trend Visualization */}
       {sparkData.length >= 2 && (
-        <div className="flex justify-center">
-          <Sparkline data={sparkData} width={280} height={40} color={ACCENT.primary} />
+        <div className="flex flex-col items-center gap-2 py-2">
+          <div className="text-[9px] uppercase tracking-widest text-slate-500">Vitality Trend</div>
+          <Sparkline data={sparkData} width={320} height={48} color={ACCENT.primary} />
         </div>
       )}
 
-      {/* Annual pillars */}
-      {years.length > 0 && (
-        <>
-          <h3 className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-400 pt-2">
-            Annual Pillars
-          </h3>
-          <motion.div
-            variants={pickVariants(isReplay, staggerContainer(0.06))}
-            initial="hidden"
-            animate="visible"
-            className="space-y-2"
-          >
-            {years.map((y) => (
-              <YearCard
-                key={y.year}
-                item={y}
-                isExpanded={expandedYear === y.year}
-                onToggle={() => setExpandedYear(expandedYear === y.year ? null : y.year)}
-                isReplay={isReplay}
-              />
-            ))}
-          </motion.div>
-        </>
-      )}
+      {/* Annual Detail Section */}
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={activeIdx}
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -10 }}
+          className="space-y-3"
+        >
+          <div className="flex items-baseline justify-between px-1">
+            <h3 className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-400">
+              {activeDecade ? `Ages ${activeDecade.startAge}-${activeDecade.endAge} · Annual Pillars` : 'Annual Outlook'}
+            </h3>
+            {activeDecade?.element && (
+              <span className="text-[10px] text-indigo-400 font-medium">
+                {activeDecade.element} Decade
+              </span>
+            )}
+          </div>
+
+          {filteredYears.length > 0 ? (
+            <motion.div
+              variants={pickVariants(isReplay, staggerContainer(0.06))}
+              initial="hidden"
+              animate="visible"
+              className="space-y-2.5"
+            >
+              {filteredYears.map((y) => (
+                <YearCard
+                  key={y.year}
+                  item={y}
+                  isExpanded={expandedYear === y.year}
+                  onToggle={() => setExpandedYear(expandedYear === y.year ? null : y.year)}
+                  isReplay={isReplay}
+                />
+              ))}
+            </motion.div>
+          ) : (
+            <div className="text-center py-12 rounded-2xl border border-dashed border-slate-800 bg-slate-900/20">
+              <p className="text-xs text-slate-500">
+                {status === 'streaming' ? 'Calculating annual pillars...' : 'Select a decade to view yearly details'}
+              </p>
+            </div>
+          )}
+        </motion.div>
+      </AnimatePresence>
     </motion.div>
   );
 };

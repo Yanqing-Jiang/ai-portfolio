@@ -33,6 +33,7 @@ try:
         EnrichedNarrativeOutput,
         FortuneRunContext,
         _model,
+        _model_settings,
         _run_config,
     )
 except ImportError:
@@ -40,6 +41,7 @@ except ImportError:
         EnrichedNarrativeOutput,
         FortuneRunContext,
         _model,
+        _model_settings,
         _run_config,
     )
 
@@ -124,6 +126,7 @@ def _build_specialist(name: str, instructions: str) -> Agent[FortuneRunContext]:
     return Agent(
         name=name,
         model=_model("narrative_model"),
+        model_settings=_model_settings("narrative_reasoning"),
         instructions=instructions,
         output_type=EnrichedNarrativeOutput,
     )
@@ -203,6 +206,7 @@ def _build_triage_agent() -> Agent[FortuneRunContext]:
     return Agent(
         name="fortune_triage",
         model=_model("narrative_model"),
+        model_settings=_model_settings("narrative_reasoning"),
         instructions=TRIAGE_INSTRUCTIONS,
         tools=tools,
         output_type=EnrichedNarrativeOutput,

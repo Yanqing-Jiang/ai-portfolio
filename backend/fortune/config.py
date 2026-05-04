@@ -13,6 +13,8 @@ _MODULE_DIR = Path(__file__).resolve().parent
 load_dotenv(dotenv_path=_MODULE_DIR.parent / ".env", override=False)
 load_dotenv(dotenv_path=_MODULE_DIR / ".env", override=False)
 
+DEFAULT_OPENAI_MODEL = "gpt-5-mini-2025-08-07"
+
 
 class FortuneSettings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -36,11 +38,20 @@ class FortuneSettings(BaseSettings):
     default_timezone: str = "UTC"
 
     # Models
-    intake_model: str = "gpt-5.4-mini"
-    chart_model: str = "gpt-5.4-mini"
-    classics_model: str = "gpt-5.4-mini"
-    narrative_model: str = "gpt-5.4"
-    guardrail_model: str = "gpt-5.4-mini"
+    intake_model: str = DEFAULT_OPENAI_MODEL
+    chart_model: str = DEFAULT_OPENAI_MODEL
+    classics_model: str = DEFAULT_OPENAI_MODEL
+    narrative_model: str = DEFAULT_OPENAI_MODEL
+    guardrail_model: str = DEFAULT_OPENAI_MODEL
+
+    # Reasoning effort ("minimal" | "low" | "medium" | "high"). Set narrative
+    # to "medium" for faster local iteration; others stay low since they're
+    # tool-call / classifier shaped.
+    intake_reasoning: str = "low"
+    chart_reasoning: str = "low"
+    classics_reasoning: str = "low"
+    narrative_reasoning: str = "medium"
+    guardrail_reasoning: str = "low"
 
     # Limits
     max_classical_references: int = 4

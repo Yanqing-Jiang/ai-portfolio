@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime
 from typing import Any
 
 try:
@@ -311,6 +312,261 @@ class FortuneStreamBridge:
             "branchElement": p.get("branch_element", ""),
         }
 
+    @staticmethod
+    def _trace_kind(step_type: Any) -> str:
+        """Map internal trace step types to the frontend's simplified kind set."""
+        normalized = str(step_type or "").strip().lower()
+        if normalized == "tool_call":
+            return "tool_call"
+        if normalized in {"tool_result", "tool_output", "data_emit"}:
+            return "tool_output"
+        if normalized in {"llm_start", "llm_complete", "message"}:
+            return "llm"
+        if normalized in {"handoff", "handoff_call"}:
+            return "handoff"
+        return "llm"
+
+    @staticmethod
+    def _progress_percent(phase: str, message: str) -> int:
+        """Derive a stable progress percentage for AgentPhaseStrip."""
+        normalized_phase = (phase or "").strip().lower()
+        normalized_message = (message or "").strip().lower()
+        if normalized_phase == "foundation":
+            if "person b" in normalized_message:
+                return 30
+            return 20
+        if normalized_phase == "narrative":
+            if normalized_message.startswith("routing"):
+                return 45
+            if normalized_message.startswith("calling tool"):
+                return 60
+            if normalized_message.startswith("tool returned"):
+                return 75
+            if "response received" in normalized_message:
+                return 85
+            return 55
+        if normalized_phase == "guardrail":
+            return 95
+        return 0
+
+    @staticmethod
+    def _normalize_mechanism_type(scope: str, item: dict[str, Any]) -> str | None:
+        """Infer a mechanism filter type when the model leaves it blank."""
+        raw_type = item.get("type")
+        if isinstance(raw_type, str) and raw_type.strip():
+            return raw_type.strip()
+
+        text = " ".join(
+            str(part)
+            for part in [
+                item.get("title", ""),
+                " ".join(item.get("bullets") or []),
+            ]
+            if part
+        ).lower()
+
+        if scope == "compatibility":
+            if "clash" in text:
+                return "clash"
+            if "harm" in text:
+                return "harm"
+            if "punish" in text:
+                return "punishment"
+            if "support" in text or "assist" in text:
+                return "support"
+            if "combine" in text or "combination" in text or "transform" in text:
+                return "combination"
+            return "support"
+
+        if scope == "occasion":
+            if "avoid" in text or "clash" in text or "unstable" in text:
+                return "Caution"
+            if "hour" in text or "timing" in text or "window" in text:
+                return "Timing"
+            if any(element in text for element in ("wood", "fire", "earth", "metal", "water")):
+                return "Element"
+            if "support" in text or "combine" in text:
+                return "Support"
+            return "Timing"
+
+        if scope == "luck_cycle":
+            if "avoid" in text or "caution" in text or "unstable" in text:
+                return "caution"
+            if "support" in text or "assist" in text or "combine" in text:
+                return "support"
+            if any(element in text for element in ("wood", "fire", "earth", "metal", "water")):
+                return "element"
+            if "timing" in text or "window" in text or "year" in text:
+                return "timing"
+            return "cycle"
+
+        if scope == "wish":
+            if "luck" in text or "cycle" in text or "decade" in text or "year" in text:
+                return "luck"
+            if any(keyword in text for keyword in ("interaction", "clash", "combine", "harm", "punish")):
+                return "interaction"
+            return "chart"
+
+        return None
+
+    def _normalize_mechanism_cards(
+        self,
+        mechanisms: list[dict[str, Any]],
+        *,
+        scope: str,
+    ) -> list[dict[str, Any]]:
+        """Normalize mechanism cards across fortune sub-modes."""
+        normalized: list[dict[str, Any]] = []
+        for item in mechanisms:
+            mech = item.model_dump() if hasattr(item, "model_dump") else dict(item)
+            card = {
+                "id": mech.get("id"),
+                "title": mech.get("title"),
+                "type": self._normalize_mechanism_type(scope, mech),
+                "icon": mech.get("icon"),
+                "bullets": mech.get("bullets", []),
+                "citationIds": mech.get("citation_ids") or mech.get("citationIds") or [],
+            }
+            normalized.append({k: v for k, v in card.items() if v is not None})
+        return normalized
+
+    @staticmethod
+    def _compat_interaction_description(item: dict[str, Any]) -> str:
+        """Backfill a concise rationale for compatibility interactions."""
+        description = item.get("description")
+        if isinstance(description, str) and description.strip():
+            return description.strip()
+
+        interaction_type = str(item.get("type") or "interaction").strip().lower()
+        source = item.get("from") or item.get("from_") or "this pillar"
+        target = item.get("to") or "that pillar"
+        person_a = item.get("person_a") or item.get("personA") or "Person A"
+        person_b = item.get("person_b") or item.get("personB") or "Person B"
+        templates = {
+            "combination": f"{source} and {target} combine between {person_a} and {person_b}, creating an easier point of alignment.",
+            "clash": f"{source} clashes with {target} between {person_a} and {person_b}, so this axis needs extra care.",
+            "harm": f"{source} harms {target} between {person_a} and {person_b}, adding subtle friction under the surface.",
+            "support": f"{source} supports {target} between {person_a} and {person_b}, helping the pairing stabilize.",
+            "punishment": f"{source} punishes {target} between {person_a} and {person_b}, which can amplify internal tension.",
+        }
+        return templates.get(
+            interaction_type,
+            f"{source} and {target} form a notable interaction between {person_a} and {person_b}.",
+        )
+
+    def _default_pick_mechanisms(
+        self,
+        pick: dict[str, Any],
+        fallback_mechanisms: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Derive a minimal per-pick mechanism list when the model omits one."""
+        day_stem = pick.get("day_pillar_stem") or pick.get("dayPillarStem") or ""
+        day_branch = pick.get("day_pillar_branch") or pick.get("dayPillarBranch") or ""
+        reason = pick.get("one_line_reason") or pick.get("oneLineReason") or ""
+        best_hours = pick.get("best_hours") or pick.get("bestHours") or []
+        fallback_cards = self._normalize_mechanism_cards(fallback_mechanisms or [], scope="occasion")
+        bullets = [reason] if reason else []
+        if day_stem or day_branch:
+            bullets.append(f"Day pillar: {day_stem}{day_branch}")
+        if best_hours:
+            bullets.append(f"Best hours: {', '.join(best_hours[:2])}")
+        card = {
+            "id": f"pick_{pick.get('date') or pick.get('rank') or 'day'}",
+            "title": "Why this day works",
+            "type": "Timing",
+            "icon": "sparkles",
+            "bullets": bullets[:3],
+            "citationIds": fallback_cards[0].get("citationIds", []) if fallback_cards else [],
+        }
+        return [card] if card["bullets"] else []
+
+    @staticmethod
+    def _normalize_relevance(value: Any) -> float:
+        """Clamp wish anchor relevance into the 0-1 range expected by the UI."""
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            numeric = 0.5
+        return max(0.0, min(1.0, numeric))
+
+    @staticmethod
+    def _normalize_condition_type(value: Any) -> str:
+        """Collapse loose wish condition labels into the UI's three states."""
+        normalized = str(value or "").strip().lower()
+        if normalized in {"check", "pass", "yes", "good", "positive", "support"}:
+            return "check"
+        if normalized in {"cross", "block", "blocked", "avoid", "no"}:
+            return "cross"
+        return "warn"
+
+    def _normalize_wish_conditions(self, conditions: list[Any]) -> list[dict[str, str]]:
+        """Convert raw verdict conditions into `{type, text}` objects."""
+        normalized: list[dict[str, str]] = []
+        for item in conditions:
+            if isinstance(item, str):
+                text = item.strip()
+                if text:
+                    normalized.append({"type": "warn", "text": text})
+                continue
+
+            if not isinstance(item, dict):
+                continue
+
+            text = item.get("text") or item.get("label") or item.get("description")
+            if not isinstance(text, str) or not text.strip():
+                continue
+            normalized.append({
+                "type": self._normalize_condition_type(item.get("type")),
+                "text": text.strip(),
+            })
+        return normalized
+
+    @staticmethod
+    def _normalize_luck_pillar_item(lp: Any) -> dict[str, Any]:
+        """Normalize one decade pillar for both the top-level and timeline paths."""
+        return {
+            "index": lp.index if hasattr(lp, "index") else lp["index"],
+            "startAge": lp.start_age if hasattr(lp, "start_age") else lp["start_age"],
+            "endAge": lp.end_age if hasattr(lp, "end_age") else lp["end_age"],
+            "stem": lp.stem if hasattr(lp, "stem") else lp["stem"],
+            "branch": lp.branch if hasattr(lp, "branch") else lp["branch"],
+            "stemElement": lp.stem_element if hasattr(lp, "stem_element") else lp["stem_element"],
+            "branchElement": lp.branch_element if hasattr(lp, "branch_element") else lp["branch_element"],
+            "startYear": lp.start_year if hasattr(lp, "start_year") else lp["start_year"],
+            "endYear": lp.end_year if hasattr(lp, "end_year") else lp["end_year"],
+        }
+
+    @staticmethod
+    def _normalize_annual_pillar_item(ap: Any) -> dict[str, Any]:
+        """Normalize one annual pillar for both the top-level and timeline paths."""
+        return {
+            "year": ap.year if hasattr(ap, "year") else ap["year"],
+            "stem": ap.stem if hasattr(ap, "stem") else ap["stem"],
+            "branch": ap.branch if hasattr(ap, "branch") else ap["branch"],
+            "stemElement": ap.stem_element if hasattr(ap, "stem_element") else ap["stem_element"],
+            "branchElement": ap.branch_element if hasattr(ap, "branch_element") else ap["branch_element"],
+            "interactions": [
+                {
+                    "type": ix.type if hasattr(ix, "type") else ix["type"],
+                    "between": ix.between if hasattr(ix, "between") else ix["between"],
+                    "description": ix.description if hasattr(ix, "description") else ix["description"],
+                }
+                for ix in (ap.interactions_with_chart if hasattr(ap, "interactions_with_chart") else ap["interactions_with_chart"])
+            ],
+            "luckPillarIndex": ap.luck_pillar_index if hasattr(ap, "luck_pillar_index") else ap["luck_pillar_index"],
+        }
+
+    @staticmethod
+    def _active_luck_pillar(luck_pillars: list[Any]) -> Any | None:
+        """Pick the active decade pillar for the current calendar year."""
+        current_year = datetime.now().year
+        for pillar in luck_pillars:
+            start_year = pillar.start_year if hasattr(pillar, "start_year") else pillar["start_year"]
+            end_year = pillar.end_year if hasattr(pillar, "end_year") else pillar["end_year"]
+            if start_year <= current_year <= end_year:
+                return pillar
+        return luck_pillars[0] if luck_pillars else None
+
     def emit_pillars(self, payload: dict[str, Any]) -> str:
         normalized: dict[str, Any] = {}
         for key in ("year", "month", "day"):
@@ -385,26 +641,154 @@ class FortuneStreamBridge:
                 "to": item.get("to"),
                 "personA": item.get("person_a") or item.get("personA"),
                 "personB": item.get("person_b") or item.get("personB"),
-                "description": item.get("description"),
+                "description": self._compat_interaction_description(item),
                 "effect": item.get("effect"),
             }
             for item in interactions
         ]
-        return self.emitter.data_update(normalized, path="/data/compatibility/pairInteractions")
+        return self.emitter.data_update({"pairInteractions": normalized}, path="/data/compatibility")
 
     def emit_compat_mechanisms(self, mechanisms: list[dict[str, Any]]) -> str:
-        # Frontend Mechanism shape: {id, title, bullets[], citationIds[], icon}
-        normalized = [
-            {
-                "id": item.get("id"),
-                "title": item.get("title"),
-                "icon": item.get("icon"),
-                "bullets": item.get("bullets", []),
-                "citationIds": item.get("citation_ids") or item.get("citationIds") or [],
+        # Frontend Mechanism shape: {id, title, type, bullets[], citationIds[], icon}
+        normalized = self._normalize_mechanism_cards(mechanisms, scope="compatibility")
+        return self.emitter.data_update({"mechanisms": normalized}, path="/data/compatibility")
+
+    # --- Occasion (lucky-day) ---
+    def emit_occasion_top_picks(
+        self,
+        picks: list[dict[str, Any]],
+        *,
+        fallback_mechanisms: list[dict[str, Any]] | None = None,
+    ) -> str:
+        normalized = []
+        for p in picks:
+            pick = p.model_dump() if hasattr(p, "model_dump") else dict(p)
+            row = {
+                "rank": pick.get("rank"),
+                "date": pick.get("date"),
+                "dayPillar": {
+                    "stem": pick.get("day_pillar_stem") or pick.get("dayPillarStem"),
+                    "branch": pick.get("day_pillar_branch") or pick.get("dayPillarBranch"),
+                },
+                "score": pick.get("score"),
+                "oneLineReason": pick.get("one_line_reason") or pick.get("oneLineReason"),
+                "bestHours": pick.get("best_hours") or pick.get("bestHours") or [],
             }
-            for item in mechanisms
-        ]
-        return self.emitter.data_update(normalized, path="/data/compatibility/mechanisms")
+            mechanisms = self._normalize_mechanism_cards(
+                pick.get("mechanisms") or [],
+                scope="occasion",
+            ) or self._default_pick_mechanisms(pick, fallback_mechanisms)
+            if mechanisms:
+                row["mechanisms"] = mechanisms
+            normalized.append(row)
+        return self.emitter.data_update({"topPicks": normalized}, path="/data/occasion")
+
+    def emit_occasion_analysis(self, analysis: dict[str, Any]) -> str:
+        def _titlecase_element(s: Any) -> str:
+            if not isinstance(s, str):
+                return ""
+            return s.strip().capitalize()
+
+        key_elems = analysis.get("key_elements") or analysis.get("keyElements") or []
+        avoid_elems = analysis.get("avoid_elements") or analysis.get("avoidElements") or []
+        normalized = {
+            "occasionType": analysis.get("occasion_type") or analysis.get("occasionType"),
+            "keyElements": [_titlecase_element(x) for x in key_elems if x],
+            "avoidElements": [_titlecase_element(x) for x in avoid_elems if x],
+            "description": analysis.get("description", ""),
+        }
+        return self.emitter.data_update({"analysis": normalized}, path="/data/occasion")
+
+    def emit_occasion_mechanisms(self, mechs: list[dict[str, Any]]) -> str:
+        normalized = self._normalize_mechanism_cards(mechs, scope="occasion")
+        return self.emitter.data_update({"mechanisms": normalized}, path="/data/occasion")
+
+    # --- Luck Cycle ---
+    def emit_luck_cycle_current_window(
+        self,
+        window: dict[str, Any],
+        *,
+        luck_pillars: list[Any] | None = None,
+    ) -> str:
+        active = self._active_luck_pillar(luck_pillars or [])
+        active_decade = None
+        active_element = None
+        active_cycle = None
+        if active is not None:
+            start_year = active.start_year if hasattr(active, "start_year") else active["start_year"]
+            end_year = active.end_year if hasattr(active, "end_year") else active["end_year"]
+            stem = active.stem if hasattr(active, "stem") else active["stem"]
+            branch = active.branch if hasattr(active, "branch") else active["branch"]
+            stem_element = active.stem_element if hasattr(active, "stem_element") else active["stem_element"]
+            branch_element = active.branch_element if hasattr(active, "branch_element") else active["branch_element"]
+            active_decade = f"{start_year}-{end_year}"
+            active_element = stem_element or branch_element
+            active_cycle = f"{stem}{branch}"
+
+        summary = window.get("summary")
+        if not summary:
+            if active_cycle and active_element:
+                summary = f"Active decade {active_cycle} emphasizes {active_element.lower()} themes."
+            elif active_cycle:
+                summary = f"Active decade {active_cycle} is shaping the current timing."
+            else:
+                summary = "Active cycle analysis is pending."
+        return self.emitter.data_update({
+            "currentWindow": {
+                "decade": window.get("decade") or active_decade or "Pending",
+                "score": window.get("score") if isinstance(window.get("score"), (int, float)) else 0,
+                "summary": summary,
+                "element": window.get("element") or active_element or "Unknown",
+            }
+        }, path="/data/luckCycle")
+
+    def emit_luck_cycle_timeline(
+        self,
+        *,
+        luck_pillars: list[Any] | None = None,
+        annual_pillars: list[Any] | None = None,
+    ) -> str:
+        return self.emitter.data_update(
+            {
+                "timeline": {
+                    "decades": [self._normalize_luck_pillar_item(lp) for lp in (luck_pillars or [])],
+                    "years": [self._normalize_annual_pillar_item(ap) for ap in (annual_pillars or [])],
+                    "months": [],
+                }
+            },
+            path="/data/luckCycle",
+        )
+
+    def emit_luck_cycle_mechanisms(self, mechs: list[dict[str, Any]]) -> str:
+        normalized = self._normalize_mechanism_cards(mechs, scope="luck_cycle")
+        return self.emitter.data_update({"mechanisms": normalized}, path="/data/luckCycle")
+
+    # --- Wish ---
+    def emit_wish_verdict(self, verdict: dict[str, Any]) -> str:
+        return self.emitter.data_update({
+            "verdict": {
+                "title": verdict.get("title"),
+                "score": verdict.get("score"),
+                "summary": verdict.get("summary"),
+                "caution": verdict.get("caution"),
+                "conditions": self._normalize_wish_conditions(verdict.get("conditions", [])),
+            }
+        }, path="/data/wish")
+
+    def emit_wish_anchors(self, anchors: list[dict[str, Any]]) -> str:
+        normalized = [{
+            "id": a.get("id"),
+            "label": a.get("label"),
+            "symbol": a.get("symbol"),
+            "element": a.get("element"),
+            "relevance": self._normalize_relevance(a.get("relevance")),
+            "bullets": a.get("bullets", []),
+        } for a in anchors]
+        return self.emitter.data_update({"anchors": normalized}, path="/data/wish")
+
+    def emit_wish_mechanisms(self, mechs: list[dict[str, Any]]) -> str:
+        normalized = self._normalize_mechanism_cards(mechs, scope="wish")
+        return self.emitter.data_update({"mechanisms": normalized}, path="/data/wish")
 
     def emit_references(self, references: list[dict[str, Any]]) -> str:
         normalized = [
@@ -531,43 +915,12 @@ class FortuneStreamBridge:
 
     def emit_luck_pillars(self, luck_pillars: list[Any]) -> str:
         """Emit luck pillars (大运)."""
-        normalized = [
-            {
-                "index": lp.index if hasattr(lp, "index") else lp["index"],
-                "startAge": lp.start_age if hasattr(lp, "start_age") else lp["start_age"],
-                "endAge": lp.end_age if hasattr(lp, "end_age") else lp["end_age"],
-                "stem": lp.stem if hasattr(lp, "stem") else lp["stem"],
-                "branch": lp.branch if hasattr(lp, "branch") else lp["branch"],
-                "stemElement": lp.stem_element if hasattr(lp, "stem_element") else lp["stem_element"],
-                "branchElement": lp.branch_element if hasattr(lp, "branch_element") else lp["branch_element"],
-                "startYear": lp.start_year if hasattr(lp, "start_year") else lp["start_year"],
-                "endYear": lp.end_year if hasattr(lp, "end_year") else lp["end_year"],
-            }
-            for lp in luck_pillars
-        ]
+        normalized = [self._normalize_luck_pillar_item(lp) for lp in luck_pillars]
         return self.emitter.data_update({"items": normalized}, path="/data/luckPillars")
 
     def emit_annual_pillars(self, annual_pillars: list[Any]) -> str:
         """Emit annual pillars (流年)."""
-        normalized = [
-            {
-                "year": ap.year if hasattr(ap, "year") else ap["year"],
-                "stem": ap.stem if hasattr(ap, "stem") else ap["stem"],
-                "branch": ap.branch if hasattr(ap, "branch") else ap["branch"],
-                "stemElement": ap.stem_element if hasattr(ap, "stem_element") else ap["stem_element"],
-                "branchElement": ap.branch_element if hasattr(ap, "branch_element") else ap["branch_element"],
-                "interactions": [
-                    {
-                        "type": ix.type if hasattr(ix, "type") else ix["type"],
-                        "between": ix.between if hasattr(ix, "between") else ix["between"],
-                        "description": ix.description if hasattr(ix, "description") else ix["description"],
-                    }
-                    for ix in (ap.interactions_with_chart if hasattr(ap, "interactions_with_chart") else ap["interactions_with_chart"])
-                ],
-                "luckPillarIndex": ap.luck_pillar_index if hasattr(ap, "luck_pillar_index") else ap["luck_pillar_index"],
-            }
-            for ap in annual_pillars
-        ]
+        normalized = [self._normalize_annual_pillar_item(ap) for ap in annual_pillars]
         return self.emitter.data_update({"items": normalized}, path="/data/annualPillars")
 
     def emit_retrodictions(self, retrodictions: list[Any]) -> str:
@@ -632,6 +985,7 @@ class FortuneStreamBridge:
         normalized = {
             "stepId": data.get("step_id", ""),
             "stepType": data.get("step_type", ""),
+            "kind": self._trace_kind(data.get("step_type")),
             "agentName": data.get("agent_name", ""),
             "toolName": data.get("tool_name"),
             "label": data.get("label", ""),
@@ -652,6 +1006,7 @@ class FortuneStreamBridge:
             {
                 "stepId": (s.step_id if hasattr(s, "step_id") else s.get("step_id", "")),
                 "stepType": (s.step_type if hasattr(s, "step_type") else s.get("step_type", "")),
+                "kind": self._trace_kind(s.step_type if hasattr(s, "step_type") else s.get("step_type", "")),
                 "agentName": (s.agent_name if hasattr(s, "agent_name") else s.get("agent_name", "")),
                 "toolName": (s.tool_name if hasattr(s, "tool_name") else s.get("tool_name")),
                 "label": (s.label if hasattr(s, "label") else s.get("label", "")),
@@ -672,7 +1027,11 @@ class FortuneStreamBridge:
     def emit_progress(self, phase: str, message: str) -> str:
         """Emit a progress event so the frontend can show phase status."""
         return self.emitter.data_update(
-            {"phase": phase, "message": message},
+            {
+                "phase": phase,
+                "message": message,
+                "percent": self._progress_percent(phase, message),
+            },
             path="/data/meta/progress",
         )
 

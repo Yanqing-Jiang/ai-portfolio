@@ -8,9 +8,81 @@
   </url>
   <url>
     <loc>https://yanqing.app/consult</loc>
-    <lastmod>2026-04-17</lastmod>
+    <lastmod>2026-05-04</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.90</priority>
+  </url>
+  <url>
+    <loc>https://yanqing.app/blog</loc>
+    <lastmod>2026-05-04</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.95</priority>
+  </url>
+  <url>
+    <loc>https://yanqing.app/blog/software-3-0-my-ai-replaced-my-wedding-planner-my-stylist-my-designer-and-my-locksmith</loc>
+    <lastmod>2026-04-30</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.80</priority>
+  </url>
+  <url>
+    <loc>https://yanqing.app/blog/the-gap-is-you-why-most-people-will-never-get-good-at-ai</loc>
+    <lastmod>2026-03-29</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.80</priority>
+  </url>
+  <url>
+    <loc>https://yanqing.app/blog/i-let-ai-take-over-my-life-pt-3-why-i-deleted-most-of-apps-and-kept-one</loc>
+    <lastmod>2026-02-18</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.80</priority>
+  </url>
+  <url>
+    <loc>https://yanqing.app/blog/i-let-ai-take-over-my-life-pt-2-my-24-7-ai-assistant</loc>
+    <lastmod>2026-01-26</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.80</priority>
+  </url>
+  <url>
+    <loc>https://yanqing.app/blog/the-end-of-static-dashboards-agents-will-generate-your-ui-in-2026</loc>
+    <lastmod>2026-01-15</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.80</priority>
+  </url>
+  <url>
+    <loc>https://yanqing.app/blog/death-by-1000-dashboards-why-agents-will-replace-bi</loc>
+    <lastmod>2026-01-05</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.80</priority>
+  </url>
+  <url>
+    <loc>https://yanqing.app/blog/dont-build-agents-build-skill</loc>
+    <lastmod>2025-12-12</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.80</priority>
+  </url>
+  <url>
+    <loc>https://yanqing.app/blog/the-illusion-of-knowing-everyone-claims-to-understand-agents-rag</loc>
+    <lastmod>2025-08-03</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.80</priority>
+  </url>
+  <url>
+    <loc>https://yanqing.app/blog/i-vibe-coded-an-ai-website-in-a-weekend-did-i-just-create-a-monster</loc>
+    <lastmod>2025-08-02</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.80</priority>
+  </url>
+  <url>
+    <loc>https://yanqing.app/blog/the-code-of-consciousness-what-llms-panpsychism-and-daoism-reveal-about-reality-and-why-it</loc>
+    <lastmod>2025-05-26</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.80</priority>
+  </url>
+  <url>
+    <loc>https://yanqing.app/project/homer</loc>
+    <lastmod>2026-05-03</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.85</priority>
   </url>
   <url>
     <loc>https://yanqing.app/project/agent-to-ui</loc>

@@ -36,6 +36,10 @@ interface UseFortuneSessionReturn {
   error: string | null;
   ask: ReturnType<typeof useFortuneAsk>;
   create: (payload: Record<string, unknown>) => Promise<void>;
+  /** True while a pause request is in flight. */
+  pausing: boolean;
+  /** POST /{fortuneId}/cancel — gracefully aborts the narrative agent. */
+  cancel: () => Promise<void>;
 }
 
 // Per-function payload mapping: input pages emit { birthDate, birthTime, timeUnknown, gender }
@@ -52,6 +56,29 @@ function toBirthIso(p: InputProfile | undefined | null): string {
   if (!p?.birthDate) return '';
   const hour = p.timeUnknown ? '12' : (p.birthTime || '12');
   return `${p.birthDate}T${hour.padStart(2, '0')}:00:00`;
+}
+
+function normalizeLuckCycleFocus(value: unknown): string {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => String(item || '').trim())
+      .filter(Boolean)
+      .join('+') || 'general';
+  }
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  return 'general';
+}
+
+function normalizeLuckCycleHorizon(value: unknown): string {
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  if (typeof value === 'object' && value !== null) {
+    const { year, month } = value as { year?: unknown; month?: unknown };
+    const yearText = typeof year === 'number' || typeof year === 'string' ? String(year).trim() : '';
+    const monthNumber = typeof month === 'number' ? month : Number(month);
+    if (yearText && Number.isFinite(monthNumber)) return `${yearText}-${String(monthNumber).padStart(2, '0')}`;
+    if (yearText) return yearText;
+  }
+  return 'this-year';
 }
 
 function buildCreateRequest(functionId: FortuneFunctionId, payload: Record<string, unknown>) {
@@ -77,7 +104,7 @@ function buildCreateRequest(functionId: FortuneFunctionId, payload: Record<strin
       });
     }
     case 'luck-cycle': {
-      const p = payload as { horizon: string; focus: string; profile: InputProfile };
+      const p = payload as { horizon: unknown; focus: unknown; profile: InputProfile };
       return fortuneClient.createLuckCycle({
         profile: {
           birth_iso: toBirthIso(p.profile),
@@ -85,8 +112,8 @@ function buildCreateRequest(functionId: FortuneFunctionId, payload: Record<strin
           birth_time_unknown: p.profile?.timeUnknown,
           gender: p.profile?.gender,
         },
-        horizon: p.horizon,
-        focus: p.focus,
+        horizon: normalizeLuckCycleHorizon(p.horizon),
+        focus: normalizeLuckCycleFocus(p.focus),
       });
     }
     case 'wish': {
@@ -277,6 +304,18 @@ export function useFortuneSession(options: UseFortuneSessionOptions): UseFortune
     }
   }, [urlFortuneId, location.state, create]);
 
+  const [pausing, setPausing] = useState(false);
+  const cancel = useCallback(async () => {
+    const id = fortuneId || urlFortuneId;
+    if (!id) return;
+    setPausing(true);
+    try {
+      await fortuneClient.cancelFortune(id);
+    } catch {
+      // Best-effort — the backend will also cancel on client disconnect.
+    }
+  }, [fortuneId, urlFortuneId]);
+
   return {
     fortuneId,
     runId,
@@ -288,5 +327,7 @@ export function useFortuneSession(options: UseFortuneSessionOptions): UseFortune
     error,
     ask,
     create,
+    pausing,
+    cancel,
   };
 }

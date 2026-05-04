@@ -1,12 +1,14 @@
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence, useSpring } from 'framer-motion';
-import { Link } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import type { Project, ProjectYear } from '../types';
 import { SignInIcon } from './icons/SignInIcon';
 import { ChevronDown } from 'lucide-react';
 import { authService, type AuthState } from '../services/auth';
 import { AuthModal } from './AuthModal';
+import { allPosts, formatPostDateShort, getYearAccent } from '../lib/blog/mdx';
+import type { BlogPost } from '../lib/blog/mdx';
 
 interface SidebarV2Props {
     projectData: ProjectYear[];
@@ -43,6 +45,24 @@ const SidebarV2: React.FC<SidebarV2Props> = ({
     isSidebarOpen,
     onGoHome
 }) => {
+    // Mode is derived from the URL — clicking the Writing tab navigates to /blog,
+    // clicking Projects navigates back to /. Pathname-derived means it stays in sync
+    // with the back button + deep links.
+    const location = useLocation();
+    const navigate = useNavigate();
+    const mode: 'projects' | 'writing' = location.pathname.startsWith('/blog') ? 'writing' : 'projects';
+
+    // Group blog posts by year for the Writing-mode tree.
+    const postsByYear = useMemo(() => {
+        const grouped: Record<number, BlogPost[]> = {};
+        for (const post of allPosts) {
+            const year = new Date(post.frontmatter.publishedAt).getFullYear();
+            if (!grouped[year]) grouped[year] = [];
+            grouped[year].push(post);
+        }
+        return grouped;
+    }, []);
+
     const [authState, setAuthState] = useState<AuthState>({ user: null, loading: true, error: null });
     const [showAuthModal, setShowAuthModal] = useState(false);
     const [hoveredProject, setHoveredProject] = useState<Project | null>(null);
@@ -50,6 +70,8 @@ const SidebarV2: React.FC<SidebarV2Props> = ({
         // Default 2021 to collapsed
         return { 2021: true };
     });
+    // Homer is now a regular Project entry in the 2026 group with `link: '/homer'`.
+    // Active highlight is handled by the existing project tree's `selectedProject`.
 
     const toggleYear = (year: number) => {
         setCollapsedYears(prev => ({
@@ -188,8 +210,71 @@ const SidebarV2: React.FC<SidebarV2Props> = ({
                         </button>
                     </motion.div>
 
-                    {/* 3. PURE TIMELINE NAVIGATION */}
+                    {/* 3a. PROJECTS / WRITING TAB SWITCH (glassmorphic pill, mode derived from URL) */}
+                    <div className="mb-2">
+                        <div className="bg-slate-900/60 backdrop-blur-2xl border border-white/10 rounded-full p-1 flex items-center shadow-[0_0_30px_rgba(14,165,233,0.05)] relative overflow-hidden">
+                            <div className="absolute inset-0 bg-gradient-to-r from-sky-500/0 via-sky-500/5 to-sky-500/0 pointer-events-none" />
+                            <button
+                                onClick={() => navigate('/')}
+                                className={`relative flex-1 py-2.5 px-4 rounded-full font-mono text-[11px] tracking-[0.3em] uppercase transition ${mode === 'projects' ? 'text-white bg-gradient-to-br from-sky-500/30 to-sky-500/10 border border-sky-400/40 shadow-[0_0_15px_rgba(14,165,233,0.3),inset_0_1px_0_rgba(255,255,255,0.1)]' : 'text-slate-400 hover:text-slate-200'}`}
+                            >Projects</button>
+                            <button
+                                onClick={() => navigate('/blog')}
+                                className={`relative flex-1 py-2.5 px-4 rounded-full font-mono text-[11px] tracking-[0.3em] uppercase transition ${mode === 'writing' ? 'text-white bg-gradient-to-br from-sky-500/30 to-sky-500/10 border border-sky-400/40 shadow-[0_0_15px_rgba(14,165,233,0.3),inset_0_1px_0_rgba(255,255,255,0.1)]' : 'text-slate-400 hover:text-slate-200'}`}
+                            >Writing</button>
+                        </div>
+                    </div>
+
+                    {/* 3b. NAV TREE — branches on mode */}
                     <nav className="flex-1 overflow-y-auto overflow-x-hidden pr-6 -mr-6 sidebar-scrollbar custom-scrollbar relative">
+
+                        {/* WRITING MODE — year-grouped post list (tab-1 bare-year design) */}
+                        {mode === 'writing' && (
+                            <div className="space-y-8 py-1">
+                                {Object.entries(postsByYear)
+                                    .sort(([a], [b]) => Number(b) - Number(a))
+                                    .map(([year, posts]) => {
+                                        const accent = getYearAccent(Number(year));
+                                        return (
+                                            <div key={year}>
+                                                <div className="flex items-center gap-3 mb-4">
+                                                    <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: accent.hex, boxShadow: `0 0 10px ${accent.rgba}` }} />
+                                                    <span className="font-mono text-[11px] tracking-[0.3em] uppercase shrink-0" style={{ color: accent.hex }}>{year}</span>
+                                                    <div className="flex-1 h-px" style={{ background: `linear-gradient(to right, ${accent.hex}33, transparent)` }} />
+                                                </div>
+                                                <div className="space-y-4 pl-1">
+                                                    {posts.map((post) => {
+                                                        const isActive = location.pathname === `/blog/${post.slug}`;
+                                                        return (
+                                                            <Link
+                                                                key={post.slug}
+                                                                to={`/blog/${post.slug}`}
+                                                                className="group/link block"
+                                                            >
+                                                                {/* line-clamp-2: long titles like "Software 3.0: My AI Replaced
+                                                                    My Wedding Planner, My Stylist, My Designer, and My Locksmith"
+                                                                    were wrapping to 4 lines and bloating the rail. Cap at 2;
+                                                                    full title still available via the native title tooltip. */}
+                                                                <h3 className={`text-[15px] leading-snug font-medium transition-colors line-clamp-2 ${isActive ? 'text-sky-300' : 'text-white group-hover/link:text-sky-300'}`} style={{ fontFamily: "'Noto Serif SC', serif" }} title={post.frontmatter.title}>
+                                                                    {post.frontmatter.title}
+                                                                </h3>
+                                                                <p className="font-mono text-[10px] text-slate-500 mt-1 tracking-wide uppercase">
+                                                                    {formatPostDateShort(post.frontmatter.publishedAt)} · {post.readingMinutes} min
+                                                                </p>
+                                                            </Link>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                            </div>
+                        )}
+
+                        {/* PROJECTS MODE — year-grouped project tree.
+                            Homer now lives inside the 2026 group via PROJECT_DATA, with a
+                            `link: '/homer'` override that the project Link below honors. */}
+                        {mode === 'projects' && (<>
                         <div className="flex flex-col gap-4 py-1">
                             {projectData.map(({ year, projects, label }) => {
                                 const isCollapsed = collapsedYears[year];
@@ -235,7 +320,7 @@ const SidebarV2: React.FC<SidebarV2Props> = ({
                                                                 transition={{ delay: idx * 0.03 }}
                                                             >
                                                                 <Link
-                                                                    to={`/project/${project.id}`}
+                                                                    to={project.link ?? `/project/${project.id}`}
                                                                     onClick={() => handleProjectClick(project)}
                                                                     onMouseEnter={() => setHoveredProject(project)}
                                                                     onMouseLeave={() => setHoveredProject(null)}
@@ -304,6 +389,7 @@ const SidebarV2: React.FC<SidebarV2Props> = ({
                                 );
                             })}
                         </div>
+                        </>)}
                     </nav>
 
 
