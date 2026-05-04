@@ -44,12 +44,15 @@ class FortuneSettings(BaseSettings):
     narrative_model: str = DEFAULT_OPENAI_MODEL
     guardrail_model: str = DEFAULT_OPENAI_MODEL
 
-    # Reasoning effort ("minimal" | "low" | "medium" | "high"). Set narrative
-    # to "medium" for faster local iteration; others stay low since they're
-    # tool-call / classifier shaped.
-    intake_reasoning: str = "low"
-    chart_reasoning: str = "low"
-    classics_reasoning: str = "low"
+    # Reasoning effort ("minimal" | "low" | "medium" | "high" | "xhigh").
+    # Default = medium to match the gpt-5-mini-2025-08-07 medium-thinking
+    # baseline the agent browser is benchmarked against. Override per-stage
+    # via FORTUNE_NARRATIVE_REASONING etc. in .env if you need to trade
+    # depth for latency. Guardrail stays low — it's a small safety pass and
+    # medium reasoning would dominate end-to-end stream latency.
+    intake_reasoning: str = "medium"
+    chart_reasoning: str = "medium"
+    classics_reasoning: str = "medium"
     narrative_reasoning: str = "medium"
     guardrail_reasoning: str = "low"
 

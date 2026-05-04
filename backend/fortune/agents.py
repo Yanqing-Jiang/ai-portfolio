@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from datetime import date, timedelta
 from typing import Any
 
 from agents import Agent, ModelSettings, Runner, RunConfig
@@ -404,16 +405,16 @@ OCCASION MODE (only when `focus` starts with "occasion:"):
 The focus string encodes `occasion:<type>:<windowStartISO>:<windowEndISO>`. Produce an \
 `occasion` object IN ADDITION TO the standard tldr/insights:
 
-- occasion.top_picks: 3-5 auspicious days chosen ONLY from the requested date window.
+- occasion.top_picks: 3-5 auspicious days chosen ONLY from `occasion_window.candidate_days`.
   - rank: 1-5
-  - date: ISO date inside the provided window
-  - day_pillar_stem / day_pillar_branch: the selected day's pillar
+  - date: copy the exact ISO date from the selected candidate day
+  - day_pillar_stem / day_pillar_branch: copy the exact selected candidate day's pillar
   - score: 0-100 integer based on how well the day supports the user's Day Master and the occasion type
   - one_line_reason: max 100 chars, specific and concrete
   - best_hours: list of favorable 2-hour windows such as "09:00-11:00"
   - mechanisms: 2-4 short mechanism cards specific to THIS date, each with id, title, \
     type, icon, bullets, and citation_ids
-  Pick from the date window given. Use pillar compatibility with the user's Day Master, \
+  Pick from the computed candidate days. Use pillar compatibility with the user's Day Master, \
   seasonal strength, and any meaningful branch interactions. Do not suggest dates outside the window.
 - occasion.analysis:
   - occasion_type: normalized occasion label from the focus string
@@ -511,7 +512,18 @@ def _model_settings(reasoning_key: str) -> ModelSettings:
     # signal during otherwise-silent structured-output generation (the
     # narrative agent has no tool calls, so without this the UI hangs on
     # "Consulting the pillars…" for 20-40s).
-    return ModelSettings(reasoning=Reasoning(effort=effort, summary="auto"))
+    # No max_tokens cap. At medium reasoning, compatibility mode emits the
+    # heaviest payload (two charts × overview + pair_interactions +
+    # mechanisms) and was repeatedly truncating mid-JSON at every cap we
+    # tried (1.8k → 6k → 16k). The Responses API's own per-request budget
+    # is large enough; capping it locally buys nothing and risks
+    # ``ModelBehaviorError: Invalid JSON when parsing`` on long runs.
+    # Latency is bounded by the test budgets in
+    # tests/fortune/test_agent_browser_e2e.py instead.
+    return ModelSettings(
+        reasoning=Reasoning(effort=effort, summary="auto"),
+        verbosity="low",
+    )
 
 
 INTAKE_AGENT: Agent[FortuneRunContext] = Agent(
@@ -595,6 +607,15 @@ async def run_foundation(ctx: FortuneRunContext) -> dict[str, Any]:
 
     Returns foundation dict with an extra "trace" key containing the collector.
     """
+    import time as _time_local
+
+    try:
+        from .agent_logging import classify_function as _cf, logger as _alogger
+    except ImportError:
+        from agent_logging import classify_function as _cf, logger as _alogger  # type: ignore[no-redef]
+    _t_found_start = _time_local.monotonic()
+    _foundation_fn = _cf(ctx.focus, ctx.question)
+
     from .bazi_engine import _normalize_dt
     from datetime import datetime as dt
 
@@ -710,6 +731,18 @@ async def run_foundation(ctx: FortuneRunContext) -> dict[str, Any]:
         ]
         ts.output_summary = f"{len(references)} passages matched"
 
+    _foundation_ms = (_time_local.monotonic() - _t_found_start) * 1000
+    _alogger.info(
+        "[FORTUNE-AGENT] "
+        f"fn={_foundation_fn} stage=foundation model=deterministic reasoning=- "
+        f"latency_ms={_foundation_ms:.0f} "
+        f"tokens_in=0 tokens_out=0 reasoning_tokens=0 requests=0 "
+        f"run_id={ctx.run_id or '-'} fortune_id={ctx.fortune_id or '-'} "
+        f"agent=fortune_foundation ok=true "
+        f"interactions={len(interactions)} ten_gods={len(ten_gods)} "
+        f"luck_pillars={len(luck_pillars)} annual_pillars={len(annual_pillars)}"
+    )
+
     return {
         "pillars": chart,
         "elements": elements,
@@ -752,6 +785,10 @@ def _build_narrative_prompt(ctx: FortuneRunContext, foundation: dict[str, Any]) 
         ]
         prompt_data["notable_annual_pillars"] = notable_years[:20]  # cap at 20
 
+    occasion_window = _build_occasion_window(ctx)
+    if occasion_window:
+        prompt_data["occasion_window"] = occasion_window
+
     # Compatibility: attach Person B's chart so the agent reasons about both.
     person_b_foundation = foundation.get("person_b")
     if person_b_foundation:
@@ -775,6 +812,138 @@ def _build_narrative_prompt(ctx: FortuneRunContext, foundation: dict[str, Any]) 
     return json.dumps(prompt_data, ensure_ascii=False)
 
 
+def _parse_occasion_focus(focus: str | None) -> tuple[str, date, date] | None:
+    if not focus or not focus.startswith("occasion:"):
+        return None
+
+    parts = focus.split(":", 3)
+    if len(parts) != 4:
+        return None
+
+    occasion_type, start_raw, end_raw = parts[1], parts[2], parts[3]
+    try:
+        start = date.fromisoformat(start_raw[:10])
+        end = date.fromisoformat(end_raw[:10])
+    except ValueError:
+        return None
+    if end < start:
+        return None
+    return occasion_type, start, end
+
+
+def _build_occasion_window(ctx: FortuneRunContext) -> dict[str, Any] | None:
+    parsed = _parse_occasion_focus(ctx.focus)
+    if parsed is None:
+        return None
+
+    occasion_type, start, end = parsed
+    candidate_days: list[dict[str, Any]] = []
+    cursor = start
+    # A user-facing lucky-day window is normally one month. Cap defensively so
+    # an accidental long range cannot dominate the model prompt.
+    final_day = min(end, start + timedelta(days=62))
+    while cursor <= final_day:
+        chart = compute_bazi_chart(
+            f"{cursor.isoformat()}T12:00:00",
+            timezone=ctx.timezone,
+            birth_time_unknown=True,
+        )
+        day = chart["day"]
+        candidate_days.append({
+            "date": cursor.isoformat(),
+            "day_pillar_stem": day["stem"],
+            "day_pillar_branch": day["branch"],
+            "stem_element": day["stem_element"],
+            "branch_element": day["branch_element"],
+        })
+        cursor += timedelta(days=1)
+
+    return {
+        "occasion_type": occasion_type,
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "candidate_days": candidate_days,
+    }
+
+
+def repair_occasion_narrative(
+    ctx: FortuneRunContext,
+    narrative: dict[str, Any],
+) -> dict[str, Any]:
+    """Ensure lucky-day picks use real dates from the requested window.
+
+    The LLM provides the interpretation, but date validity is deterministic.
+    This keeps the UI from rendering placeholder strings such as "Invalid Date"
+    and keeps every pick inside the user-selected window.
+    """
+    occasion = narrative.get("occasion")
+    if not isinstance(occasion, dict):
+        return narrative
+
+    window = _build_occasion_window(ctx)
+    if not window:
+        return narrative
+
+    candidates = window.get("candidate_days") or []
+    by_date = {c["date"]: c for c in candidates}
+    used: set[str] = set()
+    repaired: list[dict[str, Any]] = []
+
+    def _fallback_pick(rank: int, candidate: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "rank": rank,
+            "date": candidate["date"],
+            "day_pillar_stem": candidate["day_pillar_stem"],
+            "day_pillar_branch": candidate["day_pillar_branch"],
+            "score": max(60, 86 - rank * 3),
+            "one_line_reason": (
+                f"Stable {candidate['stem_element']} and {candidate['branch_element']} timing "
+                f"supports this {window['occasion_type']}."
+            ),
+            "best_hours": ["09:00-11:00", "11:00-13:00"],
+            "mechanisms": occasion.get("mechanisms") or [],
+        }
+
+    raw_picks = occasion.get("top_picks") or []
+    for raw in raw_picks:
+        pick = raw.model_dump() if hasattr(raw, "model_dump") else dict(raw)
+        candidate = by_date.get(str(pick.get("date", ""))[:10])
+        if candidate is None or candidate["date"] in used:
+            continue
+        pick["date"] = candidate["date"]
+        pick["day_pillar_stem"] = candidate["day_pillar_stem"]
+        pick["day_pillar_branch"] = candidate["day_pillar_branch"]
+        used.add(candidate["date"])
+        repaired.append(pick)
+
+    for candidate in candidates:
+        if len(repaired) >= 3:
+            break
+        if candidate["date"] in used:
+            continue
+        used.add(candidate["date"])
+        repaired.append(_fallback_pick(len(repaired) + 1, candidate))
+
+    for idx, pick in enumerate(repaired[:5], start=1):
+        pick["rank"] = idx
+
+    occasion["top_picks"] = repaired[:5]
+    occasion.setdefault("analysis", {
+        "occasion_type": window["occasion_type"],
+        "key_elements": [],
+        "avoid_elements": [],
+        "description": f"Dates are selected from {window['start']} to {window['end']}.",
+    })
+    narrative["occasion"] = occasion
+    return narrative
+
+
+try:
+    from .agent_logging import classify_function, stage as _stage
+except ImportError:
+    from agent_logging import classify_function, stage as _stage  # type: ignore[no-redef]
+
+
 async def run_narrative(
     ctx: FortuneRunContext,
     *,
@@ -782,12 +951,25 @@ async def run_narrative(
 ) -> EnrichedNarrativeOutput:
     """Run the narrative agent (non-streaming) and return structured output."""
     prompt = _build_narrative_prompt(ctx, foundation)
-    result = await Runner.run(
-        NARRATIVE_AGENT,
-        input=prompt,
-        context=ctx,
-        run_config=_run_config(ctx),
-    )
+    settings = get_settings()
+    fn = classify_function(ctx.focus, ctx.question)
+    with _stage(
+        function=fn,
+        stage="narrative",
+        model=settings.narrative_model,
+        reasoning=settings.narrative_reasoning,
+        fortune_id=ctx.fortune_id,
+        run_id=ctx.run_id,
+        agent=NARRATIVE_AGENT.name,
+        extra={"streamed": "false", "person_b": str("person_b" in foundation).lower()},
+    ) as sh:
+        result = await Runner.run(
+            NARRATIVE_AGENT,
+            input=prompt,
+            context=ctx,
+            run_config=_run_config(ctx),
+        )
+        sh.attach_result(result)
     if isinstance(result.final_output, EnrichedNarrativeOutput):
         return result.final_output
     return EnrichedNarrativeOutput.model_validate(result.final_output)
@@ -798,7 +980,14 @@ async def run_narrative_streamed(
     *,
     foundation: dict[str, Any],
 ):
-    """Run the narrative agent with streaming. Returns the streamed run result."""
+    """Run the narrative agent with streaming. Returns the streamed run result.
+
+    Note: usage on the returned ``RunResultStreaming`` is stale until the
+    stream is fully consumed; the route handler (which owns the consumption
+    loop) is responsible for emitting the structured ``narrative`` log entry
+    on its side. This function only runs the SDK call — it does NOT emit a
+    log of its own to avoid double-logging. See ``routes.py`` stream loop.
+    """
     prompt = _build_narrative_prompt(ctx, foundation)
     return Runner.run_streamed(
         NARRATIVE_AGENT,
@@ -823,12 +1012,24 @@ async def run_guardrail(
         },
         ensure_ascii=False,
     )
-    result = await Runner.run(
-        GUARDRAIL_AGENT,
-        input=prompt,
-        context=ctx,
-        run_config=_run_config(ctx),
-    )
+    settings = get_settings()
+    fn = classify_function(ctx.focus, ctx.question)
+    with _stage(
+        function=fn,
+        stage="guardrail",
+        model=settings.guardrail_model,
+        reasoning=settings.guardrail_reasoning,
+        fortune_id=ctx.fortune_id,
+        run_id=ctx.run_id,
+        agent=GUARDRAIL_AGENT.name,
+    ) as sh:
+        result = await Runner.run(
+            GUARDRAIL_AGENT,
+            input=prompt,
+            context=ctx,
+            run_config=_run_config(ctx),
+        )
+        sh.attach_result(result)
     if isinstance(result.final_output, GuardrailOutput):
         return result.final_output
     return GuardrailOutput.model_validate(result.final_output)

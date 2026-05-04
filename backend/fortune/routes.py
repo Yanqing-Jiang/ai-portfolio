@@ -54,6 +54,7 @@ try:
         FortuneRunContext,
         GuardrailOutput,
         NarrativeOutput,
+        repair_occasion_narrative,
         run_foundation,
         run_guardrail,
         run_narrative_streamed,
@@ -71,6 +72,7 @@ except ImportError:
         FortuneRunContext,
         GuardrailOutput,
         NarrativeOutput,
+        repair_occasion_narrative,
         run_foundation,
         run_guardrail,
         run_narrative_streamed,
@@ -850,6 +852,31 @@ async def stream_fortune(fortune_id: str, request: Request):
                 logger.info("[FORTUNE] %s stream start — run=%s focus=%s birth=%s",
                             session.fortune_id, run_id, ctx.focus, ctx.birth_iso)
 
+                # Structured one-line banner so the 4 customer functions
+                # (compatibility / occasion / luck_cycle / wish) plus the
+                # default reading can be grepped from server logs by
+                # `grep "[FORTUNE-AGENT]" ... | grep "fn=<name>"`.
+                try:
+                    from .agent_logging import classify_function, log_stream_start
+                except ImportError:
+                    from agent_logging import classify_function, log_stream_start  # type: ignore[no-redef]
+                _fn_label = classify_function(ctx.focus, ctx.question)
+                _settings_for_log = get_settings()
+                log_stream_start(
+                    fortune_id=session.fortune_id,
+                    run_id=run_id,
+                    function=_fn_label,
+                    focus=ctx.focus,
+                    model=_settings_for_log.narrative_model,
+                    reasoning=_settings_for_log.narrative_reasoning,
+                    has_person_b=session.request.person_b is not None,
+                    extra={
+                        "tone": ctx.tone or "-",
+                        "has_question": "true" if ctx.question else "false",
+                        "pending_action": pending_action or "-",
+                    },
+                )
+
                 # 1. Begin rendering
                 for msg in bridge.begin_messages(fortune_id=session.fortune_id):
                     yield await _emit(msg)
@@ -1129,12 +1156,57 @@ async def stream_fortune(fortune_id: str, request: Request):
                     if not isinstance(narrative, (NarrativeOutput, EnrichedNarrativeOutput)):
                         narrative = EnrichedNarrativeOutput.model_validate(narrative)
 
-                session.latest_narrative = narrative.model_dump()
+                session.latest_narrative = repair_occasion_narrative(
+                    ctx,
+                    narrative.model_dump(),
+                )
 
                 dur_n = round((_time.monotonic() - _t_narrative) * 1000, 1)
                 n_insights = len(narrative.insights) if hasattr(narrative, "insights") else 0
                 logger.info("[FORTUNE] %s narrative complete — %d insights, %.0fms",
                             session.fortune_id, n_insights, dur_n)
+
+                # Structured per-stage log mirroring run_narrative()'s line so
+                # the streamed path is observable too. Usage on
+                # ``stream_result.context_wrapper.usage`` is only fully
+                # populated AFTER the stream is consumed (see SDK note in
+                # ``run_narrative_streamed``).
+                try:
+                    from .agent_logging import (
+                        classify_function as _classify_fn,
+                        extract_usage as _extract_usage,
+                        UsageSummary as _UsageSummary,
+                        logger as _agent_logger,
+                    )
+                except ImportError:
+                    from agent_logging import (  # type: ignore[no-redef]
+                        classify_function as _classify_fn,
+                        extract_usage as _extract_usage,
+                        UsageSummary as _UsageSummary,
+                        logger as _agent_logger,
+                    )
+                if not pending_action:
+                    try:
+                        _stream_used = _extract_usage(stream_result)
+                    except Exception:
+                        _stream_used = _UsageSummary()
+                    _settings_now = get_settings()
+                    _agent_logger.info(
+                        "[FORTUNE-AGENT] "
+                        f"fn={_classify_fn(ctx.focus, ctx.question)} "
+                        f"stage=narrative_streamed "
+                        f"model={_settings_now.narrative_model} "
+                        f"reasoning={_settings_now.narrative_reasoning} "
+                        f"latency_ms={dur_n:.0f} "
+                        f"tokens_in={_stream_used.input_tokens} "
+                        f"tokens_out={_stream_used.output_tokens} "
+                        f"reasoning_tokens={_stream_used.reasoning_tokens} "
+                        f"requests={_stream_used.requests} "
+                        f"run_id={ctx.run_id or '-'} "
+                        f"fortune_id={ctx.fortune_id or '-'} "
+                        f"agent=fortune_narrative ok=true insights={n_insights} "
+                        f"streamed=true person_b={'true' if 'person_b' in foundation else 'false'}"
+                    )
 
                 if trace:
                     trace.add_instant(
@@ -1278,6 +1350,17 @@ async def stream_fortune(fortune_id: str, request: Request):
                 # 7. Complete — persist snapshot + update run status.
                 total_ms = round((_time.monotonic() - _t_start) * 1000, 1)
                 logger.info("[FORTUNE] %s stream complete — total %.0fms", session.fortune_id, total_ms)
+                try:
+                    from .agent_logging import log_stream_end as _log_stream_end
+                except ImportError:
+                    from agent_logging import log_stream_end as _log_stream_end  # type: ignore[no-redef]
+                _log_stream_end(
+                    fortune_id=session.fortune_id,
+                    run_id=run_id,
+                    function=_fn_label,
+                    total_ms=total_ms,
+                    ok=True,
+                )
                 session.touch(RuntimeStatus.complete)
 
                 if run_uuid is not None:
@@ -1300,6 +1383,18 @@ async def stream_fortune(fortune_id: str, request: Request):
 
             except Exception as exc:
                 logger.exception("[FORTUNE] %s stream error: %s", session.fortune_id, exc)
+                try:
+                    from .agent_logging import log_stream_end as _log_stream_end
+                except ImportError:
+                    from agent_logging import log_stream_end as _log_stream_end  # type: ignore[no-redef]
+                _log_stream_end(
+                    fortune_id=session.fortune_id,
+                    run_id=run_id,
+                    function=_fn_label,
+                    total_ms=(_time.monotonic() - _t_start) * 1000,
+                    ok=False,
+                    error=str(exc),
+                )
                 session.touch(RuntimeStatus.error)
                 if run_uuid is not None:
                     try:

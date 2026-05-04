@@ -355,6 +355,26 @@ async def startup_event():
     except Exception as e:
         logger.warning("[STARTUP] Fortune trace processor registration failed: %s", e)
 
+    # Override the default OpenAI client used by the openai-agents SDK so
+    # that medium-thinking gpt-5-mini narratives (compatibility / occasion
+    # mode in particular) don't get cut off at the SDK's 600s HTTP read
+    # default. The SSE path streams progress so the user UX is unaffected,
+    # but the underlying HTTP read budget needs headroom for the 5-10 min
+    # reasoning tail observed on heavy two-chart compatibility runs.
+    try:
+        import os as _os
+        from openai import AsyncOpenAI
+        from agents import set_default_openai_client
+        api_key = _os.getenv("OPENAI_API_KEY") or _os.getenv("FORTUNE_OPENAI_API_KEY")
+        if api_key:
+            set_default_openai_client(
+                AsyncOpenAI(api_key=api_key, timeout=1200.0),
+                use_for_tracing=True,
+            )
+            logger.info("[STARTUP] openai-agents SDK client timeout set to 1200s")
+    except Exception as e:
+        logger.warning("[STARTUP] openai-agents SDK client override failed: %s", e)
+
     # Sweep any fortune_run rows left in `queued` / `streaming` by a previous
     # worker that crashed mid-stream. Without this, replay keeps reporting
     # 'pending' forever and the Activity Rail shows a permanent spinner.

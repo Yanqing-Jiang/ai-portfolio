@@ -304,7 +304,32 @@ async def run_triage(
     }
     if session is not None:
         kwargs["session"] = session
-    result = await Runner.run(TRIAGE_AGENT, **kwargs)
+
+    try:
+        from .agent_logging import classify_function, stage as _stage
+        from .config import get_settings
+    except ImportError:
+        from agent_logging import classify_function, stage as _stage  # type: ignore[no-redef]
+        from config import get_settings  # type: ignore[no-redef]
+
+    settings = get_settings()
+    fn = classify_function(ctx.focus, ctx.question or question)
+    with _stage(
+        function=fn,
+        stage="triage",
+        model=settings.narrative_model,
+        reasoning=settings.narrative_reasoning,
+        fortune_id=ctx.fortune_id,
+        run_id=ctx.run_id,
+        agent=TRIAGE_AGENT.name,
+        extra={
+            "action_id": action_id or "-",
+            "has_question": "true" if (question or ctx.question) else "false",
+            "has_session": "true" if session is not None else "false",
+        },
+    ) as sh:
+        result = await Runner.run(TRIAGE_AGENT, **kwargs)
+        sh.attach_result(result)
     if isinstance(result.final_output, EnrichedNarrativeOutput):
         return result.final_output
     return EnrichedNarrativeOutput.model_validate(result.final_output)
