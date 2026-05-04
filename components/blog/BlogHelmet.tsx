@@ -10,7 +10,7 @@ const PERSON_SAMEAS = [
   'https://medium.com/@yanqing_j',
   'https://www.linkedin.com/in/yanqingjiang/',
   'https://twitter.com/yanqing_j',
-  'https://github.com/yanqing-j',
+  'https://github.com/Yanqing-Jiang',
 ];
 
 /** Pretty labels for tags shown in user-facing places (article:section etc.). */

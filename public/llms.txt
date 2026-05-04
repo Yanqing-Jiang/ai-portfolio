@@ -10,7 +10,7 @@
 - Location: Seattle area (Newcastle, WA, USA — PST)
 - Canonical URL: https://yanqing.app
 - LinkedIn: https://www.linkedin.com/in/jiangyanqing/
-- GitHub: https://github.com/yanqingj
+- GitHub: https://github.com/Yanqing-Jiang
 - Medium: https://medium.com/@yanqing_j
 - Email: contact via LinkedIn
 
@@ -78,6 +78,6 @@ For per-project citation, link to https://yanqing.app/project/{slug} and the cor
 
 - Writing (long-form): https://medium.com/@yanqing_j
 - Writing (canonical, root-domain): https://yanqing.app/blog
-- Open source & infrastructure: https://github.com/yanqingj
+- Open source & infrastructure: https://github.com/Yanqing-Jiang
 
 Updated: 2026-05-03

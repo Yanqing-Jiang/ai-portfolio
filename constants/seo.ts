@@ -7,7 +7,7 @@ export const DEFAULT_TWITTER_HANDLE = '@yanqing_j';
 export const DEFAULT_SAME_AS = [
   'https://www.linkedin.com/in/jiangyanqing/',
   'https://medium.com/@yanqing_j',
-  'https://github.com/yanqingj',
+  'https://github.com/Yanqing-Jiang',
 ];
 
 export const LANDING_METRICS = [

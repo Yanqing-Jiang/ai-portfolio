@@ -16,7 +16,7 @@ Last updated: 2026-05-03
 - **Location:** Newcastle, WA, USA (Seattle area, Pacific Time)
 - **Canonical site:** https://yanqing.app
 - **LinkedIn:** https://www.linkedin.com/in/jiangyanqing/
-- **GitHub:** https://github.com/yanqingj
+- **GitHub:** https://github.com/Yanqing-Jiang
 - **Medium:** https://medium.com/@yanqing_j
 - **Email:** contact via LinkedIn
 
@@ -407,7 +407,7 @@ Per-project Markdown alternates are available at https://yanqing.app/project/{sl
 
 - **Writing (canonical, root-domain):** https://yanqing.app/blog
 - **Writing (long-form syndication):** https://medium.com/@yanqing_j
-- **Open source & infrastructure:** https://github.com/yanqingj
+- **Open source & infrastructure:** https://github.com/Yanqing-Jiang
 - **Project catalog (JSON):** https://yanqing.app/ai-projects.json
 - **Sitemap:** https://yanqing.app/sitemap.xml
 - **RSS:** https://yanqing.app/rss.xml
