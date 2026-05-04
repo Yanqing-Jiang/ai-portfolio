@@ -201,23 +201,29 @@ const ensureDescription = (project: Project) => {
 };
 
 // Function: buildPersonSchema — called from LandingPageFlow to embed Person JSON-LD for SEO and LLM discoverability; returns schema.org Person with stable @id, job title, skills, and social links.
+// jobTitle uses hybrid wording (current internal + public positioning) per GEO audit 2026-05-03 to align with Director-of-Agents narrative without misrepresenting current employer role.
 export const buildPersonSchema = () => ({
   '@context': 'https://schema.org',
   '@type': 'Person',
   '@id': `${SITE_BASE_URL}/#person`,
   name: sanitizeText(LANDING_SEO.author),
-  jobTitle: 'Senior Advanced Analytics Manager',
+  jobTitle: 'AI Systems Engineer',
+  description:
+    'AI Systems Engineer / Director-of-Agents candidate. Currently Senior Advanced Analytics Manager at P&G (Amazon team), building enterprise agent systems, agentic analytics, generative UI, and workflow automation.',
   url: SITE_BASE_URL,
   image: DEFAULT_OG_IMAGE,
   sameAs: LANDING_SEO.sameAs ?? DEFAULT_SAME_AS,
   knowsAbout: [
     'AI Systems Engineering',
+    'Director of Agents',
     'LangGraph Agent Orchestration',
     'Claude Agent SDK',
-    'Analytics Automation',
-    'Generative UI (A2UI)',
-    'RAG Systems',
+    'A2UI Protocol',
+    'Generative UI',
     'Multi-Agent Workflows',
+    'Analytics Automation',
+    'RAG Systems',
+    'Production LLM Pipelines',
   ],
 });
 
@@ -288,20 +294,19 @@ export const buildArticleSchema = (project: Project) => {
 export const buildLandingSchemas = (
   projects: Project[],
   navigation: NavigationDefinition[],
-  faqItems: FaqItem[] = []
+  // FAQPage schema intentionally NOT included on landing per Tw93 GEO playbook
+  // (2026-05-03): Princeton/IIT Delhi GEO research finds pure FAQ format hurts
+  // AI citations. The faqItems param is accepted for backward compatibility but
+  // is not emitted into landing-page schemas. Use buildFaqSchema() directly only
+  // for non-landing routes (e.g. /ask) where FAQ-shape powers a product feature.
+  _faqItems: FaqItem[] = []
 ) => {
-  const schemas = [
+  return [
     buildWebsiteSchema(projects),
     buildServiceCatalogSchema(),
     buildSiteNavigationSchema(navigation),
     buildStatsSchema(),
   ];
-
-  if (faqItems.length) {
-    schemas.push(buildFaqSchema(faqItems));
-  }
-
-  return schemas;
 };
 
 export const toNavigationFromProjects = (projects: Project[]): NavigationDefinition[] => {

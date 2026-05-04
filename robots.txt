@@ -1,44 +1,56 @@
-# Updated: 2026-01-15
+# Updated: 2026-05-03
+# Policy: allow search/retrieval + user-triggered crawlers; block training + undeclared crawlers.
+# Mirrors public/robots.txt (deployed) — keep these in sync.
 
 User-agent: *
 Allow: /
+Disallow: /signin
+Disallow: /auth
 Disallow: /api/
 Disallow: /backend/
 Disallow: /venv/
 Disallow: /node_modules/
 
-Sitemap: https://yanqing.app/sitemap.xml
-
-# OpenAI (search + training)
+# --- Search & retrieval crawlers (ALLOW — required for AI search visibility) ---
 User-agent: OAI-SearchBot
 Allow: /
-User-agent: ChatGPT-User
-Allow: /
-User-agent: GPTBot
-Allow: /
-
-# Anthropic (search + training)
 User-agent: Claude-SearchBot
 Allow: /
-User-agent: Claude-User
-Allow: /
-User-agent: ClaudeBot
-Allow: /
-
-# Google (training)
-User-agent: Google-Extended
-Allow: /
-
-# Perplexity
 User-agent: PerplexityBot
 Allow: /
 
-# Amazon
-User-agent: Amazonbot
+# --- User-triggered fetchers (ALLOW — fires when user pastes a URL into a chat) ---
+User-agent: ChatGPT-User
+Allow: /
+User-agent: Claude-User
+Allow: /
+User-agent: Perplexity-User
+Allow: /
+User-agent: Google-Agent
 Allow: /
 
-# Block high-volume scrapers
+# --- Training crawlers (BLOCK — keep content out of model training) ---
+User-agent: GPTBot
+Disallow: /
+User-agent: ClaudeBot
+Disallow: /
+User-agent: Meta-ExternalAgent
+Disallow: /
+User-agent: CCBot
+Disallow: /
+
+# --- Opt-out tokens (BLOCK from training, search still works elsewhere) ---
+User-agent: Google-Extended
+Disallow: /
+User-agent: Applebot-Extended
+Disallow: /
+
+# --- Undeclared / high-volume scrapers (BLOCK) ---
 User-agent: Bytespider
 Disallow: /
 User-agent: DataForSeoBot
 Disallow: /
+User-agent: Amazonbot
+Disallow: /
+
+Sitemap: https://yanqing.app/sitemap.xml

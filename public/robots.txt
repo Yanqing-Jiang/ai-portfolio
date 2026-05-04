@@ -1,5 +1,6 @@
-# Updated: 2026-01-04
-# Policy: allow search + user browsing; block model training crawlers.
+# Updated: 2026-05-03
+# Policy: allow search/retrieval + user-triggered crawlers; block training + undeclared crawlers.
+# This file is the deployed source of truth. Root robots.txt mirrors it.
 
 User-agent: *
 Allow: /
@@ -7,27 +8,46 @@ Disallow: /signin
 Disallow: /auth
 Disallow: /api/
 
-# OpenAI search & browsing
+# --- Search & retrieval crawlers (ALLOW — required for AI search visibility) ---
 User-agent: OAI-SearchBot
 Allow: /
-User-agent: ChatGPT-User
+User-agent: Claude-SearchBot
+Allow: /
+User-agent: PerplexityBot
 Allow: /
 
-# OpenAI training (blocked)
-User-agent: GPTBot
-Disallow: /
-
-# Anthropic search & browsing
-User-agent: Claude-SearchBot
+# --- User-triggered fetchers (ALLOW — fires when user pastes a URL into a chat) ---
+User-agent: ChatGPT-User
 Allow: /
 User-agent: Claude-User
 Allow: /
-# Anthropic training (blocked)
+User-agent: Perplexity-User
+Allow: /
+User-agent: Google-Agent
+Allow: /
+
+# --- Training crawlers (BLOCK — keep content out of model training) ---
+User-agent: GPTBot
+Disallow: /
 User-agent: ClaudeBot
 Disallow: /
+User-agent: Meta-ExternalAgent
+Disallow: /
+User-agent: CCBot
+Disallow: /
 
-# Google: opt out of training only (search still allowed)
+# --- Opt-out tokens (BLOCK from training, search still works elsewhere) ---
 User-agent: Google-Extended
+Disallow: /
+User-agent: Applebot-Extended
+Disallow: /
+
+# --- Undeclared / high-volume scrapers (BLOCK) ---
+User-agent: Bytespider
+Disallow: /
+User-agent: DataForSeoBot
+Disallow: /
+User-agent: Amazonbot
 Disallow: /
 
 Sitemap: https://yanqing.app/sitemap.xml

@@ -97,38 +97,48 @@ export const LANDING_SEO = {
   updatedTime: '2026-01-05T00:00:00Z',
 };
 
+// FAQ content kept as a constant for reuse in non-landing surfaces ONLY.
+// Per Tw93 GEO playbook (2026-05-03): pure FAQ format hurts AI citations
+// (Princeton/IIT Delhi research). Do NOT emit this onto the landing page or
+// into FAQPage JSON-LD. Intended re-use: feed as RAG context to the
+// "Ask My Resume" agent at /project/ask-my-resume so the same Q&A content
+// powers a product feature instead of a GEO anti-pattern.
 export const LANDING_FAQ = [
   {
     question: 'What types of AI systems do you build?',
     answer:
-      'I ship LangGraph-powered copilots, memory-augmented workflows, and analytics agents that automate research, SQL generation, and decision support for commercial teams.',
+      'Enterprise agent systems: LangGraph and Claude Agent SDK orchestrations, generative UI (A2UI protocol), production LLM pipelines, and personal AI infrastructure (Homer). Built end-to-end with FastAPI + Supabase + React, instrumented for governance and telemetry.',
   },
   {
     question: 'Which industries have you supported?',
     answer:
-      'Commerce, retail media, finance, and operations groups rely on my platforms for experimentation, procurement automation, and revenue forecasting.',
+      'Commerce, retail media, finance, and operations. Production work at P&G (Amazon team) covers experimentation, procurement automation, AP reconciliation, and revenue forecasting.',
   },
   {
     question: 'How do you approach data governance and infrastructure?',
     answer:
-      'I modernize Supabase and SQL Server foundations with governed views, vector indexes, and telemetry so AI agents and BI tools stay compliant and fast.',
+      'Governed views, vector indexes (Supabase pgvector), audit trails, and telemetry so agents and BI workloads stay compliant. Backend on FastAPI with SSE streaming, Cloudflare Pages frontend, Docker for daemons.',
   },
   {
     question: 'Can you integrate with existing analytics stacks?',
     answer:
-      'Yes. I have integrated FastAPI services, Supabase, Power BI, and bespoke APIs to orchestrate workflows that work alongside the tools teams already use.',
+      'Yes. Production integrations include FastAPI, Supabase, Power BI, SQL Server, and bespoke APIs. The agentic layer composes existing tools rather than replacing them.',
   },
 ];
 
+// Search/retrieval + user-triggered crawlers ONLY.
+// Training crawlers (GPTBot, ClaudeBot, Google-Extended, CCBot, Meta-ExternalAgent)
+// are intentionally NOT allowlisted per Tw93 GEO playbook (2026-05-03).
 export const AI_CRAWLER_ALLOWLIST = [
-  'GPTBot',
-  'ChatGPT-User',
-  'Google-Extended',
-  'ClaudeBot',
-  'Ai2Bot',
-  'CCBot',
+  // Search & retrieval
+  'OAI-SearchBot',
+  'Claude-SearchBot',
   'PerplexityBot',
-  'Amazonbot',
+  // User-triggered fetchers
+  'ChatGPT-User',
+  'Claude-User',
+  'Perplexity-User',
+  'Google-Agent',
 ];
 
 export const AI_CRAWLER_MONITORED_PATTERNS = [

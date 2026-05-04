@@ -160,9 +160,10 @@ try {
   console.warn('RSS generation failed (continuing build):', err);
 }
 
+const siteOrigin = pages[0] ? `${new URL(pages[0].loc).origin}/` : 'https://yanqing.app/';
+const sitemapUrl = new URL('sitemap.xml', siteOrigin).toString();
+
 if (process.env.PING_SITEMAPS === '1') {
-  const siteOrigin = pages[0] ? `${new URL(pages[0].loc).origin}/` : 'https://yanqing.app/';
-  const sitemapUrl = new URL('sitemap.xml', siteOrigin).toString();
   const endpoints = [
     `https://www.google.com/ping?sitemap=${encodeURIComponent(sitemapUrl)}`,
     `https://www.bing.com/ping?sitemap=${encodeURIComponent(sitemapUrl)}`,
@@ -182,4 +183,46 @@ if (process.env.PING_SITEMAPS === '1') {
       }
     })
   );
+}
+
+// ---- IndexNow ping (Bing / Copilot / Perplexity / Yandex) ----
+// Per Tw93 GEO playbook (2026-05-03): IndexNow lets Bing pick up new pages
+// in minutes instead of waiting for crawlers. Bing's index powers Copilot,
+// DuckDuckGo, Yahoo, and feeds many AI search systems.
+//
+// Set INDEXNOW_KEY in CI/env. The matching key file MUST exist at
+// public/<INDEXNOW_KEY>.txt with the key as its content. Generate a key at
+// https://www.bing.com/indexnow.
+//
+// Skipped silently if INDEXNOW_KEY is unset (e.g. local dev builds).
+if (process.env.INDEXNOW_KEY) {
+  const indexNowKey = process.env.INDEXNOW_KEY;
+  const host = new URL(siteOrigin).host;
+  const keyLocation = `${siteOrigin}${indexNowKey}.txt`;
+
+  // Send all sitemap URLs. IndexNow accepts up to 10,000 URLs per request.
+  const urlList = allEntries.map((entry) => entry.loc);
+
+  try {
+    const response = await fetch('https://api.indexnow.org/indexnow', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json; charset=utf-8' },
+      body: JSON.stringify({
+        host,
+        key: indexNowKey,
+        keyLocation,
+        urlList,
+      }),
+    });
+    // IndexNow returns 200 (accepted) or 202 (queued) on success.
+    if (response.ok || response.status === 202) {
+      console.log(`IndexNow ping succeeded: ${urlList.length} URLs submitted (status ${response.status})`);
+    } else {
+      console.warn(`IndexNow ping returned ${response.status}: ${await response.text()}`);
+    }
+  } catch (error) {
+    console.warn('IndexNow ping threw:', error);
+  }
+} else {
+  console.log('IndexNow ping skipped (INDEXNOW_KEY not set).');
 }

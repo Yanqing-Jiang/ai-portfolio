@@ -25,17 +25,35 @@ logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 AI_FACTS_PATH = BASE_DIR / "public" / "ai-projects.json"
+# Patterns for monitoring/telemetry (which UAs do we track in logs).
 AI_CRAWLER_PATTERNS = (
-    "gptbot",
+    "oai-searchbot",
     "chatgpt-user",
-    "google-extended",
+    "gptbot",
+    "claude-searchbot",
+    "claude-user",
     "claudebot",
     "perplexitybot",
-    "amazonbot",
+    "perplexity-user",
+    "google-agent",
+    "google-extended",
     "bytespider",
     "dataforseobot",
+    "amazonbot",
 )
-AI_CRAWLER_ALLOWLIST = {"gptbot", "chatgpt-user", "google-extended", "claudebot", "perplexitybot", "amazonbot"}
+# Crawlers we intentionally permit (search/retrieval + user-triggered ONLY).
+# Training crawlers (gptbot, claudebot, google-extended, ccbot) are intentionally
+# NOT allowlisted per Tw93 GEO playbook (2026-05-03). They are monitored above
+# for observability but not given preferential routing.
+AI_CRAWLER_ALLOWLIST = {
+    "oai-searchbot",
+    "claude-searchbot",
+    "perplexitybot",
+    "chatgpt-user",
+    "claude-user",
+    "perplexity-user",
+    "google-agent",
+}
 
 _ai_facts_cache: Optional[List[Dict[str, Any]]] = None
 _ai_facts_mtime: float = 0.0

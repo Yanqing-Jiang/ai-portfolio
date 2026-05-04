@@ -14,7 +14,6 @@ import {
     DEFAULT_OG_IMAGE,
     DEFAULT_THEME_COLOR,
     DEFAULT_TWITTER_HANDLE,
-    LANDING_FAQ,
     LANDING_SEO,
     SITE_NAME,
 } from '../constants/seo';
@@ -256,8 +255,12 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
     );
 
     const navigationLinks = useMemo(() => toNavigationFromProjects(allProjects), [allProjects]);
+    // LANDING_FAQ is no longer passed into landing-page JSON-LD per GEO audit
+    // 2026-05-03 (FAQPage schema removed; Princeton/IIT Delhi research shows
+    // pure FAQ format hurts AI citations). LANDING_FAQ remains exported for
+    // reuse as RAG context in the Ask-My-Resume agent.
     const landingSchemas = useMemo(
-        () => buildLandingSchemas(allProjects, navigationLinks, LANDING_FAQ),
+        () => buildLandingSchemas(allProjects, navigationLinks),
         [allProjects, navigationLinks]
     );
     const personSchema = useMemo(() => buildPersonSchema(), []);
