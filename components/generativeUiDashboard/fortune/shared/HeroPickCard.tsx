@@ -28,13 +28,18 @@ export const HeroPickCard: React.FC<HeroPickCardProps> = ({ pick, isComputing, i
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const dateObj = new Date(pick.date);
-  const formattedDate = dateObj.toLocaleDateString('en-US', {
-    month: 'short', day: 'numeric', weekday: 'short',
-  });
+  const dateObj = new Date(`${pick.date}T12:00:00`);
+  const isValidDate = Number.isFinite(dateObj.getTime());
+  const formattedDate = isValidDate
+    ? dateObj.toLocaleDateString('en-US', {
+        month: 'short', day: 'numeric', weekday: 'short',
+      })
+    : 'Date pending';
 
   // Simple countdown logic
-  const daysDiff = Math.ceil((dateObj.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+  const daysDiff = isValidDate
+    ? Math.ceil((dateObj.getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+    : null;
 
   return (
     <motion.div
@@ -45,30 +50,29 @@ export const HeroPickCard: React.FC<HeroPickCardProps> = ({ pick, isComputing, i
         isComputing ? 'border-amber-500/50 animate-pulse' : 'border-amber-500/20'
       } bg-gradient-to-br from-amber-500/10 to-transparent backdrop-blur-md`}
     >
-      {/* Rank Badge */}
-      <div className="absolute top-0 right-0 p-4">
-        <div className="bg-amber-500 text-slate-950 text-[10px] font-bold px-2 py-0.5 rounded-bl-xl rounded-tr-sm uppercase tracking-tighter">
-          Best Pick
-        </div>
-      </div>
-
       <div className="flex flex-col gap-6">
-        {/* Header: Date & Score */}
-        <div className="flex items-start justify-between">
-          <div className="flex flex-col">
-            <span className="text-[11px] font-bold text-amber-500 uppercase tracking-widest mb-1">
-              {formattedDate}
-            </span>
+        {/* Header: Date & Score (badge sits inline with date so it never
+             collides with the score gauge in the top-right). */}
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex min-w-0 flex-col">
+            <div className="mb-1 flex items-center gap-2 flex-wrap">
+              <span className="text-[11px] font-bold text-amber-500 uppercase tracking-widest">
+                {formattedDate}
+              </span>
+              <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[9px] font-bold uppercase tracking-tighter text-amber-300 border border-amber-500/30">
+                Best Pick
+              </span>
+            </div>
             <div className="flex items-baseline gap-2">
               <span className="text-3xl font-serif text-white leading-none">
-                {pick.dayPillar.stem}
-                <span className="text-amber-500/80">{pick.dayPillar.branch}</span>
+                {pick.dayPillar?.stem || '--'}
+                <span className="text-amber-500/80">{pick.dayPillar?.branch || '--'}</span>
               </span>
               <span className="text-xs text-white/40 font-light">Day Pillar</span>
             </div>
           </div>
 
-          <div className="w-16 h-16">
+          <div className="w-16 h-16 flex-none">
             <ScoreGauge score={pick.score} size={64} accentColor={accent.primary} isReplay={isReplay} />
           </div>
         </div>
@@ -96,7 +100,13 @@ export const HeroPickCard: React.FC<HeroPickCardProps> = ({ pick, isComputing, i
         <div className="flex items-center justify-between pt-2 border-t border-white/10">
           <div className="flex items-center gap-2 text-[11px] text-white/40">
             <Calendar className="w-3.5 h-3.5" />
-            <span>{daysDiff >= 0 ? `In ${daysDiff} days` : `${Math.abs(daysDiff)} days ago`}</span>
+            <span>
+              {daysDiff === null
+                ? 'Timing pending'
+                : daysDiff >= 0
+                  ? `In ${daysDiff} days`
+                  : `${Math.abs(daysDiff)} days ago`}
+            </span>
           </div>
 
           <button

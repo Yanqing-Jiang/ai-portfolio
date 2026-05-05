@@ -146,8 +146,14 @@ const SidebarV2: React.FC<SidebarV2Props> = ({
             >
                 {/* 1. ATMOSPHERIC BACKGROUND LAYER */}
                 <div className="absolute inset-0 overflow-hidden pointer-events-none">
-                    {/* Noise Texture (Aligned with Landing Page) */}
-                    <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20" />
+                    {/* Local noise texture avoids a flaky external asset request. */}
+                    <div
+                        className="absolute inset-0 opacity-20"
+                        style={{
+                            backgroundImage: 'radial-gradient(circle at 1px 1px, rgba(255,255,255,0.18) 1px, transparent 0)',
+                            backgroundSize: '4px 4px',
+                        }}
+                    />
 
                     {/* Reactive Spotlight */}
                     <motion.div

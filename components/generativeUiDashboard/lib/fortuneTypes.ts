@@ -236,10 +236,14 @@ export interface Interaction {
 export interface LuckPillar {
   startAge: number;
   endAge: number;
+  startYear?: number;
+  endYear?: number;
   stem: string;
   branch: string;
   stemChinese?: string;
   branchChinese?: string;
+  stemElement?: ElementType;
+  branchElement?: ElementType;
   element?: ElementType;
   score?: number;
   description?: string;

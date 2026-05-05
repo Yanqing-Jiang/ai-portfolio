@@ -13,7 +13,7 @@ _MODULE_DIR = Path(__file__).resolve().parent
 load_dotenv(dotenv_path=_MODULE_DIR.parent / ".env", override=False)
 load_dotenv(dotenv_path=_MODULE_DIR / ".env", override=False)
 
-DEFAULT_OPENAI_MODEL = "gpt-5-mini-2025-08-07"
+DEFAULT_OPENAI_MODEL = "gpt-5.4-mini"
 
 
 class FortuneSettings(BaseSettings):
@@ -38,23 +38,26 @@ class FortuneSettings(BaseSettings):
     default_timezone: str = "UTC"
 
     # Models
-    intake_model: str = DEFAULT_OPENAI_MODEL
-    chart_model: str = DEFAULT_OPENAI_MODEL
-    classics_model: str = DEFAULT_OPENAI_MODEL
     narrative_model: str = DEFAULT_OPENAI_MODEL
     guardrail_model: str = DEFAULT_OPENAI_MODEL
 
-    # Reasoning effort ("minimal" | "low" | "medium" | "high" | "xhigh").
-    # Default = medium to match the gpt-5-mini-2025-08-07 medium-thinking
-    # baseline the agent browser is benchmarked against. Override per-stage
-    # via FORTUNE_NARRATIVE_REASONING etc. in .env if you need to trade
-    # depth for latency. Guardrail stays low — it's a small safety pass and
-    # medium reasoning would dominate end-to-end stream latency.
-    intake_reasoning: str = "medium"
-    chart_reasoning: str = "medium"
-    classics_reasoning: str = "medium"
+    # Reasoning effort ("none" | "minimal" | "low" | "medium" | "high" | "xhigh").
+    # Default = medium for narrative quality. Override per-stage via
+    # FORTUNE_NARRATIVE_REASONING etc. in .env if you need to trade depth
+    # for latency. Guardrail stays low because it's a small safety pass.
     narrative_reasoning: str = "medium"
     guardrail_reasoning: str = "low"
+    # Follow-up Ask turns are inherently lighter (one focused question
+    # against an already-computed foundation) so they default to "low" —
+    # roughly 30% faster than medium, which dominates perceived latency on
+    # the Ask tab. The initial reading still uses narrative_reasoning.
+    ask_reasoning: str = "low"
+
+    # Rollout flags for Day 0 migrations.
+    active_luck_window_enabled: bool = True
+    current_annual_window_enabled: bool = True
+    snapshot_schema_versions_enabled: bool = True
+    annual_prompt_horizon_years: int = 10
 
     # Limits
     max_classical_references: int = 4

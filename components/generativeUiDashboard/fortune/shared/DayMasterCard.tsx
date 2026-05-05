@@ -27,7 +27,7 @@ export const DayMasterCard: React.FC<DayMasterCardProps> = ({
   accentColor = '#14b8a6',
   isReplay = false,
 }) => {
-  const ec = ELEMENT_COLORS[element];
+  const ec = ELEMENT_COLORS[element] || ELEMENT_COLORS.Wood;
   const sl = STRENGTH_LABELS[strength] || STRENGTH_LABELS.moderate;
 
   return (
@@ -51,7 +51,10 @@ export const DayMasterCard: React.FC<DayMasterCardProps> = ({
             Day Master
           </div>
           <div className={`text-sm font-semibold ${ec.text}`}>
-            {stem} {element}
+            {/* Avoid "Yin Earth Earth" duplication: stems are emitted as
+                polarity-element labels (e.g. "Yin Earth"), so if the stem
+                already contains the element, just render the stem. */}
+            {stem.toLowerCase().includes(element.toLowerCase()) ? stem : `${stem} ${element}`}
           </div>
           <div className={`text-[11px] ${sl.color}`}>{sl.label}</div>
         </div>

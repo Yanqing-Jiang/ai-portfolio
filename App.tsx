@@ -29,6 +29,7 @@ import { FortuneAgentCustomWishResult } from './components/generativeUiDashboard
 import { FortuneAgentLandingA } from './components/generativeUiDashboard/FortuneAgentLandingA';
 import { FortuneAgentLandingB } from './components/generativeUiDashboard/FortuneAgentLandingB';
 import { FortuneAgentLandingC } from './components/generativeUiDashboard/FortuneAgentLandingC';
+import { AskDemoPage } from './components/generativeUiDashboard/fortune/AskDemoPage';
 import { ConsultingPage } from './components/consulting/ConsultingPage';
 import BlogIndexPage from './components/blog/BlogIndexPage';
 import BlogPostPage from './components/blog/BlogPostPage';
@@ -369,6 +370,10 @@ const Layout: React.FC = () => {
             <Route path="/project/fortune-agent/landing-a" element={<FortuneAgentLandingA />} />
             <Route path="/project/fortune-agent/landing-b" element={<FortuneAgentLandingB />} />
             <Route path="/project/fortune-agent/landing-c" element={<FortuneAgentLandingC />} />
+
+            {/* Ask-tab redesign experiments — three concepts side-by-side */}
+            <Route path="/project/fortune-agent/ask-demo" element={<AskDemoPage />} />
+            <Route path="/project/fortune-agent/ask-demo/:variant" element={<AskDemoPage />} />
 
             <Route path="/project/:projectId" element={<ProjectRoute />} />
             <Route path="/consult" element={<ConsultingPage />} />

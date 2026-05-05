@@ -66,6 +66,11 @@ interface ThinkingPanelProps {
     /** True once a pause/cancel request is in flight. Disables the button
      * and swaps the label to "Pausing…". */
     paused?: boolean;
+    /** When false, suppress the persistent floating "Agent reasoning · N
+     * steps" dock once status flips to `complete`. Useful when the parent
+     * only wants the live streaming view (e.g. surface the dock only on
+     * the Ask tab to avoid clutter on chart/timeline tabs). */
+    showCompletedDock?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -515,6 +520,7 @@ export const ThinkingPanel: React.FC<ThinkingPanelProps> = ({
     status,
     onPause,
     paused,
+    showCompletedDock = true,
 }) => {
     const theme = FORTUNE_THEMES[purpose];
     const accent = theme.accent;
@@ -525,6 +531,9 @@ export const ThinkingPanel: React.FC<ThinkingPanelProps> = ({
 
     // Nothing to show if we're complete and have no steps at all.
     if (status === 'complete' && steps.length === 0) return null;
+    // Suppressed dock — caller only wants the live streaming view (e.g. the
+    // Ask tab surfaces reasoning inline via OracleChat instead).
+    if (status === 'complete' && !showCompletedDock) return null;
 
     return (
         <AnimatePresence mode="wait">

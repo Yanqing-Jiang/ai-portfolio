@@ -50,10 +50,9 @@ export const TopPicksTab: React.FC<{ isReplay?: boolean }> = ({ isReplay = false
       >
         <AnimatePresence mode="popLayout">
           {picks.length > 0 ? (
-            <React.Fragment key="picks-content">
+            <motion.div key="picks-content" className="flex flex-col gap-4">
               {/* Rank 1 Hero */}
               <HeroPickCard
-                key="hero"
                 pick={picks[0]}
                 isComputing={isHeroComputing}
                 isReplay={isReplay}
@@ -63,7 +62,7 @@ export const TopPicksTab: React.FC<{ isReplay?: boolean }> = ({ isReplay = false
               <div key="supporting" className="flex flex-col gap-3">
                 {picks.slice(1, 5).map((pick, idx) => (
                   <ExpandablePickCard
-                    key={pick.date}
+                    key={`${pick.date || 'pick'}-${pick.rank ?? idx + 2}-${idx}`}
                     pick={pick}
                     rank={idx + 2}
                     citations={citations}
@@ -71,7 +70,7 @@ export const TopPicksTab: React.FC<{ isReplay?: boolean }> = ({ isReplay = false
                   />
                 ))}
               </div>
-            </React.Fragment>
+            </motion.div>
           ) : (
             /* Skeleton State */
             <div key="skeleton" className="flex flex-col gap-4">

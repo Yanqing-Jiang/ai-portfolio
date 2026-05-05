@@ -29,6 +29,247 @@ def _stable_id(prefix: str, payload: str) -> str:
     return f"{prefix}_{digest}"
 
 
+# Heavenly Stem & Earthly Branch translations (CJK → English/Pinyin) so the
+# frontend renders readable labels by default. The CJK glyph is preserved on
+# `stemChinese` / `branchChinese` for the explicit toggle.
+_STEM_EN: dict[str, str] = {
+    "甲": "Yang Wood",  "乙": "Yin Wood",
+    "丙": "Yang Fire",  "丁": "Yin Fire",
+    "戊": "Yang Earth", "己": "Yin Earth",
+    "庚": "Yang Metal", "辛": "Yin Metal",
+    "壬": "Yang Water", "癸": "Yin Water",
+}
+_BRANCH_EN: dict[str, str] = {
+    "子": "Rat",     "丑": "Ox",
+    "寅": "Tiger",   "卯": "Rabbit",
+    "辰": "Dragon",  "巳": "Snake",
+    "午": "Horse",   "未": "Goat",
+    "申": "Monkey",  "酉": "Rooster",
+    "戌": "Dog",     "亥": "Pig",
+}
+
+_ELEMENT_TITLECASE = {"wood": "Wood", "fire": "Fire", "earth": "Earth", "metal": "Metal", "water": "Water"}
+
+
+def _to_titlecase_element(value: Any) -> str:
+    """Normalize stem/branch element strings ('wood' → 'Wood') for the FE type."""
+    if not isinstance(value, str):
+        return ""
+    return _ELEMENT_TITLECASE.get(value.lower(), value)
+
+
+# Combined glyph table for in-place English substitution of LLM-generated
+# mechanism titles / bullets. Stems + Branches + composite labels with the
+# Chinese-Han ten-god names. This is a defense-in-depth pass after the
+# prompt-level "English ONLY" rule (some specialists still leak the odd
+# glyph in proper-noun-style titles like "Twin Ji卯 Spouse Palaces").
+_GLYPH_EN: dict[str, str] = {
+    # Heavenly Stems
+    "甲": "Yang Wood",  "乙": "Yin Wood",
+    "丙": "Yang Fire",  "丁": "Yin Fire",
+    "戊": "Yang Earth", "己": "Yin Earth",
+    "庚": "Yang Metal", "辛": "Yin Metal",
+    "壬": "Yang Water", "癸": "Yin Water",
+    # Earthly Branches
+    "子": "Rat",     "丑": "Ox",
+    "寅": "Tiger",   "卯": "Rabbit",
+    "辰": "Dragon",  "巳": "Snake",
+    "午": "Horse",   "未": "Goat",
+    "申": "Monkey",  "酉": "Rooster",
+    "戌": "Dog",     "亥": "Pig",
+    # Common ten-god / interaction-type glyphs
+    "正官": "Direct Officer", "七杀": "Seven Killings",
+    "正财": "Direct Wealth",  "偏财": "Indirect Wealth",
+    "食神": "Eating God",     "伤官": "Hurt Officer",
+    "正印": "Direct Resource", "偏印": "Indirect Resource",
+    "比肩": "Direct Companion", "劫财": "Rob Wealth",
+    "冲": "Clash", "合": "Combination", "害": "Harm",
+    "刑": "Punishment", "破": "Destruction",
+    # Stem-element compound forms (so a bullet like "Both Day Masters are
+    # 己土" reads "Both Day Masters are Yin Earth", not "Yin Earth Earth").
+    # Multi-char tokens are matched first via length-DESC sort below.
+    "甲木": "Yang Wood",  "乙木": "Yin Wood",
+    "丙火": "Yang Fire",  "丁火": "Yin Fire",
+    "戊土": "Yang Earth", "己土": "Yin Earth",
+    "庚金": "Yang Metal", "辛金": "Yin Metal",
+    "壬水": "Yang Water", "癸水": "Yin Water",
+    "土": "Earth", "木": "Wood", "火": "Fire", "金": "Metal", "水": "Water",
+}
+
+
+def _strip_cjk_to_english(text: str) -> str:
+    """CJK glyph substitution for any user-facing string.
+
+    Implementation is a left-to-right tokenizing scanner (NOT repeated
+    `.replace()`) so adjacent CJK tokens like "己卯" become "Yin Earth
+    Rabbit" rather than "Yin EarthRabbit". Multi-character keys ("正官",
+    "己土") are matched before single-char fallbacks because the keys are
+    sorted by length descending.
+
+    The scanner inserts a whitespace separator between two consecutive
+    CJK→English replacements unless the previous token already ends in a
+    natural delimiter (space / punctuation). Non-CJK characters are
+    appended verbatim, so existing English words and ASCII punctuation
+    survive untouched.
+    """
+    if not isinstance(text, str) or not text:
+        return text
+
+    keys_by_length = sorted(_GLYPH_EN.keys(), key=len, reverse=True)
+    boundary_chars = (" ", "\t", "\n", "-", "·", "/", "(", "[", "{", '"', "'")
+
+    out: list[str] = []
+    last_was_substitution = False
+    i = 0
+    while i < len(text):
+        # Greedy: try the longest key first.
+        match: str | None = None
+        for k in keys_by_length:
+            if text.startswith(k, i):
+                match = k
+                break
+        if match is not None:
+            # Insert a separator if the previous segment was a CJK
+            # substitution and didn't end in a natural delimiter.
+            if out and not out[-1].endswith(boundary_chars):
+                out.append(" ")
+            out.append(_GLYPH_EN[match])
+            i += len(match)
+            last_was_substitution = True
+        else:
+            ch = text[i]
+            # If the previous segment was a CJK substitution and the next
+            # char is alphanumeric (no natural delimiter), insert a space
+            # so we don't glue "Yin EarthFoo" together.
+            if last_was_substitution and ch.isalnum():
+                out.append(" ")
+            out.append(ch)
+            i += 1
+            last_was_substitution = False
+    # Collapse any incidental double-spaces.
+    return " ".join("".join(out).split())
+
+
+# Classical-source translation map. Sources in classics.json are formatted
+# "<Book> · <Chapter>". We translate book + chapter independently so a new
+# entry only needs a chapter addition. Unknown parts fall back to the CJK
+# glyph but the CJK→English glyph table above will catch any stray hanzi.
+_CLASSIC_BOOKS_EN: dict[str, str] = {
+    "滴天髓": "Drops of Heaven's Essence",
+    "三命通会": "Three Lives Compendium",
+    "子平真诠": "Ziping's True Classic",
+    "渊海子平": "Yuanhai Ziping",
+}
+
+_CLASSIC_CHAPTERS_EN: dict[str, str] = {
+    # Stems (from 滴天髓)
+    "甲木": "Yang Wood",  "乙木": "Yin Wood",
+    "丙火": "Yang Fire",  "丁火": "Yin Fire",
+    "戊土": "Yang Earth", "己土": "Yin Earth",
+    "庚金": "Yang Metal", "辛金": "Yin Metal",
+    "壬水": "Yang Water", "癸水": "Yin Water",
+    # Concept chapters
+    "论通根": "On Rooting",
+    "论官杀": "On Officer & Killings",
+    "论日主旺衰": "On Day-Master Strength",
+    "论三合": "On Three Harmonies",
+    "论五行": "On the Five Elements",
+    "论六冲": "On the Six Clashes",
+    "论六合": "On the Six Combinations",
+    "论天乙贵人": "On the Tianyi Nobleman",
+    "论太岁": "On the Grand Duke (Year God)",
+    "论桃花": "On Peach Blossom",
+    "论相克": "On Mutual Restraint",
+    "论相生": "On Mutual Generation",
+    "论纳音": "On Nayin",
+    "论伤官": "On Hurt Officer",
+    "论印绶": "On Resource",
+    "论喜忌": "On Favorable & Avoidable",
+    "论婚姻": "On Marriage",
+    "论格局": "On Pattern",
+    "论用神": "On the Useful God",
+    "论行运": "On Luck Movement",
+    "论财官": "On Wealth & Officer",
+    "论大运流年": "On Luck & Annual Pillars",
+    "论子女": "On Children",
+    "论建禄": "On Established Salary",
+    "论月令": "On Monthly Command",
+    "论财": "On Wealth",
+    "论食神": "On Eating God",
+    "论体用": "On Body & Function",
+    "论清浊": "On Purity & Turbidity",
+    "论源流": "On Source & Flow",
+    "论疾病": "On Illness",
+}
+
+
+def _translate_classic_source(source: str) -> str:
+    """Convert '滴天髓 · 论通根' → 'Drops of Heaven\\'s Essence · On Rooting'.
+
+    Falls back to the existing CJK→English glyph scrub if the structured map
+    doesn't cover the parts (so the user never sees raw hanzi)."""
+    if not isinstance(source, str) or not source:
+        return source
+    parts = [p.strip() for p in source.split("·")]
+    out_parts: list[str] = []
+    for i, part in enumerate(parts):
+        if i == 0 and part in _CLASSIC_BOOKS_EN:
+            out_parts.append(_CLASSIC_BOOKS_EN[part])
+        elif i > 0 and part in _CLASSIC_CHAPTERS_EN:
+            out_parts.append(_CLASSIC_CHAPTERS_EN[part])
+        else:
+            out_parts.append(_strip_cjk_to_english(part))
+    return " · ".join(out_parts)
+
+
+def _scrub_mechanism_strings(card: dict[str, Any]) -> dict[str, Any]:
+    """Apply CJK→English to a normalized mechanism card's user-facing fields."""
+    if not isinstance(card, dict):
+        return card
+    if isinstance(card.get("title"), str):
+        card["title"] = _strip_cjk_to_english(card["title"])
+    bullets = card.get("bullets")
+    if isinstance(bullets, list):
+        card["bullets"] = [
+            _strip_cjk_to_english(b) if isinstance(b, str) else b
+            for b in bullets
+        ]
+    return card
+
+
+def _flatten_element_counts(elements: Any) -> dict[str, int]:
+    """Convert ElementBalanceOutput-style payloads to the flat {Wood, Fire, …}
+    shape the frontend ElementRadar expects.
+
+    Handles three input shapes for resilience:
+      1. {"scores": [{"element": "wood", "score": 4}, …]}  ← current backend
+      2. {"wood": 4, "fire": 0, …}                         ← raw_element_counts
+      3. {"Wood": 4, "Fire": 0, …}                         ← already flat
+    """
+    flat = {"Wood": 0, "Fire": 0, "Earth": 0, "Metal": 0, "Water": 0}
+    if not isinstance(elements, dict):
+        return flat
+    if isinstance(elements.get("scores"), list):
+        for entry in elements["scores"]:
+            if not isinstance(entry, dict):
+                continue
+            key = _to_titlecase_element(entry.get("element"))
+            if key in flat:
+                try:
+                    flat[key] = int(entry.get("score") or 0)
+                except (TypeError, ValueError):
+                    pass
+        return flat
+    for k, v in elements.items():
+        key = _to_titlecase_element(k)
+        if key in flat:
+            try:
+                flat[key] = int(v or 0)
+            except (TypeError, ValueError):
+                pass
+    return flat
+
+
 class FortuneStreamBridge:
     """Translates fortune pipeline outputs into A2UI SSE messages."""
 
@@ -303,13 +544,30 @@ class FortuneStreamBridge:
 
     @staticmethod
     def _normalize_pillar(p: dict[str, Any]) -> dict[str, Any]:
-        """Convert snake_case Pillar fields to camelCase for frontend."""
+        """Convert snake_case Pillar fields to camelCase for frontend.
+
+        BaZi stems/branches are stored as single CJK glyphs in the foundation
+        (cnlunar emits 甲乙丙丁…). The frontend `Pillar` type expects English
+        labels in `stem`/`branch` with the optional `stemChinese`/`branchChinese`
+        glyphs surfaced via the explicit toggle. Translate here once so every
+        downstream renderer picks up readable text.
+        """
+        stem_cjk = p.get("stem", "")
+        branch_cjk = p.get("branch", "")
+        stem_element = _to_titlecase_element(p.get("stem_element"))
+        branch_element = _to_titlecase_element(p.get("branch_element"))
         return {
             "raw": p.get("raw", ""),
-            "stem": p.get("stem", ""),
-            "branch": p.get("branch", ""),
-            "stemElement": p.get("stem_element", ""),
-            "branchElement": p.get("branch_element", ""),
+            # English first — this is what PillarCard renders by default.
+            "stem": _STEM_EN.get(stem_cjk, stem_cjk),
+            "branch": _BRANCH_EN.get(branch_cjk, branch_cjk),
+            "stemChinese": stem_cjk,
+            "branchChinese": branch_cjk,
+            # Element badge ("Wood" / "Earth" titlecased so it matches the
+            # ELEMENT_COLORS lookup keys in designTokens.ts).
+            "element": stem_element,
+            "stemElement": stem_element,
+            "branchElement": branch_element,
         }
 
     @staticmethod
@@ -427,7 +685,13 @@ class FortuneStreamBridge:
                 "bullets": mech.get("bullets", []),
                 "citationIds": mech.get("citation_ids") or mech.get("citationIds") or [],
             }
-            normalized.append({k: v for k, v in card.items() if v is not None})
+            # Defense-in-depth: even though the LLM is instructed to emit
+            # English-only, some compat specialists still leak CJK glyphs
+            # in proper-noun-style titles ("Twin Ji卯 Spouse Palaces",
+            # "午卯破 Repeats", "己土 mirrors 己土"). Scrub before emit so
+            # the UI never has to handle them.
+            scrubbed = _scrub_mechanism_strings(card)
+            normalized.append({k: v for k, v in scrubbed.items() if v is not None})
         return normalized
 
     @staticmethod
@@ -479,6 +743,21 @@ class FortuneStreamBridge:
             "citationIds": fallback_cards[0].get("citationIds", []) if fallback_cards else [],
         }
         return [card] if card["bullets"] else []
+
+    @staticmethod
+    def _normalize_pick_day(pick: dict[str, Any]) -> dict[str, Any]:
+        """Normalize a lucky-day pick into the frontend's date card shape."""
+        return {
+            "rank": pick.get("rank"),
+            "date": pick.get("date"),
+            "dayPillar": {
+                "stem": pick.get("day_pillar_stem") or pick.get("dayPillarStem"),
+                "branch": pick.get("day_pillar_branch") or pick.get("dayPillarBranch"),
+            },
+            "score": pick.get("score"),
+            "oneLineReason": pick.get("one_line_reason") or pick.get("oneLineReason"),
+            "bestHours": pick.get("best_hours") or pick.get("bestHours") or [],
+        }
 
     @staticmethod
     def _normalize_relevance(value: Any) -> float:
@@ -576,13 +855,47 @@ class FortuneStreamBridge:
             normalized["hour"] = self._normalize_pillar(payload["hour"])
         else:
             normalized["hour"] = None
-        normalized["dayMaster"] = payload.get("day_master", "")
-        normalized["dayMasterElement"] = payload.get("day_master_element", "")
+        # Day master stem is also a CJK glyph from cnlunar. Translate so
+        # DayMasterCard renders "Yin Earth" instead of "己" by default
+        # (DayMasterCard duplicates {stem} {element}, so we keep the stem
+        # as the polarity-element label and avoid the redundant suffix).
+        dm_cjk = payload.get("day_master", "")
+        normalized["dayMaster"] = _STEM_EN.get(dm_cjk, dm_cjk)
+        normalized["dayMasterChinese"] = dm_cjk
+        normalized["dayMasterElement"] = _to_titlecase_element(
+            payload.get("day_master_element", "")
+        )
         normalized["birthTimeUnknown"] = payload.get("birth_time_unknown", False)
         return self.emitter.data_update(normalized, path="/data/pillars")
 
     def emit_elements(self, payload: dict[str, Any]) -> str:
-        return self.emitter.data_update(payload, path="/data/elements")
+        # Frontend ElementRadar (used by wish AnchorTab + occasion top-of-chart)
+        # expects a flat {Wood, Fire, Earth, Metal, Water} dict. The backend
+        # passes ElementBalanceOutput (with `scores` array). Flatten so both
+        # the radar and any downstream consumer that expects ElementCounts
+        # work without an FE adapter.
+        #
+        # Keep this object STRICTLY numeric — ElementRadar runs
+        # `Math.max(...Object.values(scores))` and would coerce string
+        # `dominant`/`weakest`/`summary` to NaN. The richer context lives
+        # under a separate `/data/elementBalance` path for consumers that
+        # want it (none today; here as a clean extension point).
+        flat = _flatten_element_counts(payload)
+        return self.emitter.data_update(flat, path="/data/elements")
+
+    def emit_element_balance(self, payload: dict[str, Any]) -> str:
+        """Emit the dominant/weakest/summary metadata under a separate path.
+
+        Kept distinct from /data/elements so consumers can subscribe to
+        either the numeric counts (radar) or the human-facing prose
+        without one schema bleeding into the other.
+        """
+        meta: dict[str, Any] = {}
+        if isinstance(payload, dict):
+            for key in ("dominant", "weakest", "summary"):
+                if key in payload:
+                    meta[key] = payload[key]
+        return self.emitter.data_update(meta, path="/data/elementBalance")
 
     def emit_compat_person(
         self,
@@ -608,15 +921,24 @@ class FortuneStreamBridge:
         else:
             normalized_pillars["hour"] = None
 
+        dm_cjk = pillars.get("day_master", "")
         payload: dict[str, Any] = {
             "pillars": normalized_pillars,
-            "dayMaster": pillars.get("day_master", ""),
-            "dayMasterElement": pillars.get("day_master_element", ""),
+            "dayMaster": _STEM_EN.get(dm_cjk, dm_cjk),
+            "dayMasterChinese": dm_cjk,
+            "dayMasterElement": _to_titlecase_element(
+                pillars.get("day_master_element", "")
+            ),
         }
         if name:
             payload["name"] = name
         if elements is not None:
-            payload["elements"] = elements
+            # The compat Pillars view's ElementRadar expects a flat
+            # {Wood:N, Fire:N, …} dict. The pipeline currently hands us an
+            # ElementBalanceOutput shape ({"scores":[…], "dominant":…})
+            # which would render as all-zeros. Flatten here so both shapes
+            # work and we don't need a frontend adapter.
+            payload["elements"] = _flatten_element_counts(elements)
         if ten_gods is not None:
             payload["tenGods"] = [
                 tg.model_dump() if hasattr(tg, "model_dump") else tg for tg in ten_gods
@@ -663,17 +985,7 @@ class FortuneStreamBridge:
         normalized = []
         for p in picks:
             pick = p.model_dump() if hasattr(p, "model_dump") else dict(p)
-            row = {
-                "rank": pick.get("rank"),
-                "date": pick.get("date"),
-                "dayPillar": {
-                    "stem": pick.get("day_pillar_stem") or pick.get("dayPillarStem"),
-                    "branch": pick.get("day_pillar_branch") or pick.get("dayPillarBranch"),
-                },
-                "score": pick.get("score"),
-                "oneLineReason": pick.get("one_line_reason") or pick.get("oneLineReason"),
-                "bestHours": pick.get("best_hours") or pick.get("bestHours") or [],
-            }
+            row = self._normalize_pick_day(pick)
             mechanisms = self._normalize_mechanism_cards(
                 pick.get("mechanisms") or [],
                 scope="occasion",
@@ -682,6 +994,51 @@ class FortuneStreamBridge:
                 row["mechanisms"] = mechanisms
             normalized.append(row)
         return self.emitter.data_update({"topPicks": normalized}, path="/data/occasion")
+
+    def emit_occasion_calendar(self, picks: list[dict[str, Any]]) -> str:
+        """Emit calendar cells for the lucky-day heat-map tab.
+
+        The narrative model chooses the candidate dates; this turns those same
+        dates into the CalendarGrid shape so the tab is backed by real data.
+        """
+        days: list[dict[str, Any]] = []
+        first_date: datetime | None = None
+
+        for p in picks:
+            pick = p.model_dump() if hasattr(p, "model_dump") else dict(p)
+            date_text = str(pick.get("date") or "").strip()[:10]
+            if not date_text:
+                continue
+            try:
+                parsed = datetime.fromisoformat(date_text)
+            except ValueError:
+                continue
+            if first_date is None:
+                first_date = parsed
+
+            normalized_pick = self._normalize_pick_day(pick)
+            days.append({
+                "date": date_text,
+                "pillar": normalized_pick["dayPillar"],
+                "score": normalized_pick.get("score") if isinstance(normalized_pick.get("score"), (int, float)) else 0,
+            })
+
+        if first_date is None:
+            return self.emitter.data_update(
+                {"calendar": {"month": "", "year": 0, "days": []}},
+                path="/data/occasion",
+            )
+
+        return self.emitter.data_update(
+            {
+                "calendar": {
+                    "month": f"{first_date.month:02d}",
+                    "year": first_date.year,
+                    "days": days,
+                }
+            },
+            path="/data/occasion",
+        )
 
     def emit_occasion_analysis(self, analysis: dict[str, Any]) -> str:
         def _titlecase_element(s: Any) -> str:
@@ -796,7 +1153,11 @@ class FortuneStreamBridge:
                 "id": item.get("id") or _stable_id("ref", item["source"] + item["passage"]),
                 "passage": item["passage"],
                 "translation": item["translation"],
+                # Keep `source` as the original CJK book title (used by the
+                # `quote` line for users who toggle Chinese on) but populate
+                # `sourceEnglish` so CitationBlock prefers it by default.
                 "source": item["source"],
+                "sourceEnglish": _translate_classic_source(item["source"]),
                 "relevance": item["relevance"],
             }
             for item in references
@@ -885,16 +1246,26 @@ class FortuneStreamBridge:
 
     def emit_interactions(self, interactions: list[Any]) -> str:
         """Emit branch interactions (冲合害刑破)."""
-        normalized = [
-            {
-                "type": ix.type if hasattr(ix, "type") else ix["type"],
-                "between": ix.between if hasattr(ix, "between") else ix["between"],
-                "pillars": ix.pillars if hasattr(ix, "pillars") else ix["pillars"],
-                "resultElement": (ix.result_element if hasattr(ix, "result_element") else ix.get("result_element")),
-                "description": ix.description if hasattr(ix, "description") else ix["description"],
-            }
-            for ix in interactions
-        ]
+        normalized = []
+        for ix in interactions:
+            item = ix.model_dump() if hasattr(ix, "model_dump") else dict(ix)
+            between = item.get("between") or []
+            if isinstance(between, str):
+                parts = [part.strip() for part in between.replace("->", "-").split("-") if part.strip()]
+            elif isinstance(between, (list, tuple)):
+                parts = [str(part) for part in between if part]
+            else:
+                parts = []
+
+            normalized.append({
+                "type": item.get("type"),
+                "between": between,
+                "from": item.get("from") or item.get("from_") or (parts[0] if parts else None),
+                "to": item.get("to") or (parts[1] if len(parts) > 1 else None),
+                "pillars": item.get("pillars") or [],
+                "resultElement": item.get("result_element") or item.get("resultElement"),
+                "description": item.get("description"),
+            })
         return self.emitter.data_update({"items": normalized}, path="/data/interactions")
 
     def emit_seasonal_strength(self, seasonal: Any) -> str:
@@ -947,6 +1318,10 @@ class FortuneStreamBridge:
 
         day_master = pillars.get("day_master", "") if isinstance(pillars, dict) else pillars.day_master
         day_master_element = pillars.get("day_master_element", "") if isinstance(pillars, dict) else pillars.day_master_element
+        # Translate the CJK glyph for the KPI card so DayMasterCard reads
+        # "Yin Earth · Earth" rather than "己 · earth".
+        day_master_label = _STEM_EN.get(day_master, day_master)
+        day_master_element = _to_titlecase_element(day_master_element)
         seasonal_strength = seasonal.strength if hasattr(seasonal, "strength") else seasonal["strength"]
         seasonal_score = seasonal.score if hasattr(seasonal, "score") else seasonal["score"]
 
@@ -965,7 +1340,8 @@ class FortuneStreamBridge:
 
         return self.emitter.data_update(
             {
-                "dayMaster": day_master,
+                "dayMaster": day_master_label,
+                "dayMasterChinese": day_master,
                 "dayMasterElement": day_master_element,
                 "harmonyScore": harmony,
                 "currentCycle": current_cycle,

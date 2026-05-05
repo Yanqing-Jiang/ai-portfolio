@@ -8,6 +8,18 @@ import { staggerContainer, tabContentVariants, pickVariants } from '../animation
 import type { LuckPillar, AnnualPillar } from '../../lib/fortuneTypes';
 
 const ACCENT = FLOW_ACCENTS['luck-cycle'];
+const CURRENT_YEAR = new Date().getFullYear();
+
+function findCurrentDecadeIndex(decades: LuckPillar[]) {
+  const flagged = decades.findIndex((d) => d.isCurrent);
+  if (flagged >= 0) return flagged;
+  return decades.findIndex((d) => (
+    typeof d.startYear === 'number' &&
+    typeof d.endYear === 'number' &&
+    CURRENT_YEAR >= d.startYear &&
+    CURRENT_YEAR <= d.endYear
+  ));
+}
 
 export const TimelineTab: React.FC<{ isReplay?: boolean }> = ({ isReplay = false }) => {
   const [showChinese, setShowChinese] = useState(false);
@@ -22,7 +34,7 @@ export const TimelineTab: React.FC<{ isReplay?: boolean }> = ({ isReplay = false
   const decades = (dataModel?.luckPillars?.items || dataModel?.luckCycle?.timeline?.decades || []) as LuckPillar[];
   const allYears = (dataModel?.annualPillars?.items || dataModel?.luckCycle?.timeline?.years || []) as AnnualPillar[];
 
-  const currentDecadeIdx = decades.findIndex((d) => d.isCurrent);
+  const currentDecadeIdx = findCurrentDecadeIndex(decades);
   const activeIdx = selectedDecadeIdx >= 0 ? selectedDecadeIdx : currentDecadeIdx;
   const activeDecade = decades[activeIdx];
 
@@ -31,10 +43,11 @@ export const TimelineTab: React.FC<{ isReplay?: boolean }> = ({ isReplay = false
   // fall back to showing all years for context.
   const filteredYears = useMemo(() => {
     if (!activeDecade || allYears.length === 0) return allYears;
-    const looksLikeYears = activeDecade.startAge > 1900;
-    if (!looksLikeYears) return allYears;
+    const startYear = activeDecade.startYear ?? (activeDecade.startAge > 1900 ? activeDecade.startAge : undefined);
+    const endYear = activeDecade.endYear ?? (activeDecade.endAge > 1900 ? activeDecade.endAge : undefined);
+    if (!startYear || !endYear) return allYears;
     const matched = allYears.filter(
-      (y) => y.year >= activeDecade.startAge && y.year <= activeDecade.endAge,
+      (y) => y.year >= startYear && y.year <= endYear,
     );
     return matched.length > 0 ? matched : allYears;
   }, [activeDecade, allYears]);
@@ -106,9 +119,9 @@ export const TimelineTab: React.FC<{ isReplay?: boolean }> = ({ isReplay = false
               animate="visible"
               className="space-y-2.5"
             >
-              {filteredYears.map((y) => (
+              {filteredYears.map((y, index) => (
                 <YearCard
-                  key={y.year}
+                  key={`${y.year}-${index}`}
                   item={y}
                   isExpanded={expandedYear === y.year}
                   onToggle={() => setExpandedYear(expandedYear === y.year ? null : y.year)}

@@ -1,4 +1,4 @@
-"""Ming Engine agent pipeline: 5 OpenAI Agents SDK agents with structured outputs."""
+"""Ming Engine agent pipeline: deterministic foundation plus live LLM stages."""
 
 from __future__ import annotations
 
@@ -12,8 +12,8 @@ from openai.types.shared import Reasoning
 from pydantic import BaseModel, Field
 
 try:
-    from .calendar_tool import compute_bazi_chart, compute_bazi_chart_tool
-    from .classics import retrieve_classical_references, retrieve_classical_references_tool
+    from .calendar_tool import compute_bazi_chart
+    from .classics import retrieve_classical_references
     from .config import get_settings
     from .bazi_engine import (
         compute_full_analysis, FullBaziAnalysis,
@@ -23,8 +23,8 @@ try:
     )
     from .trace_collector import TraceCollector
 except ImportError:
-    from calendar_tool import compute_bazi_chart, compute_bazi_chart_tool  # type: ignore[no-redef]
-    from classics import retrieve_classical_references, retrieve_classical_references_tool  # type: ignore[no-redef]
+    from calendar_tool import compute_bazi_chart  # type: ignore[no-redef]
+    from classics import retrieve_classical_references  # type: ignore[no-redef]
     from config import get_settings  # type: ignore[no-redef]
     from bazi_engine import (  # type: ignore[no-redef]
         compute_full_analysis, FullBaziAnalysis,
@@ -33,6 +33,10 @@ except ImportError:
         compute_enhanced_elements, compute_harmony_score, compute_retrodictions,
     )
     from trace_collector import TraceCollector  # type: ignore[no-redef]
+
+
+FOUNDATION_VERSION = 1
+NARRATIVE_SCHEMA_VERSION = 1
 
 
 # ---------------------------------------------------------------------------
@@ -347,15 +351,31 @@ Output format:
   - evidence_refs: list of interaction descriptions or classical ref IDs
 
 Guidelines:
-- Reference SPECIFIC computed data: "Your 庚 day master scores 3.5 in metal" not "you have strong metal."
-- Cite the ten gods by name: "偏印 (Indirect Seal) in month stem signals…"
-- Reference interactions explicitly: "寅申冲 (Tiger-Monkey clash) between year and month…"
+- LANGUAGE — STRICT: output English ONLY. No Chinese characters (CJK Han)
+  anywhere in tldr, insights, year_predictions, or any nested string. Use
+  English-only names for all BaZi concepts:
+    * Day Master, day pillar, month pillar, year pillar, hour pillar
+    * Ten Gods: Direct Officer, Seven Killings, Direct Wealth,
+      Indirect Wealth, Eating God, Hurt Officer, Direct Resource,
+      Indirect Resource, Direct Companion, Rob Wealth
+    * Elements: Wood, Fire, Earth, Metal, Water
+    * Animals: Rat, Ox, Tiger, Rabbit, Dragon, Snake, Horse, Goat,
+      Monkey, Rooster, Dog, Pig
+    * Interactions: clash, combination, harm, punishment, destruction
+- Reference SPECIFIC computed data using English names: "Your Metal Day
+  Master scores 3.5" not the stem hanzi. "Indirect Resource in the month
+  stem signals deep learning instinct." "Tiger-Monkey clash between year
+  and month."
+- Plain-language gloss: when a Ten-Gods term first appears in a bullet,
+  add a brief parenthetical ("Hurt Officer (creative-output star)").
 - Cite classical references by their id.
 - Be concise — more insight per word, fewer words per insight.
-- For year_predictions, focus on years with clashes or combinations. Skip uneventful years.
+- For year_predictions, focus on years with clashes or combinations. Skip
+  uneventful years.
 - Prefer actionable, practical bullets over abstract philosophy.
-- Emit ONLY the one specialized block that matches the current reading mode:
-  `compatibility`, `occasion`, `luck_cycle`, or `wish`. Leave the others null/omitted.
+- Emit ONLY the one specialized block that matches the current reading
+  mode: `compatibility`, `occasion`, `luck_cycle`, or `wish`. Leave the
+  others null/omitted.
 
 COMPATIBILITY MODE (only when `person_b` is present in the input JSON):
 The focus string will start with "compatibility:" and you will receive Person A's \
@@ -391,10 +411,17 @@ chart as the top-level fields AND Person B's chart under `person_b`. Produce a \
   Skip neutral pairs. Aim for 3-6 total entries.
 - compatibility.mechanisms: 3-6 classical mechanism cards. Each has:
   - id: snake_case slug
-  - title: short serif-friendly title, e.g. "Bing Fire warmed by Ji Earth"
+  - title: short serif-friendly title in PLAIN ENGLISH ONLY. Use phrasings
+    like "Yang Fire warmed by Yin Earth", "Tiger meets Monkey clash",
+    "Twin Yin Earth day masters". Do NOT emit pinyin-style proper nouns
+    ("Ji卯", "Bing-Ren", "Geng-Wu"); do NOT emit any CJK glyphs in the
+    title even partially. The mechanism title is shown verbatim in the
+    UI — it must read like a normal English headline.
   - type: "combination" | "clash" | "harm" | "support" | "punishment"
   - icon: one of flame, sparkles, heart, zap, layers, mountain, trees
-  - bullets: 1-3 reasoning points tied to computed data
+  - bullets: 1-3 reasoning points tied to computed data, English ONLY.
+    Do not write things like "Both Day Masters are 己土" — write "Both
+    Day Masters are Yin Earth" and gloss when first introduced.
   - citation_ids: classical reference ids consulted (from the `references` field)
 
 When emitting in compatibility mode, the standard `insights` array should focus on \
@@ -526,37 +553,74 @@ def _model_settings(reasoning_key: str) -> ModelSettings:
     )
 
 
-INTAKE_AGENT: Agent[FortuneRunContext] = Agent(
-    name="fortune_intake",
-    model=_model("intake_model"),
-    model_settings=_model_settings("intake_reasoning"),
-    instructions=(
-        "Clarify the user intent for a BaZi reading. "
-        "Summarize requested focus, tone, and any missing optional details."
-    ),
-)
+def _current_year(ctx: FortuneRunContext) -> int:
+    """Resolve the forecast anchor year, allowing tests to pin it via metadata."""
+    raw = ctx.metadata.get("current_year")
+    if isinstance(raw, int):
+        return raw
+    if isinstance(raw, str) and raw.isdigit():
+        return int(raw)
+    return date.today().year
 
-CHART_AGENT: Agent[FortuneRunContext] = Agent(
-    name="fortune_chart",
-    model=_model("chart_model"),
-    model_settings=_model_settings("chart_reasoning"),
-    instructions=(
-        "Use the chart tool to compute Four Pillars data. "
-        "Explain what the raw element counts imply for downstream interpretation."
-    ),
-    tools=[compute_bazi_chart_tool],
-)
 
-CLASSICS_AGENT: Agent[FortuneRunContext] = Agent(
-    name="fortune_classics",
-    model=_model("classics_model"),
-    model_settings=_model_settings("classics_reasoning"),
-    instructions=(
-        "Use the classics retrieval tool to find concise, relevant textual "
-        "support for the current reading focus."
-    ),
-    tools=[retrieve_classical_references_tool],
-)
+def _read_field(item: Any, name: str, default: Any = None) -> Any:
+    """Read a field from pydantic models, dicts, and lightweight test fixtures."""
+    if isinstance(item, dict):
+        return item.get(name, default)
+    if hasattr(item, name):
+        return getattr(item, name)
+    data = getattr(item, "_data", None)
+    if isinstance(data, dict):
+        return data.get(name, default)
+    return default
+
+
+def _select_luck_pillars_for_prompt(
+    luck_pillars: list[Any],
+    *,
+    current_year: int,
+    limit: int = 4,
+) -> list[Any]:
+    """Pick the active luck pillar plus the next few pillars for narrative context."""
+    if not luck_pillars:
+        return []
+
+    start_index = 0
+    for idx, pillar in enumerate(luck_pillars):
+        start_year = _read_field(pillar, "start_year")
+        end_year = _read_field(pillar, "end_year")
+        if isinstance(start_year, int) and isinstance(end_year, int):
+            if start_year <= current_year <= end_year:
+                start_index = idx
+                break
+            if start_year > current_year:
+                start_index = idx
+                break
+    else:
+        start_index = max(len(luck_pillars) - 1, 0)
+
+    return luck_pillars[start_index:start_index + limit]
+
+
+def _select_annual_pillars_for_prompt(
+    annual_pillars: list[Any],
+    *,
+    current_year: int,
+    horizon_years: int,
+    limit: int = 20,
+) -> list[Any]:
+    """Pick notable annual pillars from the current forecast window only."""
+    end_year = current_year + max(horizon_years, 0)
+    window = [
+        pillar for pillar in annual_pillars
+        if current_year <= (_read_field(pillar, "year", -1) or -1) <= end_year
+    ]
+    notable = [
+        pillar for pillar in window
+        if _read_field(pillar, "interactions_with_chart", [])
+    ]
+    return notable[:limit]
+
 
 NARRATIVE_AGENT: Agent[FortuneRunContext] = Agent(
     name="fortune_narrative",
@@ -756,9 +820,14 @@ async def run_foundation(ctx: FortuneRunContext) -> dict[str, Any]:
 def _build_narrative_prompt(ctx: FortuneRunContext, foundation: dict[str, Any]) -> str:
     """Build the JSON prompt for the narrative agent with full analysis data."""
     analysis: FullBaziAnalysis = foundation["analysis"]
+    settings = get_settings()
+    current_year = _current_year(ctx)
 
     # Include enriched data — the narrative agent interprets pre-computed results
     prompt_data: dict[str, Any] = {
+        "foundation_version": FOUNDATION_VERSION,
+        "narrative_schema_version": NARRATIVE_SCHEMA_VERSION,
+        "current_year": current_year,
         "focus": ctx.focus,
         "tone": ctx.tone,
         "question": ctx.question,
@@ -776,14 +845,32 @@ def _build_narrative_prompt(ctx: FortuneRunContext, foundation: dict[str, Any]) 
 
     # Include luck + annual pillars if available (for year predictions)
     if analysis.luck_pillars:
-        prompt_data["luck_pillars"] = [lp.model_dump() for lp in analysis.luck_pillars[:4]]  # current + next 3
+        luck_pillars = (
+            _select_luck_pillars_for_prompt(
+                analysis.luck_pillars,
+                current_year=current_year,
+            )
+            if settings.active_luck_window_enabled
+            else analysis.luck_pillars[:4]
+        )
+        prompt_data["luck_pillars"] = [lp.model_dump() for lp in luck_pillars]
     if analysis.annual_pillars:
         # Only include years with interactions (to keep prompt size reasonable)
-        notable_years = [
-            ap.model_dump() for ap in analysis.annual_pillars
-            if ap.interactions_with_chart
+        annual_pillars = (
+            _select_annual_pillars_for_prompt(
+                analysis.annual_pillars,
+                current_year=current_year,
+                horizon_years=settings.annual_prompt_horizon_years,
+            )
+            if settings.current_annual_window_enabled
+            else [
+                ap for ap in analysis.annual_pillars
+                if ap.interactions_with_chart
+            ][:20]
+        )
+        prompt_data["notable_annual_pillars"] = [
+            ap.model_dump() for ap in annual_pillars
         ]
-        prompt_data["notable_annual_pillars"] = notable_years[:20]  # cap at 20
 
     occasion_window = _build_occasion_window(ctx)
     if occasion_window:
@@ -1000,14 +1087,19 @@ async def run_narrative_streamed(
 async def run_guardrail(
     ctx: FortuneRunContext,
     *,
-    narrative: NarrativeOutput,
+    narrative: NarrativeOutput | EnrichedNarrativeOutput,
 ) -> GuardrailOutput:
     """Run the guardrail agent and return structured output."""
+    narrative_payload = (
+        narrative.model_dump()
+        if hasattr(narrative, "model_dump")
+        else narrative
+    )
     prompt = json.dumps(
         {
             "focus": ctx.focus,
             "tone": ctx.tone,
-            "insights": [s.model_dump() for s in narrative.insights],
+            "narrative": narrative_payload,
             "default_buttons": [b.model_dump() for b in DEFAULT_FOLLOW_UP_BUTTONS],
         },
         ensure_ascii=False,

@@ -8,7 +8,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { TrendingUp } from 'lucide-react';
 import { useFortuneStore } from '../../stores/fortuneStore';
 import { useFortuneAsk } from '../../hooks/useFortuneAsk';
-import { OracleChat } from '../shared/OracleChat';
+import { OracleChat, type OracleChatMessage } from '../shared/OracleChat';
 import { FLOW_ACCENTS, GLASS } from '../designTokens';
 import { tabContentVariants } from '../animations';
 import type { OccasionPick } from '../../lib/fortuneTypes';
@@ -98,7 +98,14 @@ export const AskTab: React.FC = () => {
       {/* Main Chat */}
       <div className="flex-1 min-h-[400px]">
         <OracleChat
-          messages={history.map((h) => ({ id: h.id, role: h.role, content: h.content }))}
+          messages={history.map((h) => ({
+            id: h.id,
+            role: h.role,
+            content: h.content,
+            narrative: h.narrative as OracleChatMessage['narrative'],
+            runId: h.runId,
+            degradedMemory: h.degradedMemory,
+          }))}
           input={input}
           onInputChange={setInput}
           onSend={send}
@@ -107,6 +114,7 @@ export const AskTab: React.FC = () => {
           isLoading={loading}
           memoryDegraded={memoryDegraded}
           disabled={!fortuneId}
+          flowFocus="occasion"
         />
       </div>
     </motion.div>

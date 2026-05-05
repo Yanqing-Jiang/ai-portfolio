@@ -40,6 +40,7 @@ export function useFortuneStream(options: UseFortuneStreamOptions): UseFortuneSt
 
   const eventSourceRef = useRef<EventSource | null>(null);
   const maxSeqRef = useRef(0);
+  const runIdRef = useRef<string | null>(null);
   const retryCountRef = useRef(0);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -65,18 +66,6 @@ export function useFortuneStream(options: UseFortuneStreamOptions): UseFortuneSt
     setPhase('connecting');
     setStatus('streaming');
 
-    // Pre-flight check: detect 409 conflict before opening EventSource
-    // (EventSource doesn't expose HTTP status codes on error)
-    fetch(streamUrl, { method: 'HEAD' }).then((res) => {
-      if (res.status === 409) {
-        setPhase('error');
-        setStatus('error');
-        // Store a conflict indicator so the UI can show a specific message
-        applyPatch('/data/meta', { status: 'error', error_message: 'Another tab is already streaming this reading. Close it and try again.' });
-        return;
-      }
-    }).catch(() => { /* ignore — EventSource will handle real connection errors */ });
-
     const es = new EventSource(streamUrl);
     eventSourceRef.current = es;
 
@@ -100,8 +89,13 @@ export function useFortuneStream(options: UseFortuneStreamOptions): UseFortuneSt
 
         const { run_id, seq, payload } = envelope;
 
+        if (typeof seq === 'number') {
+          retryCountRef.current = 0;
+        }
+
         // Store run_id on first message
-        if (run_id && !runId) {
+        if (run_id && runIdRef.current !== run_id) {
+          runIdRef.current = run_id;
           setRunId(run_id);
           setStoreRunId(run_id);
         }
@@ -141,7 +135,12 @@ export function useFortuneStream(options: UseFortuneStreamOptions): UseFortuneSt
 
     es.onerror = () => {
       es.close();
-      if (retryCountRef.current < MAX_RETRIES) {
+      eventSourceRef.current = null;
+
+      // Retrying after the backend has already emitted data starts a second
+      // long-running agent call for the same fortune if the browser drops the
+      // connection mid-narrative. Let replay/resume handle recovery instead.
+      if (maxSeqRef.current === 0 && retryCountRef.current < MAX_RETRIES) {
         const delay = INITIAL_BACKOFF_MS * Math.pow(2, retryCountRef.current);
         retryCountRef.current++;
         setPhase('connecting');
@@ -151,7 +150,7 @@ export function useFortuneStream(options: UseFortuneStreamOptions): UseFortuneSt
         setStatus('error');
       }
     };
-  }, [streamUrl, enabled, close, applyPatch, setStatus, setStoreRunId, runId]);
+  }, [streamUrl, enabled, close, applyPatch, setStatus, setStoreRunId]);
 
   // Auto-connect when streamUrl is available
   useEffect(() => {
@@ -169,20 +168,22 @@ export function useFortuneStream(options: UseFortuneStreamOptions): UseFortuneSt
  * DataEntry: { key, valueString?, valueNumber?, valueBoolean?, valueArray?, valueMap? }
  */
 function processContents(contents: unknown): Record<string, unknown> {
+  const normalizeEntry = (key: unknown, value: unknown) => normalizeStreamValue(String(key || ''), value);
+
   if (!Array.isArray(contents)) {
     // Sometimes payload is already a plain object
-    if (contents && typeof contents === 'object') return contents as Record<string, unknown>;
+    if (contents && typeof contents === 'object') return normalizeStreamValue('', contents) as Record<string, unknown>;
     return {};
   }
   const result: Record<string, unknown> = {};
   for (const entry of contents) {
     if (!entry || typeof entry !== 'object' || !('key' in entry)) continue;
     const e = entry as Record<string, unknown>;
-    if (e.valueString !== undefined) result[e.key as string] = e.valueString;
+    if (e.valueString !== undefined) result[e.key as string] = normalizeEntry(e.key, e.valueString);
     else if (e.valueNumber !== undefined) result[e.key as string] = e.valueNumber;
     else if (e.valueBoolean !== undefined) result[e.key as string] = e.valueBoolean;
-    else if (e.valueArray !== undefined) result[e.key as string] = normalizeArray(e.valueArray);
-    else if (e.valueMap !== undefined) result[e.key as string] = processContents(e.valueMap);
+    else if (e.valueArray !== undefined) result[e.key as string] = normalizeEntry(e.key, normalizeArray(e.valueArray));
+    else if (e.valueMap !== undefined) result[e.key as string] = normalizeEntry(e.key, processContents(e.valueMap));
   }
   return result;
 }
@@ -197,6 +198,42 @@ function normalizeArray(arr: unknown): unknown[] {
     if (item && typeof item === 'object' && 'valueMap' in (item as Record<string, unknown>)) {
       return processContents((item as Record<string, unknown>).valueMap);
     }
-    return item;
+    return normalizeStreamValue('', item);
   });
+}
+
+const ELEMENT_BY_LOWER: Record<string, string> = {
+  wood: 'Wood',
+  fire: 'Fire',
+  earth: 'Earth',
+  metal: 'Metal',
+  water: 'Water',
+};
+
+const ELEMENT_VALUE_KEYS = new Set([
+  'element',
+  'dayMasterElement',
+  'day_master_element',
+  'stemElement',
+  'stem_element',
+  'branchElement',
+  'branch_element',
+]);
+
+function normalizeElementName(value: unknown): unknown {
+  if (typeof value !== 'string') return value;
+  return ELEMENT_BY_LOWER[value.trim().toLowerCase()] || value;
+}
+
+function normalizeStreamValue(key: string, value: unknown): unknown {
+  if (ELEMENT_VALUE_KEYS.has(key)) return normalizeElementName(value);
+  if (Array.isArray(value)) return value.map((item) => normalizeStreamValue('', item));
+  if (!value || typeof value !== 'object') return value;
+
+  const raw = value as Record<string, unknown>;
+  const normalizedEntries = Object.entries(raw).map(([entryKey, entryValue]) => {
+    const normalizedKey = ELEMENT_BY_LOWER[entryKey.toLowerCase()] || entryKey;
+    return [normalizedKey, normalizeStreamValue(entryKey, entryValue)];
+  });
+  return Object.fromEntries(normalizedEntries);
 }

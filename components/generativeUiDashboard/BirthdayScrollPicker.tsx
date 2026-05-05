@@ -70,13 +70,14 @@ const ITEM_HEIGHT = 48; // px — must match CSS
 const VISIBLE_ITEMS = 5; // show 5 items, center one is selected
 
 interface ScrollColumnProps {
+    columnId: 'year' | 'month' | 'day';
     items: { value: number; label: string; sublabel?: string }[];
     selected: number;
     onSelect: (value: number) => void;
     width?: string;
 }
 
-function ScrollColumn({ items, selected, onSelect, width = '33%' }: ScrollColumnProps) {
+function ScrollColumn({ columnId, items, selected, onSelect, width = '33%' }: ScrollColumnProps) {
     const containerRef = useRef<HTMLDivElement>(null);
     const isScrollingRef = useRef(false);
     const scrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -192,14 +193,14 @@ function ScrollColumn({ items, selected, onSelect, width = '33%' }: ScrollColumn
             >
                 {/* Top padding */}
                 {Array.from({ length: paddingCount }).map((_, i) => (
-                    <div key={`pad-top-${i}`} style={{ height: ITEM_HEIGHT }} />
+                    <div key={`${columnId}-pad-top-${i}`} style={{ height: ITEM_HEIGHT }} />
                 ))}
 
                 {items.map((item, index) => {
                     const isSelected = item.value === selected;
                     return (
                         <div
-                            key={item.value}
+                            key={`${columnId}-${item.value}-${index}`}
                             onClick={() => handleItemClick(item.value, index)}
                             className="flex cursor-pointer items-center justify-center select-none"
                             style={{
@@ -239,7 +240,7 @@ function ScrollColumn({ items, selected, onSelect, width = '33%' }: ScrollColumn
 
                 {/* Bottom padding */}
                 {Array.from({ length: paddingCount }).map((_, i) => (
-                    <div key={`pad-bot-${i}`} style={{ height: ITEM_HEIGHT }} />
+                    <div key={`${columnId}-pad-bot-${i}`} style={{ height: ITEM_HEIGHT }} />
                 ))}
             </div>
         </div>
@@ -434,16 +435,19 @@ export function BirthdayScrollPicker({
                             {/* Columns */}
                             <div className="flex">
                                 <ScrollColumn
+                                    columnId="year"
                                     items={yearItems}
                                     selected={year}
                                     onSelect={handleYearChange}
                                 />
                                 <ScrollColumn
+                                    columnId="month"
                                     items={monthItems}
                                     selected={month}
                                     onSelect={handleMonthChange}
                                 />
                                 <ScrollColumn
+                                    columnId="day"
                                     items={dayItems}
                                     selected={clampedDay}
                                     onSelect={handleDayChange}

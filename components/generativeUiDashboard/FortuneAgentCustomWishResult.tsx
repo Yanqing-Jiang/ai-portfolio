@@ -70,6 +70,7 @@ export const FortuneAgentCustomWishResult: React.FC<FortuneAgentCustomWishResult
                     status={thinkingStatus}
                     onPause={cancel}
                     paused={pausing}
+                    showCompletedDock={activeTab === 'Ask'}
                 />
             )}
 

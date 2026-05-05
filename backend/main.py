@@ -483,9 +483,11 @@ origins = [o.strip() for o in _cors_env.split(",") if o.strip()] if _cors_env el
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 ]
+local_dev_origin_regex = None if _cors_env else r"^https?://(localhost|127\.0\.0\.1|\[::1\]):\d+$"
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
+    allow_origin_regex=local_dev_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -2613,7 +2615,6 @@ async def reschedule_booking(booking_id: str, req: RescheduleBookingRequest, aut
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
-
 
 
 

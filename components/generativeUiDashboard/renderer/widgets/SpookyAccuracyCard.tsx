@@ -124,7 +124,7 @@ export function SpookyAccuracyCard({
 
             <div className="space-y-2">
                 {retrodictions.map((item, i) => (
-                    <RetrodictionCard key={item.year} item={item} index={i} />
+                    <RetrodictionCard key={`${item.year}-${i}`} item={item} index={i} />
                 ))}
             </div>
         </div>

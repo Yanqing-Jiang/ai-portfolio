@@ -51,8 +51,10 @@ try:
     from .agents import (
         DEFAULT_FOLLOW_UP_BUTTONS,
         EnrichedNarrativeOutput,
+        FOUNDATION_VERSION,
         FortuneRunContext,
         GuardrailOutput,
+        NARRATIVE_SCHEMA_VERSION,
         NarrativeOutput,
         repair_occasion_narrative,
         run_foundation,
@@ -62,15 +64,17 @@ try:
     from .config import get_settings
     from .stream_bridge import FortuneStreamBridge
     from .store import get_repository, FortuneRepository
-    from .triage import run_triage
+    from .triage import ALLOWED_ACTION_IDS, normalize_action_focus, run_triage
     from .session_store import get_ask_session
     from .simulator import simulate_birth_time
 except ImportError:
     from agents import (  # type: ignore[no-redef]
         DEFAULT_FOLLOW_UP_BUTTONS,
         EnrichedNarrativeOutput,
+        FOUNDATION_VERSION,
         FortuneRunContext,
         GuardrailOutput,
+        NARRATIVE_SCHEMA_VERSION,
         NarrativeOutput,
         repair_occasion_narrative,
         run_foundation,
@@ -80,7 +84,7 @@ except ImportError:
     from config import get_settings  # type: ignore[no-redef]
     from stream_bridge import FortuneStreamBridge  # type: ignore[no-redef]
     from store import get_repository, FortuneRepository  # type: ignore[no-redef]
-    from triage import run_triage  # type: ignore[no-redef]
+    from triage import ALLOWED_ACTION_IDS, normalize_action_focus, run_triage  # type: ignore[no-redef]
     from session_store import get_ask_session  # type: ignore[no-redef]
     from simulator import simulate_birth_time  # type: ignore[no-redef]
 
@@ -96,6 +100,7 @@ class RuntimeStatus(str, Enum):
     initialized = "initialized"
     awaiting_clarification = "awaiting_clarification"
     streaming = "streaming"
+    interrupted = "interrupted"
     complete = "complete"
     error = "error"
 
@@ -228,16 +233,6 @@ def get_fortune_store() -> FortuneStore:
 # Helpers
 # ---------------------------------------------------------------------------
 
-ALLOWED_ACTIONS = {
-    "deep_dive_element",
-    "year_forecast",
-    "relationship_focus",
-    "career_focus",
-    "show_sources",
-    "expand_classics",
-}
-
-
 def _sse_data(payload: str) -> str:
     return f"data: {payload}\n\n"
 
@@ -258,10 +253,24 @@ def _to_jsonable(obj: Any) -> Any:
 
 
 def _snapshot_pillars(session: "FortuneSession", foundation: dict[str, Any]) -> dict[str, Any]:
-    return {
+    payload = {
         "pillars": _to_jsonable(foundation.get("pillars")),
         "elements": _to_jsonable(foundation.get("elements")),
     }
+    person_b = foundation.get("person_b")
+    if person_b:
+        analysis_b = person_b.get("analysis")
+        payload["person_b"] = {
+            "pillars": _to_jsonable(person_b.get("pillars")),
+            "elements": _to_jsonable(person_b.get("elements")),
+            "mechanics": {
+                "hidden_stems": _to_jsonable(getattr(analysis_b, "hidden_stems", None)),
+                "ten_gods": _to_jsonable(getattr(analysis_b, "ten_gods", None)),
+            },
+        }
+    if get_settings().snapshot_schema_versions_enabled:
+        payload["foundation_version"] = FOUNDATION_VERSION
+    return payload
 
 
 def _snapshot_mechanics(session: "FortuneSession", analysis: Any) -> dict[str, Any]:
@@ -273,7 +282,7 @@ def _snapshot_mechanics(session: "FortuneSession", analysis: Any) -> dict[str, A
     """
     if analysis is None:
         return {}
-    return {
+    payload = {
         "pillars": _to_jsonable(getattr(analysis, "pillars", None)),
         "hidden_stems": _to_jsonable(getattr(analysis, "hidden_stems", None)),
         "ten_gods": _to_jsonable(getattr(analysis, "ten_gods", None)),
@@ -285,6 +294,10 @@ def _snapshot_mechanics(session: "FortuneSession", analysis: Any) -> dict[str, A
         "annual_pillars": _to_jsonable(getattr(analysis, "annual_pillars", None)),
         "harmony_score": getattr(analysis, "harmony_score", None),
     }
+    if get_settings().snapshot_schema_versions_enabled:
+        payload["foundation_version"] = FOUNDATION_VERSION
+        payload["narrative_schema_version"] = NARRATIVE_SCHEMA_VERSION
+    return payload
 
 
 def _snapshot_references(foundation: dict[str, Any]) -> dict[str, Any]:
@@ -313,15 +326,29 @@ def _build_clarification(fortune_id: str) -> ClarificationRequest:
     )
 
 
-def _normalize_focus(action_id: str) -> str | None:
-    return {
-        "year_forecast": "year",
-        "career_focus": "career",
-        "relationship_focus": "relationship",
-        "deep_dive_element": "element_balance",
-        "show_sources": "sources",
-        "expand_classics": "classics",
-    }.get(action_id)
+def _build_ask_original_input(req: "CreateFortuneRequest | None") -> dict[str, Any] | None:
+    """Snapshot the user's create-fortune inputs for follow-up Ask context.
+
+    Pulled from ``FortuneSession.request`` (the live one) and forwarded to
+    ``run_triage`` so the specialist sees the focus, original question,
+    person_b, and other context the user already established. Returns ``None``
+    when the request is missing — the hydrate-from-snapshot path falls back to
+    ``ctx`` fields inside triage.
+    """
+    if req is None:
+        return None
+    out: dict[str, Any] = {
+        "birth_iso": req.birth_iso,
+        "timezone": req.timezone,
+        "gender": req.gender,
+        "birth_time_unknown": bool(req.birth_time_unknown),
+        "focus": req.focus,
+        "original_question": req.question,
+        "tone": req.tone,
+    }
+    if req.person_b is not None:
+        out["person_b"] = req.person_b.model_dump()
+    return out
 
 
 async def _hydrate_foundation_from_snapshot(
@@ -840,6 +867,38 @@ async def stream_fortune(fortune_id: str, request: Request):
                 session.pending_action_id = None
                 session.pending_action_question = None
 
+            async def _cancel_event(stage: str, trace_obj: Any | None = None) -> str | None:
+                disconnected = await request.is_disconnected()
+                if not session.cancel_requested and not disconnected:
+                    return None
+                reason = "cancelled" if session.cancel_requested else "client_disconnected"
+                session.touch(RuntimeStatus.interrupted)
+                if trace_obj:
+                    trace_obj.add_instant(
+                        "cancelled",
+                        stage,
+                        label="Reading Paused",
+                        output_summary=reason,
+                    )
+                if run_uuid is not None:
+                    try:
+                        await repo.update_run_status(
+                            run_uuid,
+                            "interrupted",
+                            error_message=reason,
+                        )
+                    except Exception as exc:
+                        logger.warning("[FORTUNE] interrupted-status update failed: %s", exc)
+                message = (
+                    "Reading paused by user"
+                    if session.cancel_requested
+                    else "Client disconnected"
+                )
+                return await _emit(
+                    bridge.emit_progress("cancelled", message),
+                    event_name="progress",
+                )
+
             if run_uuid is not None:
                 try:
                     await repo.update_run_status(run_uuid, "streaming")
@@ -885,6 +944,10 @@ async def stream_fortune(fortune_id: str, request: Request):
                 # committed as streaming; safe to drop the pending-action
                 # sentinel so a reconnect does not re-dispatch it.
                 await _maybe_clear_pending()
+                cancel_msg = await _cancel_event("begin")
+                if cancel_msg:
+                    yield cancel_msg
+                    return
 
                 # 2. Foundation — reuse cached if available.
                 cached = session.latest_foundation
@@ -905,6 +968,11 @@ async def stream_fortune(fortune_id: str, request: Request):
                     logger.info("[FORTUNE] %s foundation complete — %0.fms", session.fortune_id, dur_f)
                     session.latest_foundation = foundation
                     trace = foundation.get("trace")
+
+                cancel_msg = await _cancel_event("foundation", trace)
+                if cancel_msg:
+                    yield cancel_msg
+                    return
 
                 yield await _emit(bridge.emit_pillars(foundation["pillars"]))
                 elements_data = (
@@ -945,6 +1013,10 @@ async def stream_fortune(fortune_id: str, request: Request):
                             bridge.emit_progress("foundation", "Computing Person B's Four Pillars..."),
                             event_name="progress",
                         )
+                        cancel_msg = await _cancel_event("foundation", trace)
+                        if cancel_msg:
+                            yield cancel_msg
+                            return
                         ctx_b = FortuneRunContext(
                             fortune_id=session.fortune_id,
                             surface_id=session.surface_id,
@@ -957,6 +1029,10 @@ async def stream_fortune(fortune_id: str, request: Request):
                         )
                         foundation_b = await run_foundation(ctx_b)
                         analysis_b = foundation_b["analysis"]
+                        cancel_msg = await _cancel_event("foundation", trace)
+                        if cancel_msg:
+                            yield cancel_msg
+                            return
                         elements_b = (
                             foundation_b["elements"].model_dump()
                             if hasattr(foundation_b["elements"], "model_dump")
@@ -1027,6 +1103,11 @@ async def stream_fortune(fortune_id: str, request: Request):
                     )
 
                 # 4. Narrative OR triage.
+                cancel_msg = await _cancel_event("narrative", trace)
+                if cancel_msg:
+                    yield cancel_msg
+                    return
+
                 if pending_action:
                     yield await _emit(
                         bridge.emit_progress(
@@ -1050,7 +1131,13 @@ async def stream_fortune(fortune_id: str, request: Request):
                         foundation=foundation,
                         action_id=pending_action,
                         question=pending_question,
+                        original_input=_build_ask_original_input(session.request),
+                        latest_narrative=session.latest_narrative,
                     )
+                    cancel_msg = await _cancel_event("narrative", trace)
+                    if cancel_msg:
+                        yield cancel_msg
+                        return
                 else:
                     yield await _emit(
                         bridge.emit_progress("narrative", "Generating interpretation..."),
@@ -1078,20 +1165,14 @@ async def stream_fortune(fortune_id: str, request: Request):
                     stream_result = await run_narrative_streamed(ctx, foundation=foundation)
                     seen_tools: set[str] = set()
                     async for event in stream_result.stream_events():
-                        # Check cancel flag (POST /cancel) or client disconnect
-                        # at each SDK stream event. Graceful ``after_turn``
-                        # cancel keeps session state consistent and emits a
-                        # final progress update so the UI can show "Paused".
-                        if session.cancel_requested or await request.is_disconnected():
+                        cancel_msg = await _cancel_event("narrative", trace)
+                        if cancel_msg:
                             try:
                                 stream_result.cancel()
                             except Exception:  # pragma: no cover - SDK drift
                                 pass
-                            if session.cancel_requested:
-                                yield await _emit(
-                                    bridge.emit_progress("cancelled", "Reading paused by user"),
-                                )
-                            break
+                            yield cancel_msg
+                            return
                         meta = _extract_stream_event_meta(event)
                         if meta is None:
                             continue
@@ -1160,6 +1241,9 @@ async def stream_fortune(fortune_id: str, request: Request):
                     ctx,
                     narrative.model_dump(),
                 )
+                guardrail_narrative = EnrichedNarrativeOutput.model_validate(
+                    session.latest_narrative,
+                )
 
                 dur_n = round((_time.monotonic() - _t_narrative) * 1000, 1)
                 n_insights = len(narrative.insights) if hasattr(narrative, "insights") else 0
@@ -1175,6 +1259,7 @@ async def stream_fortune(fortune_id: str, request: Request):
                     from .agent_logging import (
                         classify_function as _classify_fn,
                         extract_usage as _extract_usage,
+                        record_latency as _record_latency,
                         UsageSummary as _UsageSummary,
                         logger as _agent_logger,
                     )
@@ -1182,6 +1267,7 @@ async def stream_fortune(fortune_id: str, request: Request):
                     from agent_logging import (  # type: ignore[no-redef]
                         classify_function as _classify_fn,
                         extract_usage as _extract_usage,
+                        record_latency as _record_latency,
                         UsageSummary as _UsageSummary,
                         logger as _agent_logger,
                     )
@@ -1191,13 +1277,20 @@ async def stream_fortune(fortune_id: str, request: Request):
                     except Exception:
                         _stream_used = _UsageSummary()
                     _settings_now = get_settings()
+                    _stream_fn = _classify_fn(ctx.focus, ctx.question)
+                    _latency_bucket = _record_latency(
+                        _stream_fn,
+                        "narrative_streamed",
+                        dur_n,
+                    )
                     _agent_logger.info(
                         "[FORTUNE-AGENT] "
-                        f"fn={_classify_fn(ctx.focus, ctx.question)} "
+                        f"fn={_stream_fn} "
                         f"stage=narrative_streamed "
                         f"model={_settings_now.narrative_model} "
                         f"reasoning={_settings_now.narrative_reasoning} "
                         f"latency_ms={dur_n:.0f} "
+                        f"latency_bucket_ms={_latency_bucket} "
                         f"tokens_in={_stream_used.input_tokens} "
                         f"tokens_out={_stream_used.output_tokens} "
                         f"reasoning_tokens={_stream_used.reasoning_tokens} "
@@ -1250,6 +1343,9 @@ async def stream_fortune(fortune_id: str, request: Request):
                         yield await _emit(bridge.emit_occasion_top_picks(
                             occasion_block["top_picks"],
                             fallback_mechanisms=occasion_block.get("mechanisms") or [],
+                        ))
+                        yield await _emit(bridge.emit_occasion_calendar(
+                            occasion_block["top_picks"],
                         ))
                     if occasion_block.get("analysis"):
                         yield await _emit(bridge.emit_occasion_analysis(occasion_block["analysis"]))
@@ -1306,6 +1402,10 @@ async def stream_fortune(fortune_id: str, request: Request):
                         logger.warning("[FORTUNE] partial snapshot persistence failed: %s", exc)
 
                 # 6. Guardrail
+                cancel_msg = await _cancel_event("guardrail", trace)
+                if cancel_msg:
+                    yield cancel_msg
+                    return
                 yield await _emit(
                     bridge.emit_progress("guardrail", "Running safety check..."),
                     event_name="progress",
@@ -1314,7 +1414,7 @@ async def stream_fortune(fortune_id: str, request: Request):
                     trace.add_instant("llm_start", "guardrail", label="Running Safety Check")
 
                 _t_guard = _time.monotonic()
-                guardrail = await run_guardrail(ctx, narrative=narrative)
+                guardrail = await run_guardrail(ctx, narrative=guardrail_narrative)
                 if not guardrail.follow_up_buttons:
                     guardrail = GuardrailOutput(
                         level=guardrail.level,
@@ -1428,7 +1528,7 @@ async def handle_fortune_action(
 ):
     await smart_rate_limit(request, scope=RateLimitScope.FORTUNE_ACTION, weight=1)
 
-    if request_body.action_id not in ALLOWED_ACTIONS:
+    if request_body.action_id not in ALLOWED_ACTION_IDS:
         raise HTTPException(status_code=400, detail="Unsupported action_id")
 
     store = get_fortune_store()
@@ -1448,7 +1548,7 @@ async def handle_fortune_action(
         )
 
     # Update focus based on action
-    normalized_focus = _normalize_focus(request_body.action_id)
+    normalized_focus = normalize_action_focus(request_body.action_id)
     if normalized_focus in {"career", "relationship", "year"}:
         session.request = session.request.model_copy(update={"focus": normalized_focus})
 
@@ -1506,8 +1606,10 @@ async def ask_fortune(
 
     # Preferred path: hot in-memory session with live foundation.
     foundation: dict[str, Any] | None = None
+    latest_narrative: dict[str, Any] | None = None
     if fortune_session is not None and fortune_session.latest_foundation:
         foundation = fortune_session.latest_foundation
+        latest_narrative = fortune_session.latest_narrative
     else:
         # Fall back to the durable snapshot so /ask survives restarts and any
         # cross-worker route. This turns a previously confusing 409 into a
@@ -1517,6 +1619,18 @@ async def ask_fortune(
             foundation = hydrated
             if fortune_session is not None:
                 fortune_session.latest_foundation = hydrated
+            # Also rehydrate latest_narrative from the snapshot so the
+            # specialist still has the human-facing context the user is
+            # currently looking at, even after a restart / cross-worker route.
+            try:
+                fid = uuid.UUID(fortune_id)
+                row = await repo.get_snapshot(fid) if repo.available else None
+                if row:
+                    latest_narrative = _unpack_jsonb(row.get("latest_narrative"))
+                    if fortune_session is not None and latest_narrative is not None:
+                        fortune_session.latest_narrative = latest_narrative
+            except Exception as exc:
+                logger.debug("[FORTUNE] /ask narrative rehydrate skipped: %s", exc)
 
     if foundation is None:
         # If we have neither session nor snapshot, the fortune either does not
@@ -1585,6 +1699,13 @@ async def ask_fortune(
             foundation=foundation,
             question=request_body.question,
             session=ask_session,
+            original_input=_build_ask_original_input(req_src),
+            latest_narrative=latest_narrative,
+            # Ask follow-ups skip the LLM triage hop (code-side router) and
+            # use the lower ``ask_reasoning`` effort. ~50% latency cut on
+            # typical follow-ups; falls back to triage agent only when the
+            # router can't confidently classify the question.
+            ask_mode=True,
         )
     except Exception as exc:
         logger.exception("[FORTUNE] /ask triage failed: %s", exc)

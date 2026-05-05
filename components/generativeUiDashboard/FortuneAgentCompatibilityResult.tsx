@@ -61,6 +61,7 @@ export const FortuneAgentCompatibilityResult: React.FC<FortuneAgentCompatibility
                     status={thinkingStatus}
                     onPause={cancel}
                     paused={pausing}
+                    showCompletedDock={activeTab === 'Ask'}
                 />
             )}
 

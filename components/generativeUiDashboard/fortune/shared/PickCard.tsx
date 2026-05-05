@@ -30,6 +30,10 @@ export const PickCard: React.FC<PickCardProps> = ({
 }) => {
   const medalClass = MEDAL_STYLES[rank as 1 | 2 | 3] || 'border border-white/10';
   const medalColor = MEDAL_COLORS[rank as 1 | 2 | 3] || '#64748b';
+  const dateObj = new Date(`${pick.date}T12:00:00`);
+  const formattedDate = Number.isFinite(dateObj.getTime())
+    ? dateObj.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+    : 'Date pending';
 
   return (
     <motion.button
@@ -47,12 +51,12 @@ export const PickCard: React.FC<PickCardProps> = ({
         <div className="min-w-0 flex-1">
           {/* Date */}
           <div className="text-sm font-semibold text-white">
-            {new Date(pick.date).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+            {formattedDate}
           </div>
 
           {/* Pillar */}
           <div className="text-[10px] text-slate-400 mt-0.5">
-            {pick.dayPillar.stem} {pick.dayPillar.branch}
+            {pick.dayPillar?.stem || '--'} {pick.dayPillar?.branch || '--'}
           </div>
 
           {/* Reason */}

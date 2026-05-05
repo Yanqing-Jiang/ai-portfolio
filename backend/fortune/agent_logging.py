@@ -24,11 +24,48 @@ from __future__ import annotations
 
 import logging
 import time
+from collections import defaultdict
 from contextlib import contextmanager
 from dataclasses import dataclass
+from threading import Lock
 from typing import Any, Iterator
 
 logger = logging.getLogger("fortune.agent")
+_LATENCY_BUCKETS_MS = (250, 500, 1000, 2000, 5000, 10000, 30000, 60000)
+_HISTOGRAM_LOCK = Lock()
+_HISTOGRAMS: dict[tuple[str, str], list[int]] = defaultdict(
+    lambda: [0] * (len(_LATENCY_BUCKETS_MS) + 1)
+)
+
+
+def _latency_bucket(latency_ms: float) -> str:
+    for upper in _LATENCY_BUCKETS_MS:
+        if latency_ms <= upper:
+            return str(upper)
+    return "inf"
+
+
+def record_latency(function: str, stage: str, latency_ms: float) -> str:
+    """Record one in-process latency sample and return its bucket label."""
+    bucket = _latency_bucket(latency_ms)
+    index = (
+        len(_LATENCY_BUCKETS_MS)
+        if bucket == "inf"
+        else _LATENCY_BUCKETS_MS.index(int(bucket))
+    )
+    with _HISTOGRAM_LOCK:
+        _HISTOGRAMS[(function, stage)][index] += 1
+    return bucket
+
+
+def latency_histogram_snapshot() -> dict[str, dict[str, int]]:
+    """Return stage latency counts for tests/debug endpoints without log parsing."""
+    labels = [str(v) for v in _LATENCY_BUCKETS_MS] + ["inf"]
+    with _HISTOGRAM_LOCK:
+        return {
+            f"{function}.{stage}": dict(zip(labels, counts, strict=True))
+            for (function, stage), counts in _HISTOGRAMS.items()
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -112,12 +149,14 @@ class StageRecord:
 
 
 def _format_kv(record: StageRecord, *, latency_ms: float, usage: UsageSummary, ok: bool, error: str | None) -> str:
+    latency_bucket = record_latency(record.function, record.stage, latency_ms)
     parts = [
         f"fn={record.function}",
         f"stage={record.stage}",
         f"model={record.model}",
         f"reasoning={record.reasoning}",
         f"latency_ms={latency_ms:.0f}",
+        f"latency_bucket_ms={latency_bucket}",
         f"tokens_in={usage.input_tokens}",
         f"tokens_out={usage.output_tokens}",
         f"reasoning_tokens={usage.reasoning_tokens}",

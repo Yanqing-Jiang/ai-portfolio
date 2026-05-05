@@ -7,14 +7,14 @@
 | OpenAI SDK   | `openai>=1.107.3`                |
 | Agents SDK   | `openai-agents==0.15.1`          |
 | Bazi engine  | `cnlunar>=0.2.4` (deterministic) |
-| Default model| `gpt-5-mini-2025-08-07`          |
-| Reasoning    | `medium` (intake, chart, classics, narrative); `low` (guardrail) |
+| Default model| `gpt-5.4-mini`                   |
+| Reasoning    | `medium` (narrative + specialists); `low` (guardrail); foundation is deterministic |
 | Verbosity    | `low`                            |
 | Max tokens   | 6000 (covers reasoning + JSON)   |
 
 The reasoning + model wiring lives in `backend/fortune/config.py` and is read
-by `_model_settings()` in `backend/fortune/agents.py`. Override per-stage via
-`FORTUNE_NARRATIVE_REASONING=high` etc. in `.env`.
+by `_model_settings()` in `backend/fortune/agents.py`. Override live LLM stages
+via `FORTUNE_NARRATIVE_REASONING=high` etc. in `.env`.
 
 ## The 4 customer-facing functions
 
@@ -46,7 +46,7 @@ cd ~/ai-portfolio/backend
 ```
 
 These check stream-bridge payload shapes and that `DEFAULT_OPENAI_MODEL ==
-"gpt-5-mini-2025-08-07"`.
+"gpt-5.4-mini"`.
 
 ### Live e2e — agent browser style (hits OpenAI)
 
@@ -61,10 +61,10 @@ The suite drives `run_foundation` + `run_narrative` + `run_guardrail`
 directly (the same code path the SSE stream uses) for each of the 4
 functions, and asserts:
 
-* model = `gpt-5-mini-2025-08-07`, reasoning effort = `medium`
+* narrative model = `gpt-5.4-mini`, reasoning effort = `medium`
 * the right specialized block populated (e.g. `out.compatibility` for
   compat focus, `out.occasion` for occasion focus)
-* end-to-end latency under 90s per function (gpt-5-mini medium baseline)
+* end-to-end latency under the per-function ceilings in the test file
 * guardrail level ∈ {`info`, `warning`, `critical`}
 
 Skips automatically if `OPENAI_API_KEY` is not set.
@@ -83,7 +83,7 @@ Every agent stage emits a single-line key=value record on
 ```
 
 * `fn` ∈ `compatibility | occasion | luck_cycle | wish | general`
-* `stage` ∈ `foundation | narrative | narrative_streamed | triage | guardrail`
+* `stage` ∈ `foundation | narrative | narrative_streamed | direct_dispatch | triage | guardrail`
 * per-stream banners use `event=stream_start` / `event=stream_end`
 
 To find slow stages:
@@ -100,7 +100,7 @@ grep "[FORTUNE-AGENT]" backend.log \
 fortune/
 ├── config.py            # FortuneSettings — models + reasoning effort
 ├── agent_logging.py     # classify_function() + structured stage() ctx mgr
-├── agents.py            # 5 SDK Agents + run_foundation + run_narrative*
+├── agents.py            # deterministic foundation + narrative/guardrail SDK agents
 ├── triage.py            # follow-up specialists + as_tool() routing
 ├── routes.py            # FastAPI /create /stream /action /ask /cancel
 ├── stream_bridge.py     # A2UI emitters for the SPA dashboard
@@ -126,7 +126,7 @@ Full report: `~/homer/output/gemini/bazi-authenticity-2026-05-03-1530.md`.
 
 ## Cost / perf notes
 
-`gpt-5-mini-2025-08-07` at medium reasoning is roughly:
+`gpt-5.4-mini` at medium reasoning is roughly:
 
 * **2–3× the latency** of low for the narrative agent (most user-facing wait).
 * **5–8× the reasoning tokens** vs low. Output token ceiling stays at 1800.

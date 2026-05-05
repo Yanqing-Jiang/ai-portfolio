@@ -50,8 +50,10 @@ export const LuckFilmStrip: React.FC<LuckFilmStripProps> = ({
         {decades.map((d, i) => {
           const isActive = i === activeIdx;
           const isCurrent = i === currentDecadeIndex;
-          const element = d.element || 'Wood';
-          const ec = ELEMENT_COLORS[element];
+          const element = d.element || d.stemElement || d.branchElement || 'Wood';
+          const ec = ELEMENT_COLORS[element] || ELEMENT_COLORS.Wood;
+          const labelStart = d.startYear ?? d.startAge;
+          const labelEnd = d.endYear ?? d.endAge;
 
           return (
             <motion.button
@@ -79,7 +81,7 @@ export const LuckFilmStrip: React.FC<LuckFilmStripProps> = ({
 
               {/* Age Range Label */}
               <div className="text-[10px] font-mono text-slate-500 mb-2">
-                {d.startAge}-{d.endAge}
+                {labelStart}-{labelEnd}
               </div>
 
               {/* Pillar Stems/Branches */}

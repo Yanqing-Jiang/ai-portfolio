@@ -228,9 +228,10 @@ function InkPool({ className = '' }: { className?: string }) {
             ))}
             <motion.circle
                 cx="120"
+                cy="60"
                 r="3"
                 fill={HEX.gold}
-                animate={{ cy: [60, 118, 60], opacity: [0, 1, 0] }}
+                animate={{ y: [0, 58, 0], opacity: [0, 1, 0] }}
                 transition={{ duration: 4.5, repeat: Infinity, ease: 'easeIn' }}
             />
         </svg>

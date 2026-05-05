@@ -223,7 +223,7 @@ export function UpcomingYearsSwim({ dataModel }: UpcomingYearsSwimProps) {
 
                     return (
                         <motion.div
-                            key={year.year}
+                            key={`${year.year}-${i}`}
                             initial={{ opacity: 0, x: 20 }}
                             animate={{ opacity: 1, x: 0 }}
                             transition={{ delay: i * 0.08 }}

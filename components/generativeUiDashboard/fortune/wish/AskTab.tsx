@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { useFortuneAsk } from '../../hooks/useFortuneAsk';
 import { OracleChat } from '../shared';
+import type { OracleChatMessage } from '../shared/OracleChat';
 import { FLOW_ACCENTS } from '../designTokens';
 import { tabContentVariants } from '../animations';
 
@@ -69,7 +70,14 @@ export const AskTab: React.FC<{ question?: string }> = ({ question }) => {
       </div>
 
       <OracleChat
-        messages={history.map((h) => ({ id: h.id, role: h.role, content: h.content }))}
+        messages={history.map((h) => ({
+          id: h.id,
+          role: h.role,
+          content: h.content,
+          narrative: h.narrative as OracleChatMessage['narrative'],
+          runId: h.runId,
+          degradedMemory: h.degradedMemory,
+        }))}
         input={input}
         onInputChange={setInput}
         onSend={send}
@@ -78,6 +86,7 @@ export const AskTab: React.FC<{ question?: string }> = ({ question }) => {
         isLoading={loading}
         memoryDegraded={memoryDegraded}
         disabled={!fortuneId}
+        flowFocus="wish"
       />
     </motion.div>
   );

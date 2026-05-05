@@ -15,6 +15,18 @@ import { tabContentVariants } from '../animations';
 import type { ElementType, SeasonalStrength as SSType, LuckPillar } from '../../lib/fortuneTypes';
 
 const ACCENT = FLOW_ACCENTS['luck-cycle'];
+const CURRENT_YEAR = new Date().getFullYear();
+
+function findCurrentDecadeIndex(decades: LuckPillar[]) {
+  const flagged = decades.findIndex((d) => d.isCurrent);
+  if (flagged >= 0) return flagged;
+  return decades.findIndex((d) => (
+    typeof d.startYear === 'number' &&
+    typeof d.endYear === 'number' &&
+    CURRENT_YEAR >= d.startYear &&
+    CURRENT_YEAR <= d.endYear
+  ));
+}
 
 export const NowTab: React.FC<{ isReplay?: boolean }> = ({ isReplay = false }) => {
   const { dataModel, status } = useFortuneStore(useShallow((s) => ({
@@ -28,7 +40,7 @@ export const NowTab: React.FC<{ isReplay?: boolean }> = ({ isReplay = false }) =
   const seasonal = dataModel?.seasonalStrength as SSType | undefined;
   const guardrail = dataModel?.guardrail;
   const decades = (dataModel?.luckPillars?.items || luckCycle?.timeline?.decades || []) as LuckPillar[];
-  const currentDecadeIdx = decades.findIndex((d) => d.isCurrent);
+  const currentDecadeIdx = findCurrentDecadeIndex(decades);
 
   const score = luckCycle?.currentWindow?.score ?? (kpi?.harmonyScore as number | undefined);
   const dayMaster = (kpi?.dayMaster || '') as string;

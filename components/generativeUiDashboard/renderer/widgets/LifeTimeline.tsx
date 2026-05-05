@@ -432,9 +432,9 @@ export function LifeTimeline({
 
                         {/* Year cards */}
                         <div className="space-y-0">
-                            {decade.years.map((ap) => (
+                            {decade.years.map((ap, index) => (
                                 <YearCard
-                                    key={ap.year}
+                                    key={`${ap.year}-${index}`}
                                     ap={ap}
                                     prediction={predictions.get(ap.year)}
                                     correction={corrections[ap.year]}

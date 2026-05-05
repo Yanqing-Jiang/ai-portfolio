@@ -146,8 +146,8 @@ export const VerdictTab: React.FC<{ isReplay?: boolean; question?: string }> = (
             animate="visible"
             className="space-y-2"
           >
-            {retrodictions.map((r) => (
-              <YearPredictionBar key={r.year} item={r} accentColor={ACCENT.primary} isReplay={isReplay} />
+            {retrodictions.map((r, index) => (
+              <YearPredictionBar key={`${r.year}-${index}`} item={r} accentColor={ACCENT.primary} isReplay={isReplay} />
             ))}
           </motion.div>
         </div>
