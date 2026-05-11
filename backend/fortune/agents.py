@@ -689,10 +689,12 @@ def _model_settings(
         cap = getattr(settings, max_tokens_key, None)
         if cap is not None:
             kwargs["max_tokens"] = int(cap)
-    # PR-2: thread ``service_tier`` and ``store`` through the SDK's
-    # ``extra_args`` escape hatch — neither has a first-class
-    # ``ModelSettings`` field in openai-agents 0.15.1, but the underlying
-    # Responses API accepts both via the catch-all kwargs path.
+    # PR-2 (refined in PR-4): the SDK exposes ``store`` as a first-class
+    # ``ModelSettings.store`` field and ALSO passes its own ``store`` kwarg
+    # to ``responses.create``. Threading ``store`` via ``extra_args`` causes
+    # a ``TypeError: got multiple values for keyword argument 'store'``
+    # at first call. Use the first-class field instead. ``service_tier``
+    # has no first-class equivalent today, so it stays in ``extra_args``.
     extra_args: dict[str, Any] = {}
     if service_tier_key is not None:
         tier = getattr(settings, service_tier_key, None)
@@ -701,7 +703,7 @@ def _model_settings(
     if store_key is not None:
         store = bool(getattr(settings, store_key, False))
         if store:
-            extra_args["store"] = True
+            kwargs["store"] = True
     if extra_args:
         kwargs["extra_args"] = extra_args
     return ModelSettings(**kwargs)

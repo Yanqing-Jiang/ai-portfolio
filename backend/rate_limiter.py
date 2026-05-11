@@ -463,7 +463,21 @@ async def smart_rate_limit(
         # Use request.client.host only (not spoofable X-Forwarded-For)
         client_ip = request.client.host if request.client else "unknown"
 
-        is_local = client_ip in ("127.0.0.1", "::1") or client_ip.startswith("192.168.") or client_ip.startswith("10.") or (client_ip.startswith("172.") and 16 <= int(client_ip.split(".")[1]) <= 31)
+        # RFC1918 + Docker Desktop's vmnetkit forwarding range (172.66.x on
+        # modern Docker Desktop for Mac — outside the standard private
+        # range but still purely a host→container forwarding IP, so it's
+        # safe to treat as local for dev-bypass purposes).
+        try:
+            second = int(client_ip.split(".")[1])
+        except (ValueError, IndexError):
+            second = -1
+        is_local = (
+            client_ip in ("127.0.0.1", "::1")
+            or client_ip.startswith("192.168.")
+            or client_ip.startswith("10.")
+            or (client_ip.startswith("172.") and 16 <= second <= 31)
+            or (client_ip.startswith("172.") and second in (66, 67))
+        )
 
         if is_local:
             logger.debug("Rate limit bypass for local dev (IP: %s)", client_ip)
