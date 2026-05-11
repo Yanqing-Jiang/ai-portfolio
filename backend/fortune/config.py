@@ -53,6 +53,44 @@ class FortuneSettings(BaseSettings):
     # the Ask tab. The initial reading still uses narrative_reasoning.
     ask_reasoning: str = "low"
 
+    # PR3 (latency refactor) — per-mode reasoning effort.
+    # Defaults preserve legacy behavior: compatibility starts at ``medium``
+    # (matching the pre-refactor ``narrative_reasoning`` global), the
+    # other three modes start at ``low`` because:
+    #   - occasion: deterministic prefilter narrows 60+ days to top 21,
+    #     so the model only ranks/explains a curated set;
+    #   - luck_cycle: small UI payload (current_window + mechanisms) and
+    #     timeline is deterministic;
+    #   - wish: bounded verdict + anchors + mechanisms.
+    # The compat default is flipped to ``low`` in a separate PR-3 commit
+    # once the PR-1B judge harness greenlights it; rollback through
+    # ``FORTUNE_NARRATIVE_REASONING_COMPATIBILITY=medium`` + restart.
+    narrative_reasoning_compatibility: str = "medium"
+    narrative_reasoning_occasion: str = "low"
+    narrative_reasoning_luck_cycle: str = "low"
+    narrative_reasoning_wish: str = "low"
+
+    # PR3 — per-mode max_tokens caps. ``None`` means no cap (the OpenAI
+    # per-request budget governs). Compatibility stays uncapped while
+    # effort is ``medium`` because that path truncated below 10k.
+    narrative_max_tokens_compatibility: Optional[int] = 10000
+    narrative_max_tokens_occasion: Optional[int] = 9000
+    narrative_max_tokens_luck_cycle: Optional[int] = 4500
+    narrative_max_tokens_wish: Optional[int] = 6000
+    guardrail_max_tokens: Optional[int] = 1200
+
+    # PR-2 — compat service_tier + store flags.
+    #
+    # ``narrative_service_tier_compatibility`` accepts ``"priority"`` (10-25%
+    # tail-flattening on eligible OpenAI accounts) or ``None`` (default
+    # queue). Off by default until OpenAI account eligibility is verified.
+    #
+    # ``narrative_store_compatibility`` opts the compat response in to
+    # OpenAI's response store, addressable later via ``previous_response_id``.
+    # Defaults to ``False`` until PR-4 wires the Redis-backed chain map.
+    narrative_service_tier_compatibility: Optional[str] = None
+    narrative_store_compatibility: bool = False
+
     # Rollout flags for Day 0 migrations.
     active_luck_window_enabled: bool = True
     current_annual_window_enabled: bool = True

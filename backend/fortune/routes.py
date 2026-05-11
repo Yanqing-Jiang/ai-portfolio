@@ -54,8 +54,10 @@ try:
         FOUNDATION_VERSION,
         FortuneRunContext,
         GuardrailOutput,
+        NARRATIVE_AGENTS,
         NARRATIVE_SCHEMA_VERSION,
         NarrativeOutput,
+        _narrative_mode,
         repair_occasion_narrative,
         run_foundation,
         run_guardrail,
@@ -74,8 +76,10 @@ except ImportError:
         FOUNDATION_VERSION,
         FortuneRunContext,
         GuardrailOutput,
+        NARRATIVE_AGENTS,
         NARRATIVE_SCHEMA_VERSION,
         NarrativeOutput,
+        _narrative_mode,
         repair_occasion_narrative,
         run_foundation,
         run_guardrail,
@@ -1283,12 +1287,28 @@ async def stream_fortune(fortune_id: str, request: Request):
                         "narrative_streamed",
                         dur_n,
                     )
+                    # PR-2: read the per-mode effort off the selected
+                    # agent's actual ModelSettings. The legacy log read
+                    # ``_settings_now.narrative_reasoning`` (always
+                    # ``medium``) even after the route resolved a per-mode
+                    # agent with a different tier — making latency
+                    # dashboards lie. Fall back to the legacy key only if
+                    # an agent somehow lacks a Reasoning binding.
+                    _selected_mode = _narrative_mode(ctx)
+                    _selected_agent_obj = NARRATIVE_AGENTS[_selected_mode]
+                    _selected_agent = _selected_agent_obj.name
+                    _selected_reasoning = _selected_agent_obj.model_settings.reasoning
+                    _selected_effort = (
+                        _selected_reasoning.effort
+                        if _selected_reasoning is not None
+                        else _settings_now.narrative_reasoning
+                    )
                     _agent_logger.info(
                         "[FORTUNE-AGENT] "
                         f"fn={_stream_fn} "
                         f"stage=narrative_streamed "
                         f"model={_settings_now.narrative_model} "
-                        f"reasoning={_settings_now.narrative_reasoning} "
+                        f"reasoning={_selected_effort} "
                         f"latency_ms={dur_n:.0f} "
                         f"latency_bucket_ms={_latency_bucket} "
                         f"tokens_in={_stream_used.input_tokens} "
@@ -1297,7 +1317,7 @@ async def stream_fortune(fortune_id: str, request: Request):
                         f"requests={_stream_used.requests} "
                         f"run_id={ctx.run_id or '-'} "
                         f"fortune_id={ctx.fortune_id or '-'} "
-                        f"agent=fortune_narrative ok=true insights={n_insights} "
+                        f"agent={_selected_agent} mode={_selected_mode} ok=true insights={n_insights} "
                         f"streamed=true person_b={'true' if 'person_b' in foundation else 'false'}"
                     )
 

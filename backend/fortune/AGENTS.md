@@ -8,13 +8,45 @@
 | Agents SDK   | `openai-agents==0.15.1`          |
 | Bazi engine  | `cnlunar>=0.2.4` (deterministic) |
 | Default model| `gpt-5.4-mini`                   |
-| Reasoning    | `medium` (narrative + specialists); `low` (guardrail); foundation is deterministic |
+| Reasoning    | `medium` (compatibility); `low` (occasion, luck_cycle, wish, guardrail); foundation is deterministic. Legacy `narrative_reasoning` default remains `medium` for `general` fallback. |
 | Verbosity    | `low`                            |
-| Max tokens   | 6000 (covers reasoning + JSON)   |
+| Max tokens   | compat=10000, occasion=9000, wish=6000, luck_cycle=4500, guardrail=1200 |
 
 The reasoning + model wiring lives in `backend/fortune/config.py` and is read
 by `_model_settings()` in `backend/fortune/agents.py`. Override live LLM stages
 via `FORTUNE_NARRATIVE_REASONING=high` etc. in `.env`.
+
+**PR2 (latency refactor) note:** `_model_settings` now passes
+`Reasoning(effort=…, summary=None)` — the reasoning summary stream was
+adding 3-8 s of TTFB and 10-15 % of reasoning tokens with no model-quality
+benefit. The ThinkingPanel UX role it served is replaced by the synthetic
+heartbeat (`_thinking_heartbeat`) wired in PR5 plus the existing
+`trace_collector` breadcrumbs. Do NOT re-introduce `summary="auto"`
+without coordinating a frontend fallback.
+
+## The 5 narrative agents (per-mode)
+
+PR2 of the latency refactor split the single `NARRATIVE_AGENT` into a
+keyed `NARRATIVE_AGENTS` dict so each mode binds a narrow `output_type`:
+
+| Key            | Agent name                          | Output schema                  |
+| -------------- | ----------------------------------- | ------------------------------ |
+| compatibility  | `fortune_narrative_compatibility`   | `CompatibilityNarrativeOutput` |
+| occasion       | `fortune_narrative_occasion`        | `OccasionNarrativeOutput`      |
+| luck_cycle     | `fortune_narrative_luck_cycle`      | `LuckCycleNarrativeOutput`     |
+| wish           | `fortune_narrative_wish`            | `WishNarrativeOutput`          |
+| general        | `fortune_narrative` (legacy)        | `EnrichedNarrativeOutput`      |
+
+The merged `EnrichedNarrativeOutput` is still the canonical type the route
+handler / fan-out / snapshot pipeline reads. `_promote_narrative_to_enriched`
+in `agents.py` converts each narrow output back into the merged shape
+right after the SDK call returns, so downstream code sees one layout.
+
+Mode is picked by `_narrative_mode(ctx)` from `ctx.focus` — same prefix
+rules that drive the per-mode emit fan-out at `routes.py:1316-1411`.
+**Do not regress the schema split.** Per-mode compact JSON schemas land
+54-72 % smaller than the union (regression-tested by
+`tests/fortune/test_narrative_schemas.py`).
 
 ## The 4 customer-facing functions
 
@@ -35,6 +67,23 @@ The narrative agent emits exactly ONE specialized block per
 `occasion`, `luck_cycle`, or `wish`). The route handler then "fans out"
 that block to per-path A2UI emitters in `stream_bridge.py` so the React
 widgets see the right `/data/...` paths.
+
+## Prompt-cache prefix-ordering rule
+
+`_build_narrative_prompt` orders dict keys **stable-first → volatile-last**
+so OpenAI Responses API automatic prompt cache (≥1024-token prefix match)
+fires on repeat queries by the same user. Order:
+
+1. Schema / foundation version markers (global stable).
+2. Person A chart data (stable per user).
+3. Person B chart (when present, stable per pair).
+4. `occasion_window`.
+5. `current_year`.
+6. `focus` / `tone` / `question` / `references` (volatile per call).
+
+`tests/fortune/test_prompt_cache_prefix.py` enforces this. **Do not
+insert a volatile field above a stable one** — the cache prefix breaks at
+the first divergent byte and the win disappears.
 
 ## How to test
 

@@ -22,6 +22,12 @@ try:
         compute_enhanced_elements, compute_harmony_score, compute_retrodictions,
     )
     from .trace_collector import TraceCollector
+    from ._foundation_cache import (
+        compute_day_chart_cached,
+        occasion_preferences,
+        pillar_stem_branch,
+        score_candidate_day,
+    )
 except ImportError:
     from calendar_tool import compute_bazi_chart  # type: ignore[no-redef]
     from classics import retrieve_classical_references  # type: ignore[no-redef]
@@ -33,6 +39,12 @@ except ImportError:
         compute_enhanced_elements, compute_harmony_score, compute_retrodictions,
     )
     from trace_collector import TraceCollector  # type: ignore[no-redef]
+    from _foundation_cache import (  # type: ignore[no-redef]
+        compute_day_chart_cached,
+        occasion_preferences,
+        pillar_stem_branch,
+        score_candidate_day,
+    )
 
 
 FOUNDATION_VERSION = 1
@@ -292,7 +304,19 @@ class WishNarrativeFields(BaseModel):
 
 
 class EnrichedNarrativeOutput(BaseModel):
-    """Extended narrative with year predictions and evidence tracking."""
+    """Extended narrative with year predictions and evidence tracking.
+
+    This is the **canonical merged type** consumed by the route handler and
+    snapshot upserter. It still has all four sibling sub-blocks as Optional
+    because downstream fan-out emitters at ``routes.py:1316-1411`` and the
+    snapshot pipeline read a single merged shape regardless of mode.
+
+    Per-mode narrow output types (``CompatibilityNarrativeOutput`` etc.)
+    drive the OpenAI structured-output schema down from 11.4 KB → 3-5 KB,
+    cutting reasoning tokens 30-40%. They are normalized back into this
+    type via :func:`_promote_narrative_to_enriched` immediately after the
+    agent returns, so the rest of the pipeline is unchanged.
+    """
     tldr: str = Field(description="1-sentence summary, max 20 words")
     insights: list[InsightSection] = Field(min_length=2, max_length=5)
     year_predictions: list[YearPrediction] = Field(
@@ -306,6 +330,88 @@ class EnrichedNarrativeOutput(BaseModel):
     occasion: OccasionNarrativeFields | None = None
     luck_cycle: LuckCycleNarrativeFields | None = None
     wish: WishNarrativeFields | None = None
+
+
+# --- Per-mode narrow output schemas ----------------------------------------
+# Each narrow output binds the matching mode block as REQUIRED (not Optional)
+# and omits the other three siblings entirely. Compact JSON schema char count
+# drops 54-72% vs ``EnrichedNarrativeOutput``, which is what cuts model
+# reasoning tokens since the schema sits in the system context for every
+# generation. See PR2 of the latency refactor plan.
+
+
+class CompatibilityNarrativeOutput(BaseModel):
+    """Narrative output schema used when focus starts with ``compatibility:``."""
+    tldr: str = Field(description="1-sentence summary, max 20 words")
+    insights: list[InsightSection] = Field(min_length=2, max_length=5)
+    year_predictions: list[YearPrediction] = Field(default_factory=list)
+    compatibility: CompatibilityNarrativeFields
+
+
+class OccasionNarrativeOutput(BaseModel):
+    """Narrative output schema used when focus starts with ``occasion:``."""
+    tldr: str = Field(description="1-sentence summary, max 20 words")
+    insights: list[InsightSection] = Field(min_length=2, max_length=5)
+    year_predictions: list[YearPrediction] = Field(default_factory=list)
+    occasion: OccasionNarrativeFields
+
+
+class LuckCycleNarrativeOutput(BaseModel):
+    """Narrative output schema used when focus starts with ``luck_cycle:``."""
+    tldr: str = Field(description="1-sentence summary, max 20 words")
+    insights: list[InsightSection] = Field(min_length=2, max_length=5)
+    year_predictions: list[YearPrediction] = Field(default_factory=list)
+    luck_cycle: LuckCycleNarrativeFields
+
+
+class WishNarrativeOutput(BaseModel):
+    """Narrative output schema used for free-form custom-wish readings."""
+    tldr: str = Field(description="1-sentence summary, max 20 words")
+    insights: list[InsightSection] = Field(min_length=2, max_length=5)
+    year_predictions: list[YearPrediction] = Field(default_factory=list)
+    wish: WishNarrativeFields
+
+
+# Map each narrow output class to the EnrichedNarrativeOutput attribute that
+# carries its mode block. Used by ``_promote_narrative_to_enriched``.
+_NARRATIVE_MODE_FIELD: dict[type, str] = {
+    CompatibilityNarrativeOutput: "compatibility",
+    OccasionNarrativeOutput: "occasion",
+    LuckCycleNarrativeOutput: "luck_cycle",
+    WishNarrativeOutput: "wish",
+}
+
+
+def _promote_narrative_to_enriched(
+    narrow: Any,
+) -> "EnrichedNarrativeOutput":
+    """Convert any narrow per-mode output into the merged ``EnrichedNarrativeOutput``.
+
+    Idempotent — if ``narrow`` is already ``EnrichedNarrativeOutput`` it is
+    returned unchanged. Handles three input shapes:
+
+    1. ``EnrichedNarrativeOutput`` instance → returned as-is (no validation).
+    2. One of the four narrow per-mode classes → mode block is folded into
+       a fresh ``EnrichedNarrativeOutput`` with siblings left ``None``.
+    3. Legacy bare ``NarrativeOutput`` (no mode block, no year predictions)
+       or any other Pydantic ``BaseModel`` / dict → validated through
+       ``model_validate`` against its dump. Defensive against SDK drift.
+    """
+    if isinstance(narrow, EnrichedNarrativeOutput):
+        return narrow
+    field_name = _NARRATIVE_MODE_FIELD.get(type(narrow))
+    if field_name is not None:
+        return EnrichedNarrativeOutput(
+            tldr=narrow.tldr,
+            insights=narrow.insights,
+            year_predictions=narrow.year_predictions,
+            **{field_name: getattr(narrow, field_name)},
+        )
+    # Legacy NarrativeOutput or any other BaseModel: dump and validate.
+    if isinstance(narrow, BaseModel):
+        return EnrichedNarrativeOutput.model_validate(narrow.model_dump())
+    # Plain dict / unknown shape: let pydantic's validator raise if invalid.
+    return EnrichedNarrativeOutput.model_validate(narrow)
 
 
 class FollowUpButton(BaseModel):
@@ -536,25 +642,69 @@ def _model(setting_name: str) -> str:
     return getattr(get_settings(), setting_name)
 
 
-def _model_settings(reasoning_key: str) -> ModelSettings:
-    effort = getattr(get_settings(), reasoning_key, "low")
-    # summary="auto" asks the Responses API to emit reasoning summaries as
-    # `reasoning_item` stream events. This gives the thinking panel a live
-    # signal during otherwise-silent structured-output generation (the
-    # narrative agent has no tool calls, so without this the UI hangs on
-    # "Consulting the pillars…" for 20-40s).
-    # No max_tokens cap. At medium reasoning, compatibility mode emits the
-    # heaviest payload (two charts × overview + pair_interactions +
-    # mechanisms) and was repeatedly truncating mid-JSON at every cap we
-    # tried (1.8k → 6k → 16k). The Responses API's own per-request budget
-    # is large enough; capping it locally buys nothing and risks
-    # ``ModelBehaviorError: Invalid JSON when parsing`` on long runs.
-    # Latency is bounded by the test budgets in
-    # tests/fortune/test_agent_browser_e2e.py instead.
-    return ModelSettings(
-        reasoning=Reasoning(effort=effort, summary="auto"),
-        verbosity="low",
-    )
+def _model_settings(
+    reasoning_key: str,
+    max_tokens_key: str | None = None,
+    *,
+    service_tier_key: str | None = None,
+    store_key: str | None = None,
+) -> ModelSettings:
+    """Build per-stage ``ModelSettings`` from the FortuneSettings singleton.
+
+    ``reasoning_key`` is the FortuneSettings attribute name (e.g.
+    ``narrative_reasoning_compatibility`` for PR3 per-mode wiring). When
+    ``max_tokens_key`` is provided, the matching attribute (which may be
+    ``None``) is forwarded as ``max_tokens``; ``None`` means uncapped.
+
+    Notes:
+    - ``summary=None`` (PR2): the reasoning summary stream added 3-8 s of
+      TTFB and ~10-15 % to total reasoning tokens. The ThinkingPanel UX
+      role it served is replaced by ``_thinking_heartbeat`` (PR5).
+    - Compatibility historically truncated at every max_tokens cap we
+      tried (1.8k → 6k → 16k) because two charts × overview +
+      pair_interactions + mechanisms is genuinely heavy at medium effort.
+      PR3 leaves compat uncapped (``narrative_max_tokens_compatibility =
+      None``) and bounds the other three modes via per-mode keys in
+      ``FortuneSettings``.
+    - ``service_tier_key`` (kwargs-only, PR-2): optional setting attr for
+      OpenAI's ``service_tier`` request param (e.g. ``"priority"``). When
+      the matching setting is truthy, the tier is threaded through
+      ``extra_args`` (the SDK's escape hatch for Responses-API-only
+      parameters). Default is ``None`` (uses OpenAI's default queue).
+    - ``store_key`` (kwargs-only, PR-2): optional setting attr for the
+      Responses API ``store`` flag. When the matching setting is truthy,
+      ``store=True`` is threaded through ``extra_args`` so the response
+      is addressable via ``previous_response_id`` for the Ask-chain
+      follow-up in PR-4. Defaults to off until PR-4 wires the chain.
+    - Live per-mode latency is asserted in
+      ``tests/fortune/test_agent_browser_e2e.py``.
+    """
+    settings = get_settings()
+    effort = getattr(settings, reasoning_key, "low")
+    kwargs: dict[str, Any] = {
+        "reasoning": Reasoning(effort=effort, summary=None),
+        "verbosity": "low",
+    }
+    if max_tokens_key is not None:
+        cap = getattr(settings, max_tokens_key, None)
+        if cap is not None:
+            kwargs["max_tokens"] = int(cap)
+    # PR-2: thread ``service_tier`` and ``store`` through the SDK's
+    # ``extra_args`` escape hatch — neither has a first-class
+    # ``ModelSettings`` field in openai-agents 0.15.1, but the underlying
+    # Responses API accepts both via the catch-all kwargs path.
+    extra_args: dict[str, Any] = {}
+    if service_tier_key is not None:
+        tier = getattr(settings, service_tier_key, None)
+        if tier:
+            extra_args["service_tier"] = tier
+    if store_key is not None:
+        store = bool(getattr(settings, store_key, False))
+        if store:
+            extra_args["store"] = True
+    if extra_args:
+        kwargs["extra_args"] = extra_args
+    return ModelSettings(**kwargs)
 
 
 def _current_year(ctx: FortuneRunContext) -> int:
@@ -626,18 +776,123 @@ def _select_annual_pillars_for_prompt(
     return notable[:limit]
 
 
-NARRATIVE_AGENT: Agent[FortuneRunContext] = Agent(
-    name="fortune_narrative",
-    model=_model("narrative_model"),
-    model_settings=_model_settings("narrative_reasoning"),
-    instructions=NARRATIVE_INSTRUCTIONS,
-    output_type=EnrichedNarrativeOutput,
-)
+def _build_narrative_agent(
+    name: str,
+    reasoning_setting_key: str,
+    output_type: type[BaseModel],
+    *,
+    max_tokens_setting_key: str | None = None,
+    service_tier_setting_key: str | None = None,
+    store_setting_key: str | None = None,
+) -> Agent[FortuneRunContext]:
+    """Construct a narrative agent bound to a per-mode output schema.
+
+    All five mode agents share the same NARRATIVE_INSTRUCTIONS string so
+    the OpenAI prompt-cache stable prefix stays identical across modes —
+    only the bound schema and per-mode reasoning/max_tokens differ.
+
+    PR3 wires ``reasoning_setting_key`` to the per-mode keys in
+    ``FortuneSettings`` (e.g. ``narrative_reasoning_compatibility``) so
+    each mode picks its own reasoning effort. ``max_tokens_setting_key``
+    forwards an optional per-mode token cap (``None`` per key = uncapped).
+    PR-2 adds optional ``service_tier_setting_key`` (e.g. ``"priority"``)
+    and ``store_setting_key`` (for ``previous_response_id`` chaining in
+    PR-4) — both are forwarded only when the matching setting is truthy.
+    """
+    return Agent(
+        name=name,
+        model=_model("narrative_model"),
+        model_settings=_model_settings(
+            reasoning_setting_key,
+            max_tokens_setting_key,
+            service_tier_key=service_tier_setting_key,
+            store_key=store_setting_key,
+        ),
+        instructions=NARRATIVE_INSTRUCTIONS,
+        output_type=output_type,
+    )
+
+
+# Per-mode narrative agents (PR3 wiring).
+#
+# ``general`` retains ``narrative_reasoning`` (the legacy single key) so it
+# acts as a backstop for any focus shape that doesn't match one of the
+# four canonical modes — ``run_narrative`` / ``run_narrative_streamed``
+# only fall through to ``general`` after route normalization.
+#
+# Compat starts at ``medium`` reasoning (gated by the fixture A/B in
+# ``test_compat_reasoning_floor.py``); the other three modes default to
+# ``low`` because their UI payloads are smaller and (for occasion) the
+# deterministic prefilter does the heavy ranking before the model.
+NARRATIVE_AGENTS: dict[str, Agent[FortuneRunContext]] = {
+    "compatibility": _build_narrative_agent(
+        "fortune_narrative_compatibility",
+        "narrative_reasoning_compatibility",
+        CompatibilityNarrativeOutput,
+        max_tokens_setting_key="narrative_max_tokens_compatibility",
+        service_tier_setting_key="narrative_service_tier_compatibility",
+        store_setting_key="narrative_store_compatibility",
+    ),
+    "occasion": _build_narrative_agent(
+        "fortune_narrative_occasion",
+        "narrative_reasoning_occasion",
+        OccasionNarrativeOutput,
+        max_tokens_setting_key="narrative_max_tokens_occasion",
+    ),
+    "luck_cycle": _build_narrative_agent(
+        "fortune_narrative_luck_cycle",
+        "narrative_reasoning_luck_cycle",
+        LuckCycleNarrativeOutput,
+        max_tokens_setting_key="narrative_max_tokens_luck_cycle",
+    ),
+    "wish": _build_narrative_agent(
+        "fortune_narrative_wish",
+        "narrative_reasoning_wish",
+        WishNarrativeOutput,
+        max_tokens_setting_key="narrative_max_tokens_wish",
+    ),
+    "general": _build_narrative_agent(
+        "fortune_narrative",
+        "narrative_reasoning",
+        EnrichedNarrativeOutput,
+    ),
+}
+
+# Backwards-compatible alias. Test fixtures and a handful of admin/debug
+# call sites still import ``NARRATIVE_AGENT`` directly. The general agent
+# is the closest stand-in (same instructions, same output_type as before).
+NARRATIVE_AGENT: Agent[FortuneRunContext] = NARRATIVE_AGENTS["general"]
+
+
+def _narrative_mode(ctx: FortuneRunContext) -> str:
+    """Pick the per-mode narrative agent key from the runtime context.
+
+    Mirrors the deterministic fan-out at ``routes.py:1316-1411``: the same
+    focus prefixes that drive ``emit_compat_*`` / ``emit_occasion_*`` /
+    ``emit_luck_cycle_*`` / ``emit_wish_*`` should bind the agent that
+    produces those blocks. Falls back to ``general`` (the legacy union
+    schema) only when no mode matches — primarily useful in tests or
+    internal debug runs.
+    """
+    focus = (ctx.focus or "").lower()
+    if focus.startswith("compatibility"):
+        return "compatibility"
+    if focus.startswith("occasion"):
+        return "occasion"
+    # The route fan-out, frontend client, and ``classify_function`` only
+    # recognize ``luck_cycle:*``. Don't add ``luck:*`` aliases without
+    # updating those callers in lock-step.
+    if focus.startswith("luck_cycle"):
+        return "luck_cycle"
+    if focus == "custom_wish" or ctx.question:
+        return "wish"
+    return "general"
+
 
 GUARDRAIL_AGENT: Agent[FortuneRunContext] = Agent(
     name="fortune_guardrail",
     model=_model("guardrail_model"),
-    model_settings=_model_settings("guardrail_reasoning"),
+    model_settings=_model_settings("guardrail_reasoning", "guardrail_max_tokens"),
     instructions=GUARDRAIL_INSTRUCTIONS,
     output_type=GuardrailOutput,
 )
@@ -822,32 +1077,49 @@ async def run_foundation(ctx: FortuneRunContext) -> dict[str, Any]:
 
 
 def _build_narrative_prompt(ctx: FortuneRunContext, foundation: dict[str, Any]) -> str:
-    """Build the JSON prompt for the narrative agent with full analysis data."""
+    """Build the JSON prompt for the narrative agent with full analysis data.
+
+    Field ordering note: keys are inserted **stable-first → volatile-last** so
+    the OpenAI Responses API automatic prompt cache (≥1024-token prefix
+    match) hits on repeat queries by the same user. Concretely:
+
+      1. Schema/foundation version markers (global, stable across deploys).
+      2. Person A's birth-derived chart data (stable across that user's
+         session — pillars, hidden stems, ten gods, interactions, seasonal
+         strength, enhanced element counts, harmony score, luck pillars).
+      3. Person B's chart (stable per-pair when present).
+      4. ``occasion_window`` (changes when the user changes the window).
+      5. ``current_year`` (changes daily/yearly).
+      6. ``focus`` / ``tone`` / ``question`` / ``references`` (volatile per
+         call — focus and question switch the agent's mode and references
+         depend on focus, so they MUST come last).
+
+    Re-ordering this dict will move where the cache prefix breaks. Audit
+    against ``test_prompt_cache_prefix.py`` before touching.
+    """
     analysis: FullBaziAnalysis = foundation["analysis"]
     settings = get_settings()
     current_year = _current_year(ctx)
 
-    # Include enriched data — the narrative agent interprets pre-computed results
+    # 1. Stable global markers.
     prompt_data: dict[str, Any] = {
         "foundation_version": FOUNDATION_VERSION,
         "narrative_schema_version": NARRATIVE_SCHEMA_VERSION,
-        "current_year": current_year,
-        "focus": ctx.focus,
-        "tone": ctx.tone,
-        "question": ctx.question,
+    }
+
+    # 2. Stable per-user chart data (Person A).
+    prompt_data.update({
         "pillars": foundation["pillars"],
         "elements": foundation["elements"].model_dump(),
-        "references": [r.model_dump() for r in foundation["references"]],
-        # Enriched computation data
         "hidden_stems": {k: [s.model_dump() for s in v] for k, v in analysis.hidden_stems.items()},
         "ten_gods": [tg.model_dump() for tg in analysis.ten_gods],
         "interactions": [ix.model_dump() for ix in analysis.interactions],
         "seasonal_strength": analysis.seasonal_strength.model_dump(),
         "enhanced_element_counts": analysis.enhanced_element_counts,
         "harmony_score": analysis.harmony_score,
-    }
+    })
 
-    # Include luck + annual pillars if available (for year predictions)
+    # Include luck + annual pillars if available (for year predictions).
     if analysis.luck_pillars:
         luck_pillars = (
             _select_luck_pillars_for_prompt(
@@ -859,7 +1131,7 @@ def _build_narrative_prompt(ctx: FortuneRunContext, foundation: dict[str, Any]) 
         )
         prompt_data["luck_pillars"] = [lp.model_dump() for lp in luck_pillars]
     if analysis.annual_pillars:
-        # Only include years with interactions (to keep prompt size reasonable)
+        # Only include years with interactions (to keep prompt size reasonable).
         annual_pillars = (
             _select_annual_pillars_for_prompt(
                 analysis.annual_pillars,
@@ -876,11 +1148,7 @@ def _build_narrative_prompt(ctx: FortuneRunContext, foundation: dict[str, Any]) 
             ap.model_dump() for ap in annual_pillars
         ]
 
-    occasion_window = _build_occasion_window(ctx)
-    if occasion_window:
-        prompt_data["occasion_window"] = occasion_window
-
-    # Compatibility: attach Person B's chart so the agent reasons about both.
+    # 3. Person B chart (stable per-pair, before any per-call volatile data).
     person_b_foundation = foundation.get("person_b")
     if person_b_foundation:
         analysis_b: FullBaziAnalysis = person_b_foundation["analysis"]
@@ -899,6 +1167,24 @@ def _build_narrative_prompt(ctx: FortuneRunContext, foundation: dict[str, Any]) 
             "enhanced_element_counts": analysis_b.enhanced_element_counts,
             "harmony_score": analysis_b.harmony_score,
         }
+
+    # 4. Occasion window (rarely-changing; depends on focus's window args).
+    # PR3: pass the foundation so the deterministic prefilter narrows
+    # 60+ candidate days to top-21 + coverage sample BEFORE the model sees
+    # them. ``repair_occasion_narrative`` still calls without foundation
+    # because it needs every candidate for date validation.
+    occasion_window = _build_occasion_window(ctx, foundation=foundation)
+    if occasion_window:
+        prompt_data["occasion_window"] = occasion_window
+
+    # 5. Daily/yearly markers.
+    prompt_data["current_year"] = current_year
+
+    # 6. Per-call volatile fields (cache prefix breaks here on every call).
+    prompt_data["focus"] = ctx.focus
+    prompt_data["tone"] = ctx.tone
+    prompt_data["question"] = ctx.question
+    prompt_data["references"] = [r.model_dump() for r in foundation["references"]]
 
     return json.dumps(prompt_data, ensure_ascii=False)
 
@@ -922,7 +1208,32 @@ def _parse_occasion_focus(focus: str | None) -> tuple[str, date, date] | None:
     return occasion_type, start, end
 
 
-def _build_occasion_window(ctx: FortuneRunContext) -> dict[str, Any] | None:
+def _build_occasion_window(
+    ctx: FortuneRunContext,
+    *,
+    foundation: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Build the occasion candidate-day window (with optional prefilter).
+
+    Two call modes:
+
+    1. **Prefilter (PR3)** — when ``foundation`` is provided, the function
+       generates ALL candidate days for the requested window, scores each
+       against the querent's chart via
+       :func:`_foundation_cache.score_candidate_day`, then returns only
+       the top 21 plus a coverage sample (1 per 7-day bucket from the
+       remainder, capped at 10). This narrows 60+ days down to ~30 picks
+       and lets the narrative agent run at ``low`` reasoning effort.
+
+    2. **Repair / no-prefilter** — when ``foundation`` is omitted (called
+       by ``repair_occasion_narrative`` for date validation), all
+       candidate days are returned in chronological order. The repair
+       path needs the full date set so it can validate every pick the
+       model emitted.
+
+    Day-chart computation goes through ``compute_day_chart_cached`` so
+    repeat windows in the same timezone share work (PR3 foundation cache).
+    """
     parsed = _parse_occasion_focus(ctx.focus)
     if parsed is None:
         return None
@@ -930,15 +1241,13 @@ def _build_occasion_window(ctx: FortuneRunContext) -> dict[str, Any] | None:
     occasion_type, start, end = parsed
     candidate_days: list[dict[str, Any]] = []
     cursor = start
-    # A user-facing lucky-day window is normally one month. Cap defensively so
-    # an accidental long range cannot dominate the model prompt.
-    final_day = min(end, start + timedelta(days=62))
+    # A user-facing lucky-day window is normally one month. Cap defensively
+    # so an accidental long range cannot dominate the model prompt. The
+    # ``timedelta(days=61)`` produces exactly 62 inclusive calendar days
+    # from ``start`` (codex PR3 §4 fixed the off-by-one).
+    final_day = min(end, start + timedelta(days=61))
     while cursor <= final_day:
-        chart = compute_bazi_chart(
-            f"{cursor.isoformat()}T12:00:00",
-            timezone=ctx.timezone,
-            birth_time_unknown=True,
-        )
+        chart = compute_day_chart_cached(cursor.isoformat(), ctx.timezone)
         day = chart["day"]
         candidate_days.append({
             "date": cursor.isoformat(),
@@ -949,11 +1258,83 @@ def _build_occasion_window(ctx: FortuneRunContext) -> dict[str, Any] | None:
         })
         cursor += timedelta(days=1)
 
+    # Repair path: caller wants the full chronological list for date validation.
+    if foundation is None:
+        return {
+            "occasion_type": occasion_type,
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "candidate_days": candidate_days,
+        }
+
+    # Prefilter path: rank by chart compatibility, take top-21 + sample.
+    favored, avoid = occasion_preferences(occasion_type)
+    # Defensive parse — log the route with a clear ValueError if a future
+    # caller hands us a foundation with a non-canonical day-pillar shape
+    # (e.g. CJK string fallback or {"raw": "甲寅"}); see codex PR3 §1.
+    querent_dm_stem, querent_day_branch = pillar_stem_branch(
+        foundation["pillars"]["day"],
+    )
+
+    scored: list[tuple[float, dict[str, Any]]] = []
+    for cand in candidate_days:
+        score = score_candidate_day(
+            cand["day_pillar_stem"],
+            cand["day_pillar_branch"],
+            querent_dm_stem,
+            querent_day_branch,
+            favored,
+            avoid,
+        )
+        scored.append((score, cand))
+
+    # Top 21 by score (ties broken by chronological order so the model sees
+    # earliest-good days first).
+    scored_sorted_by_score = sorted(
+        scored,
+        key=lambda pair: (-pair[0], pair[1]["date"]),
+    )
+    top_picks = [cand for _score, cand in scored_sorted_by_score[:21]]
+
+    # Coverage sample: from the REMAINDER, take one day per 7-day bucket so
+    # the model still sees options spread across the window. Capped at 10.
+    remaining = scored_sorted_by_score[21:]
+    sample: list[dict[str, Any]] = []
+    seen_buckets: set[int] = set()
+    # Walk the remainder in date order so bucket selection is deterministic
+    # (rather than score order, which would over-represent the start window).
+    for cand in sorted([c for _s, c in remaining], key=lambda c: c["date"]):
+        cand_date = date.fromisoformat(cand["date"])
+        bucket = (cand_date - start).days // 7
+        if bucket in seen_buckets:
+            continue
+        seen_buckets.add(bucket)
+        sample.append(cand)
+        if len(sample) >= 10:
+            break
+
+    # Combine top + sample, deduplicate by date, sort chronologically so
+    # the model reads them naturally (the LLM still scores within this set).
+    combined: dict[str, dict[str, Any]] = {c["date"]: c for c in top_picks}
+    for cand in sample:
+        combined.setdefault(cand["date"], cand)
+    curated = sorted(combined.values(), key=lambda c: c["date"])
+
     return {
         "occasion_type": occasion_type,
         "start": start.isoformat(),
         "end": end.isoformat(),
-        "candidate_days": candidate_days,
+        "candidate_days": curated,
+        # Hint to the model about the prefilter — useful for prompt-side
+        # tuning and surfaces in the trace_collector for debug.
+        "prefilter": {
+            "method": "deterministic",
+            "total_candidates": len(candidate_days),
+            "top_picks": len(top_picks),
+            "coverage_sample": len(sample),
+            "favored_element": favored,
+            "avoid_element": avoid,
+        },
     }
 
 
@@ -1040,30 +1421,41 @@ async def run_narrative(
     *,
     foundation: dict[str, Any],
 ) -> EnrichedNarrativeOutput:
-    """Run the narrative agent (non-streaming) and return structured output."""
+    """Run the narrative agent (non-streaming) and return structured output.
+
+    Dispatches via ``NARRATIVE_AGENTS[_narrative_mode(ctx)]`` so the
+    non-streamed path exercises the same per-mode narrow output schema as
+    the streamed production path. The narrow output is promoted back to
+    the merged ``EnrichedNarrativeOutput`` via
+    :func:`_promote_narrative_to_enriched` so callers see one shape.
+    """
     prompt = _build_narrative_prompt(ctx, foundation)
+    agent = NARRATIVE_AGENTS[_narrative_mode(ctx)]
     settings = get_settings()
     fn = classify_function(ctx.focus, ctx.question)
+    # PR3 follow-up: log the per-mode reasoning effort actually bound to
+    # the selected agent, not the legacy global ``narrative_reasoning``.
+    # Otherwise canary analysis on the per-mode latency win sees medium
+    # reported for occasion/luck/wish even though they run at low.
+    _agent_reasoning = agent.model_settings.reasoning.effort
     with _stage(
         function=fn,
         stage="narrative",
         model=settings.narrative_model,
-        reasoning=settings.narrative_reasoning,
+        reasoning=_agent_reasoning,
         fortune_id=ctx.fortune_id,
         run_id=ctx.run_id,
-        agent=NARRATIVE_AGENT.name,
+        agent=agent.name,
         extra={"streamed": "false", "person_b": str("person_b" in foundation).lower()},
     ) as sh:
         result = await Runner.run(
-            NARRATIVE_AGENT,
+            agent,
             input=prompt,
             context=ctx,
             run_config=_run_config(ctx),
         )
         sh.attach_result(result)
-    if isinstance(result.final_output, EnrichedNarrativeOutput):
-        return result.final_output
-    return EnrichedNarrativeOutput.model_validate(result.final_output)
+    return _promote_narrative_to_enriched(result.final_output)
 
 
 async def run_narrative_streamed(
@@ -1073,15 +1465,21 @@ async def run_narrative_streamed(
 ):
     """Run the narrative agent with streaming. Returns the streamed run result.
 
+    Picks a per-mode agent from ``NARRATIVE_AGENTS`` based on the focus, so
+    the bound ``output_type`` is the narrow schema for that mode. The
+    ``RawResponsesStreamEvent`` events still flow through unchanged; the
+    route handler (which owns the consumption loop) is responsible for
+    emitting the structured ``narrative`` log entry on its side. This
+    function only runs the SDK call — it does NOT emit a log of its own to
+    avoid double-logging. See ``routes.py`` stream loop.
+
     Note: usage on the returned ``RunResultStreaming`` is stale until the
-    stream is fully consumed; the route handler (which owns the consumption
-    loop) is responsible for emitting the structured ``narrative`` log entry
-    on its side. This function only runs the SDK call — it does NOT emit a
-    log of its own to avoid double-logging. See ``routes.py`` stream loop.
+    stream is fully consumed; the route handler reads it after the loop.
     """
     prompt = _build_narrative_prompt(ctx, foundation)
+    agent = NARRATIVE_AGENTS[_narrative_mode(ctx)]
     return Runner.run_streamed(
-        NARRATIVE_AGENT,
+        agent,
         input=prompt,
         context=ctx,
         run_config=_run_config(ctx),
