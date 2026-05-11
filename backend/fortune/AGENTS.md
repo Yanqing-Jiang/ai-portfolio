@@ -8,9 +8,11 @@
 | Agents SDK   | `openai-agents==0.15.1`          |
 | Bazi engine  | `cnlunar>=0.2.4` (deterministic) |
 | Default model| `gpt-5.4-mini`                   |
-| Reasoning    | `medium` (compatibility); `low` (occasion, luck_cycle, wish, guardrail); foundation is deterministic. Legacy `narrative_reasoning` default remains `medium` for `general` fallback. |
+| Reasoning    | `low` per-mode (post-PR-3, 2026-05-10); `low` for guardrail; foundation is deterministic. Legacy `narrative_reasoning` default remains `medium` for `general` fallback. |
 | Verbosity    | `low`                            |
 | Max tokens   | compat=10000, occasion=9000, wish=6000, luck_cycle=4500, guardrail=1200 |
+
+**Per-mode reasoning (post-PR-3 flip):** compatibility, occasion, luck_cycle, and wish all default to `low`. Compatibility was at `medium` (~65s) until 2026-05-10; PR-1B's judge harness (`scripts/run_compat_judge_harness.py`) confirmed 3/3 fixtures pass authenticity ≥ 6.5/10 at `low` (medians 8.2–10.0) with latency dropping to 15-22s. Rollback: `FORTUNE_NARRATIVE_REASONING_COMPATIBILITY=medium` + `docker compose restart backend`.
 
 **PR-Panel (always-visible Thinking Panel):** every stream emits the 5 canonical rows (calendar → bazi_interpreter → classics_retriever → narrative → guardrail) under `/data/thinking/steps/{step_id}` with a queued→running→done lifecycle. See `backend/fortune/stream_bridge.py::emit_agent_step` and `routes.py::_panel_canonical_rows`. Audit covered by `tests/fortune/test_thinking_panel_completeness.py`.
 

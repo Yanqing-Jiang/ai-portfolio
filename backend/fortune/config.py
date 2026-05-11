@@ -54,25 +54,33 @@ class FortuneSettings(BaseSettings):
     ask_reasoning: str = "low"
 
     # PR3 (latency refactor) — per-mode reasoning effort.
-    # Defaults preserve legacy behavior: compatibility starts at ``medium``
-    # (matching the pre-refactor ``narrative_reasoning`` global), the
-    # other three modes start at ``low`` because:
+    # Compatibility flipped from "medium" → "low" on 2026-05-10 after the
+    # PR-1B judge harness (scripts/run_compat_judge_harness.py) confirmed
+    # 3/3 fixtures pass authenticity ≥ 6.5/10 at low (medians 8.2, 9.5,
+    # 10.0; p25 floor 8.2). Combined with the smoke samples covering
+    # compat_001/002/003 across two prior runs (medians 8.5/9.5/10.0 at
+    # low), the verdict was robust across judge variance.
+    # Latency drop: compat 65s → 15-22s (3-4x faster), with no observed
+    # mechanism-floor regression because PR-1A's Pydantic min_length now
+    # rejects sub-floor outputs at the schema layer regardless of effort.
+    # Rollback: ``FORTUNE_NARRATIVE_REASONING_COMPATIBILITY=medium`` +
+    # ``docker compose restart backend`` (sub-second effective).
+    # The other three modes default to "low" because:
     #   - occasion: deterministic prefilter narrows 60+ days to top 21,
     #     so the model only ranks/explains a curated set;
     #   - luck_cycle: small UI payload (current_window + mechanisms) and
     #     timeline is deterministic;
     #   - wish: bounded verdict + anchors + mechanisms.
-    # The compat default is flipped to ``low`` in a separate PR-3 commit
-    # once the PR-1B judge harness greenlights it; rollback through
-    # ``FORTUNE_NARRATIVE_REASONING_COMPATIBILITY=medium`` + restart.
-    narrative_reasoning_compatibility: str = "medium"
+    narrative_reasoning_compatibility: str = "low"
     narrative_reasoning_occasion: str = "low"
     narrative_reasoning_luck_cycle: str = "low"
     narrative_reasoning_wish: str = "low"
 
     # PR3 — per-mode max_tokens caps. ``None`` means no cap (the OpenAI
     # per-request budget governs). Compatibility stays uncapped while
-    # effort is ``medium`` because that path truncated below 10k.
+    # effort was ``medium`` because that path truncated below 10k; once
+    # PR-3 dropped reasoning to ``low``, total tokens fell to ~3-4k and a
+    # 10k cap is safe headroom against runaway-reasoning tails.
     narrative_max_tokens_compatibility: Optional[int] = 10000
     narrative_max_tokens_occasion: Optional[int] = 9000
     narrative_max_tokens_luck_cycle: Optional[int] = 4500
