@@ -47,6 +47,7 @@ export function useFortuneStream(options: UseFortuneStreamOptions): UseFortuneSt
   const applyPatch = useFortuneStore((s) => s.applyPatch);
   const setStatus = useFortuneStore((s) => s.setStatus);
   const setStoreRunId = useFortuneStore((s) => s.setRunId);
+  const setNarrativeReady = useFortuneStore((s) => s.setNarrativeReady);
 
   const close = useCallback(() => {
     if (retryTimerRef.current) {
@@ -115,6 +116,16 @@ export function useFortuneStream(options: UseFortuneStreamOptions): UseFortuneSt
             // Convert A2UI DataEntry format to plain object
             const data = processContents(contents);
             applyPatch(path, data);
+
+            // PR5 narrative-complete gate: when the narrative payload
+            // arrives with `isComplete: true`, flip `narrativeReady` so
+            // the UI can render the reading immediately while guardrail
+            // continues to run in the background. Saves 3.5–4.5s of
+            // perceived latency on every flow. The terminal `complete`
+            // event still fires later via the /data/meta branch below.
+            if (path === '/data/narrative' && data.isComplete === true) {
+              setNarrativeReady(true);
+            }
           }
           // Check for meta status
           if (payload.dataModelUpdate?.path === '/data/meta') {
@@ -150,7 +161,7 @@ export function useFortuneStream(options: UseFortuneStreamOptions): UseFortuneSt
         setStatus('error');
       }
     };
-  }, [streamUrl, enabled, close, applyPatch, setStatus, setStoreRunId]);
+  }, [streamUrl, enabled, close, applyPatch, setStatus, setStoreRunId, setNarrativeReady]);
 
   // Auto-connect when streamUrl is available
   useEffect(() => {

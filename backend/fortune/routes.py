@@ -53,11 +53,13 @@ try:
         EnrichedNarrativeOutput,
         FOUNDATION_VERSION,
         FortuneRunContext,
+        GUARDRAIL_AGENT,
         GuardrailOutput,
         NARRATIVE_AGENTS,
         NARRATIVE_SCHEMA_VERSION,
         NarrativeOutput,
         _narrative_mode,
+        _promote_narrative_to_enriched,
         repair_occasion_narrative,
         run_foundation,
         run_guardrail,
@@ -69,17 +71,20 @@ try:
     from .triage import ALLOWED_ACTION_IDS, normalize_action_focus, run_triage
     from .session_store import get_ask_session
     from .simulator import simulate_birth_time
+    from ._thinking_heartbeat import HeartbeatTick, iter_with_heartbeats
 except ImportError:
     from agents import (  # type: ignore[no-redef]
         DEFAULT_FOLLOW_UP_BUTTONS,
         EnrichedNarrativeOutput,
         FOUNDATION_VERSION,
         FortuneRunContext,
+        GUARDRAIL_AGENT,
         GuardrailOutput,
         NARRATIVE_AGENTS,
         NARRATIVE_SCHEMA_VERSION,
         NarrativeOutput,
         _narrative_mode,
+        _promote_narrative_to_enriched,
         repair_occasion_narrative,
         run_foundation,
         run_guardrail,
@@ -91,6 +96,7 @@ except ImportError:
     from triage import ALLOWED_ACTION_IDS, normalize_action_focus, run_triage  # type: ignore[no-redef]
     from session_store import get_ask_session  # type: ignore[no-redef]
     from simulator import simulate_birth_time  # type: ignore[no-redef]
+    from _thinking_heartbeat import HeartbeatTick, iter_with_heartbeats  # type: ignore[no-redef]
 
 
 router = APIRouter(prefix="/api/fortune", tags=["fortune"])
@@ -662,6 +668,78 @@ async def get_fortune_replay(
     )
 
 
+def _make_seq_allocator(
+    run_uuid: uuid.UUID | None,
+    repo: Any,
+    *,
+    batch_size: int = 16,
+) -> Any:
+    """Build a per-stream seq allocator backed by a 16-slot DB-allocated buffer.
+
+    Returns an async ``alloc()`` that dispenses the next replay seq. On the
+    happy path it draws from a buffer pre-allocated via
+    ``repo.allocate_seq_batch(run_uuid, batch_size)`` — one Postgres
+    roundtrip per ~16 emits instead of one per emit. Falls back to
+    single-step ``allocate_seq`` if the repository surface lacks the batch
+    method (older mocks/tests), and to a local monotonic counter if the DB
+    is degraded.
+
+    The local fallback honours a ``last_dispensed`` floor so transient DB
+    failures mid-stream cannot replay a seq the live client has already
+    advanced past — without the floor, a flake after the first 16 events
+    would dispense seq=1 again and the frontend dedupe would silently drop
+    every subsequent envelope.
+    """
+    seq_buffer = {"next": 0, "end": 0}
+    batch_supported = {"ok": True}
+    last_dispensed = {"seq": 0}
+    local_counter = {"n": 0}
+
+    async def _refill() -> bool:
+        if run_uuid is None or not getattr(repo, "available", False):
+            return False
+        if batch_supported["ok"]:
+            try:
+                new_max = await repo.allocate_seq_batch(run_uuid, batch_size)
+            except AttributeError:
+                # Older repository surfaces only single-shot allocation.
+                batch_supported["ok"] = False
+                new_max = 0
+            except Exception as exc:
+                logger.debug("[FORTUNE] allocate_seq_batch fallback: %s", exc)
+                new_max = 0
+            if new_max > 0:
+                seq_buffer["next"] = new_max - batch_size + 1
+                seq_buffer["end"] = new_max + 1
+                return True
+        # Single-step fallback path.
+        try:
+            n = await repo.allocate_seq(run_uuid)
+            if n > 0:
+                seq_buffer["next"] = n
+                seq_buffer["end"] = n + 1
+                return True
+        except Exception as exc:
+            logger.debug("[FORTUNE] allocate_seq fallback: %s", exc)
+        return False
+
+    async def alloc() -> int:
+        if seq_buffer["next"] < seq_buffer["end"]:
+            n = seq_buffer["next"]
+            seq_buffer["next"] = n + 1
+        elif await _refill():
+            n = seq_buffer["next"]
+            seq_buffer["next"] = n + 1
+        else:
+            # Local fallback: stay above any DB-allocated seq we already emitted.
+            n = max(local_counter["n"], last_dispensed["seq"]) + 1
+            local_counter["n"] = n
+        last_dispensed["seq"] = n
+        return n
+
+    return alloc
+
+
 def _extract_stream_event_meta(event: Any) -> dict[str, Any] | None:
     """Translate an SDK stream event into a minimal dict for the UI.
 
@@ -678,6 +756,12 @@ def _extract_stream_event_meta(event: Any) -> dict[str, Any] | None:
     drift: attribute lookups use ``getattr`` with fallbacks.
     """
     cls_name = type(event).__name__
+    # Hot path: a 7k-token narrative emits ~7000 RawResponsesStreamEvents
+    # (per-token deltas). They never produce UI breadcrumbs for a structured
+    # JSON agent, so short-circuit before walking the rest of the cascade —
+    # saves 50-200 ms of Python frame setup per narrative.
+    if cls_name == "RawResponsesStreamEvent":
+        return None
     if cls_name == "AgentUpdatedStreamEvent":
         new_agent = getattr(event, "new_agent", None)
         return {
@@ -719,12 +803,13 @@ def _extract_stream_event_meta(event: Any) -> dict[str, Any] | None:
             )
             return {"kind": "handoff_call", "target": target}
         if "reasoningitem" in tokens:
-            # Reasoning summary chunk. Reasoning models may emit one or more
-            # reasoning_items per generation when summary="auto" is set.
-            # per generation when summary="auto" is set. The payload shape is
-            # ``list[Summary(text=..., type="summary_text")]``. We flatten the
-            # text(s) to a single string so the thinking panel can render a
-            # real signal during the 20-40s narrative window.
+            # Reasoning summary chunk. PR2 of the latency refactor flipped
+            # the narrative agent to ``summary=None``, so this branch is
+            # now exercised primarily by the guardrail/triage agents and
+            # legacy callers that opt into ``summary="auto"``. The payload
+            # shape is ``list[Summary(text=..., type="summary_text")]``.
+            # We flatten the text(s) to a single string so the thinking
+            # panel can render a real signal when summaries DO arrive.
             raw_summary = (
                 getattr(item, "summary", None)
                 or getattr(raw_item, "summary", None)
@@ -749,6 +834,96 @@ def _extract_stream_event_meta(event: Any) -> dict[str, Any] | None:
             return {"kind": "message", "tool": None}
         return None
     return None
+
+
+# ------------------------------------------------------------------
+# PR-Panel — Always-visible Thinking Panel canonical rows
+# ------------------------------------------------------------------
+#
+# These five (or six) rows are seeded as ``queued`` placeholders the
+# instant the stream opens, then transition to ``running`` and
+# ``done``/``skipped``/``error`` as work happens. The frontend reducer
+# is keyed by ``stepId`` so later writes naturally overwrite earlier
+# ones — safe under SSE replay/reconnect because every row also carries
+# an explicit ``sequence`` for stable sort.
+#
+# Sentinel rule: every row reaches a terminal state. A
+# ``statusReason="no_data"`` (e.g., classics no-match) is a valid done
+# state — the row still renders with elapsed_ms and 0 tokens, never
+# blank. The audit test asserts pipeline completeness.
+
+# Deterministic agents — these run inside ``run_foundation`` and have
+# no LLM reasoning; the panel renders them with ``reasoningEffort =
+# "deterministic"`` (display: "—") and ``reasoningTokens = 0``.
+_PANEL_DETERMINISTIC_ROWS: tuple[dict[str, Any], ...] = (
+    {
+        "step_id": "calendar",
+        "agent_name": "Calendar",
+        "model_id": "deterministic:cnlunar",
+        "sequence": 1,
+        "reasoning_effort": "deterministic",
+    },
+    {
+        "step_id": "bazi_interpreter",
+        "agent_name": "BaZi Interpreter",
+        "model_id": "python:bazi-engine",
+        "sequence": 2,
+        "reasoning_effort": "deterministic",
+    },
+    {
+        "step_id": "classics_retriever",
+        "agent_name": "Classics Retriever",
+        "model_id": "local:classics-retriever",
+        "sequence": 3,
+        "reasoning_effort": "deterministic",
+    },
+)
+
+
+def _panel_canonical_rows(
+    narrative_agent: Any,
+    *,
+    narrative_model_id: str,
+    guardrail_agent: Any | None = None,
+) -> list[dict[str, Any]]:
+    """Build the 5-row canonical schema for the current stream.
+
+    The deterministic rows are static; the narrative + guardrail rows
+    pick up ``model_id`` and ``reasoning_effort`` from the selected
+    agent's ``ModelSettings`` so the panel never lies about which tier
+    was actually used (this was the bug PR-2 inlined a fix for).
+    """
+    narrative_effort = (
+        narrative_agent.model_settings.reasoning.effort
+        if narrative_agent.model_settings.reasoning is not None
+        else None
+    )
+    guardrail_effort = (
+        guardrail_agent.model_settings.reasoning.effort
+        if guardrail_agent is not None
+        and guardrail_agent.model_settings.reasoning is not None
+        else None
+    )
+    rows: list[dict[str, Any]] = [dict(r) for r in _PANEL_DETERMINISTIC_ROWS]
+    rows.append(
+        {
+            "step_id": "narrative",
+            "agent_name": "Narrative",
+            "model_id": narrative_model_id,
+            "sequence": 4,
+            "reasoning_effort": narrative_effort,
+        }
+    )
+    rows.append(
+        {
+            "step_id": "guardrail",
+            "agent_name": "Guardrail",
+            "model_id": narrative_model_id,  # same model family
+            "sequence": 5,
+            "reasoning_effort": guardrail_effort,
+        }
+    )
+    return rows
 
 
 @router.get("/{fortune_id}/stream")
@@ -801,7 +976,6 @@ async def stream_fortune(fortune_id: str, request: Request):
             # the DB is degraded.
             run_id = session.run_id
             fortune_id_str = session.fortune_id
-            local_seq = {"n": 0}
             repo = await get_repository()
             run_uuid: uuid.UUID | None = None
             try:
@@ -809,16 +983,7 @@ async def stream_fortune(fortune_id: str, request: Request):
             except (ValueError, TypeError):
                 run_uuid = None
 
-            async def _alloc_seq() -> int:
-                if run_uuid is not None and repo.available:
-                    try:
-                        n = await repo.allocate_seq(run_uuid)
-                        if n > 0:
-                            return n
-                    except Exception as exc:
-                        logger.debug("[FORTUNE] allocate_seq fallback: %s", exc)
-                local_seq["n"] += 1
-                return local_seq["n"]
+            _alloc_seq = _make_seq_allocator(run_uuid, repo)
 
             # Key events we mirror into fortune_event for durable replay. Most
             # high-frequency data updates stay Redis-only; we keep only the
@@ -925,24 +1090,46 @@ async def stream_fortune(fortune_id: str, request: Request):
                     from agent_logging import classify_function, log_stream_start  # type: ignore[no-redef]
                 _fn_label = classify_function(ctx.focus, ctx.question)
                 _settings_for_log = get_settings()
+                # PR3 follow-up: log the per-mode reasoning effort the
+                # streamed agent will actually use, not the legacy global
+                # ``narrative_reasoning``. Canary analysis depends on
+                # this field being correct for occasion/luck/wish.
+                _stream_start_mode = _narrative_mode(ctx)
+                _stream_start_agent = NARRATIVE_AGENTS[_stream_start_mode]
                 log_stream_start(
                     fortune_id=session.fortune_id,
                     run_id=run_id,
                     function=_fn_label,
                     focus=ctx.focus,
                     model=_settings_for_log.narrative_model,
-                    reasoning=_settings_for_log.narrative_reasoning,
+                    reasoning=_stream_start_agent.model_settings.reasoning.effort,
                     has_person_b=session.request.person_b is not None,
                     extra={
                         "tone": ctx.tone or "-",
                         "has_question": "true" if ctx.question else "false",
                         "pending_action": pending_action or "-",
+                        "mode": _stream_start_mode,
                     },
                 )
 
                 # 1. Begin rendering
                 for msg in bridge.begin_messages(fortune_id=session.fortune_id):
                     yield await _emit(msg)
+
+                # PR-Panel: seed all 5 canonical Thinking Panel rows as
+                # ``queued`` placeholders the moment the stream opens —
+                # the frontend's empty-state ("Queueing pipeline...")
+                # flips to a visible 5-row skeleton within ~50ms of
+                # connect. Each row transitions to ``running`` then
+                # ``done`` as work happens; the reducer is keyed by
+                # ``stepId`` so later events overwrite earlier ones.
+                _panel_rows = _panel_canonical_rows(
+                    _stream_start_agent,
+                    narrative_model_id=_settings_for_log.narrative_model,
+                    guardrail_agent=GUARDRAIL_AGENT,
+                )
+                yield await _emit(bridge.emit_agent_steps_batch(_panel_rows))
+                _panel_t0 = _t_start  # wall-clock anchor for elapsed_ms
 
                 # After the first event is on the wire the run is durably
                 # committed as streaming; safe to drop the pending-action
@@ -1067,6 +1254,28 @@ async def stream_fortune(fortune_id: str, request: Request):
                 if trace:
                     yield await _emit(bridge.emit_trace_steps_batch(trace.steps))
 
+                # PR-Panel: foundation just finished — mark the 3
+                # deterministic rows ``done``. They run inside
+                # ``run_foundation`` (<300ms typical) so we collapse
+                # their queued→running→done into a single done emit.
+                # ``dur_f`` is set above when foundation wasn't cached;
+                # default to 0ms for the cache-hit path (still emits a
+                # terminal state so the rows aren't stuck queued).
+                _panel_found_ms = int(locals().get("dur_f", 0) or 0)
+                for _det_row in _PANEL_DETERMINISTIC_ROWS:
+                    yield await _emit(
+                        bridge.emit_agent_step(
+                            step_id=_det_row["step_id"],
+                            agent_name=_det_row["agent_name"],
+                            status="done",
+                            model_id=_det_row["model_id"],
+                            sequence=_det_row["sequence"],
+                            reasoning_effort="deterministic",
+                            elapsed_ms=_panel_found_ms,
+                            reasoning_tokens=0,
+                        )
+                    )
+
                 # Early partial snapshot BEFORE narrative generation starts.
                 # Mid-run reconnects (page refresh, crashed tab) can now hit
                 # GET /{fortune_id} and get a populated dashboard back — the
@@ -1130,6 +1339,20 @@ async def stream_fortune(fortune_id: str, request: Request):
                         "[FORTUNE] %s triage start — action=%s",
                         session.fortune_id, pending_action,
                     )
+                    # PR-Panel: narrative row → ``running`` (triage path).
+                    _panel_narr_row = next(
+                        r for r in _panel_rows if r["step_id"] == "narrative"
+                    )
+                    yield await _emit(
+                        bridge.emit_agent_step(
+                            step_id="narrative",
+                            agent_name=_panel_narr_row["agent_name"],
+                            status="running",
+                            model_id=_panel_narr_row["model_id"],
+                            sequence=_panel_narr_row["sequence"],
+                            reasoning_effort=_panel_narr_row["reasoning_effort"],
+                        )
+                    )
                     narrative = await run_triage(
                         ctx,
                         foundation=foundation,
@@ -1142,6 +1365,21 @@ async def stream_fortune(fortune_id: str, request: Request):
                     if cancel_msg:
                         yield cancel_msg
                         return
+                    # PR-Panel: narrative row → ``done`` after triage.
+                    _dur_triage = int((_time.monotonic() - _t_narrative) * 1000)
+                    yield await _emit(
+                        bridge.emit_agent_step(
+                            step_id="narrative",
+                            agent_name=_panel_narr_row["agent_name"],
+                            status="done",
+                            model_id=_panel_narr_row["model_id"],
+                            sequence=4,
+                            reasoning_effort=_panel_narr_row["reasoning_effort"],
+                            elapsed_ms=_dur_triage,
+                            reasoning_tokens=0,
+                            status_reason="triage",
+                        )
+                    )
                 else:
                     yield await _emit(
                         bridge.emit_progress("narrative", "Generating interpretation..."),
@@ -1153,6 +1391,23 @@ async def stream_fortune(fortune_id: str, request: Request):
                             input_summary=f"focus={ctx.focus}",
                         )
                         yield await _emit(bridge.emit_trace_steps_batch(trace.steps))
+
+                    # PR-Panel: flip narrative row to ``running`` before
+                    # the SDK call so the panel reflects the live state
+                    # during the longest reasoning window.
+                    _panel_narr_row = next(
+                        r for r in _panel_rows if r["step_id"] == "narrative"
+                    )
+                    yield await _emit(
+                        bridge.emit_agent_step(
+                            step_id="narrative",
+                            agent_name=_panel_narr_row["agent_name"],
+                            status="running",
+                            model_id=_panel_narr_row["model_id"],
+                            sequence=_panel_narr_row["sequence"],
+                            reasoning_effort=_panel_narr_row["reasoning_effort"],
+                        )
+                    )
 
                     _t_narrative = _time.monotonic()
                     logger.info(
@@ -1168,7 +1423,16 @@ async def stream_fortune(fortune_id: str, request: Request):
                     # partial text is not useful to render.
                     stream_result = await run_narrative_streamed(ctx, foundation=foundation)
                     seen_tools: set[str] = set()
-                    async for event in stream_result.stream_events():
+                    # PR5: wrap the SDK event iterator with a synthetic heartbeat
+                    # multiplexer. Every ~8s of silence the helper yields a
+                    # ``HeartbeatTick`` so we can paint a "Still reasoning…"
+                    # progress event in the otherwise-silent window between the
+                    # last tool output and ``ResponseCompleted``. Replaces the
+                    # UX role of the dropped ``summary="auto"`` reasoning
+                    # summaries (PR2) without paying their TTFB tax.
+                    async for event in iter_with_heartbeats(
+                        stream_result.stream_events(), interval=8.0
+                    ):
                         cancel_msg = await _cancel_event("narrative", trace)
                         if cancel_msg:
                             try:
@@ -1177,6 +1441,18 @@ async def stream_fortune(fortune_id: str, request: Request):
                                 pass
                             yield cancel_msg
                             return
+                        if isinstance(event, HeartbeatTick):
+                            # Synthetic progress — emitted *without* event_name
+                            # so it stays out of DURABLE_EVENTS (no Postgres
+                            # mirror). Format mirrors the LiveView elapsed
+                            # counter so the user sees consistent timing.
+                            yield await _emit(
+                                bridge.emit_progress(
+                                    "narrative",
+                                    f"Still reasoning… ({event.elapsed_s}s)",
+                                ),
+                            )
+                            continue
                         meta = _extract_stream_event_meta(event)
                         if meta is None:
                             continue
@@ -1237,9 +1513,17 @@ async def stream_fortune(fortune_id: str, request: Request):
                                 bridge.emit_progress("narrative", "Model response received"),
                             )
 
-                    narrative = stream_result.final_output
-                    if not isinstance(narrative, (NarrativeOutput, EnrichedNarrativeOutput)):
-                        narrative = EnrichedNarrativeOutput.model_validate(narrative)
+                    # The narrative agent now ships per-mode narrow output
+                    # types (CompatibilityNarrativeOutput, etc.) for the four
+                    # canonical focuses; ``general`` mode still returns the
+                    # legacy union ``EnrichedNarrativeOutput``. The helper
+                    # promotes any of those plus the legacy bare
+                    # ``NarrativeOutput`` back into the merged shape so the
+                    # downstream fan-out emitters and snapshot upserter see
+                    # the same dict layout regardless of mode.
+                    narrative = _promote_narrative_to_enriched(
+                        stream_result.final_output
+                    )
 
                 session.latest_narrative = repair_occasion_narrative(
                     ctx,
@@ -1287,6 +1571,14 @@ async def stream_fortune(fortune_id: str, request: Request):
                         "narrative_streamed",
                         dur_n,
                     )
+                    # Record the actual selected per-mode agent (e.g.
+                    # ``fortune_narrative_compatibility``) so post-merge
+                    # latency attribution can break out by mode. Resolved
+                    # from the dispatcher rather than tracked on the run
+                    # result so this stays correct if SDK shape drifts.
+                    _selected_mode = _narrative_mode(ctx)
+                    _selected_agent_obj = NARRATIVE_AGENTS[_selected_mode]
+                    _selected_agent = _selected_agent_obj.name
                     # PR-2: read the per-mode effort off the selected
                     # agent's actual ModelSettings. The legacy log read
                     # ``_settings_now.narrative_reasoning`` (always
@@ -1294,9 +1586,6 @@ async def stream_fortune(fortune_id: str, request: Request):
                     # agent with a different tier — making latency
                     # dashboards lie. Fall back to the legacy key only if
                     # an agent somehow lacks a Reasoning binding.
-                    _selected_mode = _narrative_mode(ctx)
-                    _selected_agent_obj = NARRATIVE_AGENTS[_selected_mode]
-                    _selected_agent = _selected_agent_obj.name
                     _selected_reasoning = _selected_agent_obj.model_settings.reasoning
                     _selected_effort = (
                         _selected_reasoning.effort
@@ -1327,6 +1616,29 @@ async def stream_fortune(fortune_id: str, request: Request):
                         output_summary=f"{n_insights} insights, {dur_n:.0f}ms",
                     )
                     trace.steps[-1].duration_ms = dur_n
+
+                # PR-Panel: narrative row → ``done`` with real elapsed
+                # and reasoning_tokens. The audit asserts:
+                #   reasoning_effort == "none" → reasoning_tokens == 0
+                #   reasoning_effort in {low,medium,high,xhigh}
+                #     → reasoning_tokens > 0 (in steady state; not
+                #       gated here because some early API responses
+                #       drop reasoning_tokens metadata).
+                _panel_narr_tokens = int(
+                    getattr(_stream_used, "reasoning_tokens", 0) or 0
+                )
+                yield await _emit(
+                    bridge.emit_agent_step(
+                        step_id="narrative",
+                        agent_name=_selected_agent or "Narrative",
+                        status="done",
+                        model_id=_settings_now.narrative_model,
+                        sequence=4,
+                        reasoning_effort=_selected_effort,
+                        elapsed_ms=int(dur_n),
+                        reasoning_tokens=_panel_narr_tokens,
+                    )
+                )
 
                 yield await _emit(
                     bridge.emit_narrative_complete(session.latest_narrative),
@@ -1433,6 +1745,21 @@ async def stream_fortune(fortune_id: str, request: Request):
                 if trace:
                     trace.add_instant("llm_start", "guardrail", label="Running Safety Check")
 
+                # PR-Panel: guardrail row → ``running``.
+                _panel_guard_row = next(
+                    r for r in _panel_rows if r["step_id"] == "guardrail"
+                )
+                yield await _emit(
+                    bridge.emit_agent_step(
+                        step_id="guardrail",
+                        agent_name=_panel_guard_row["agent_name"],
+                        status="running",
+                        model_id=_panel_guard_row["model_id"],
+                        sequence=_panel_guard_row["sequence"],
+                        reasoning_effort=_panel_guard_row["reasoning_effort"],
+                    )
+                )
+
                 _t_guard = _time.monotonic()
                 guardrail = await run_guardrail(ctx, narrative=guardrail_narrative)
                 if not guardrail.follow_up_buttons:
@@ -1454,6 +1781,24 @@ async def stream_fortune(fortune_id: str, request: Request):
                         output_summary=f"level={guardrail.level}, {dur_g:.0f}ms",
                     )
                     trace.steps[-1].duration_ms = dur_g
+
+                # PR-Panel: guardrail row → ``done``. ``run_guardrail``
+                # doesn't currently surface reasoning_tokens at the route
+                # level — the cap is 1200 tokens (PR3) and effort is
+                # ``low`` so the token contribution is bounded; report
+                # 0 here until the call returns usage explicitly.
+                yield await _emit(
+                    bridge.emit_agent_step(
+                        step_id="guardrail",
+                        agent_name=_panel_guard_row["agent_name"],
+                        status="done",
+                        model_id=_panel_guard_row["model_id"],
+                        sequence=5,
+                        reasoning_effort=_panel_guard_row["reasoning_effort"],
+                        elapsed_ms=int(dur_g),
+                        reasoning_tokens=0,
+                    )
+                )
 
                 yield await _emit(
                     bridge.emit_guardrail(session.latest_guardrail),
@@ -1721,10 +2066,11 @@ async def ask_fortune(
             session=ask_session,
             original_input=_build_ask_original_input(req_src),
             latest_narrative=latest_narrative,
-            # Ask follow-ups skip the LLM triage hop (code-side router) and
-            # use the lower ``ask_reasoning`` effort. ~50% latency cut on
-            # typical follow-ups; falls back to triage agent only when the
-            # router can't confidently classify the question.
+            # Ask follow-ups use the deterministic code-side router with the
+            # lower ``ask_reasoning`` effort. ~50% latency cut on typical
+            # follow-ups; questions the router can't classify default to
+            # ``expand_classics`` (PR4 of the latency refactor) — no LLM
+            # triage round trip is ever issued on this path.
             ask_mode=True,
         )
     except Exception as exc:

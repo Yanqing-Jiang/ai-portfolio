@@ -53,6 +53,12 @@ interface FortuneStateShape {
     dataModel: FortuneDataModel | null;
     lastSeq: number;
     status: FortuneStatus;
+    /** True once the narrative has finished streaming (the reading is
+     * renderable) but the guardrail safety check is still in flight. PR5
+     * of the latency refactor surfaces this as a "Verifying safety…"
+     * banner in ThinkingPanel so users see the reading 3.5–4.5s sooner.
+     * Resets on every new fortune via ``setFortune``/``reset``. */
+    narrativeReady: boolean;
 
     // Ask tab
     askInput: string;
@@ -65,6 +71,10 @@ interface FortuneStateShape {
     setFortune: (fortuneId: string, runId: string, opts?: { persistenceDegraded?: boolean; functionId?: FortuneFunctionId }) => void;
     setRunId: (runId: string) => void;
     setStatus: (status: FortuneStatus) => void;
+    /** Mark the narrative as renderable (guardrail still in flight).
+     * Called by ``useFortuneStream`` when ``/data/narrative`` arrives with
+     * ``isComplete: true``. Idempotent — safe to call repeatedly. */
+    setNarrativeReady: (ready: boolean) => void;
     /** Apply a streamed data update at a JSON-pointer path within dataModel. */
     applyPatch: (path: string, value: unknown) => void;
     /** Hydrate the full data model from a replay snapshot. */
@@ -77,7 +87,7 @@ interface FortuneStateShape {
     reset: () => void;
 }
 
-type ActionKeys = 'setFortune' | 'setRunId' | 'setStatus' | 'applyPatch' | 'hydrateFromReplay' | 'setAskInput' | 'beginAsk' | 'finishAsk' | 'failAsk' | 'clearAskHistory' | 'reset';
+type ActionKeys = 'setFortune' | 'setRunId' | 'setStatus' | 'setNarrativeReady' | 'applyPatch' | 'hydrateFromReplay' | 'setAskInput' | 'beginAsk' | 'finishAsk' | 'failAsk' | 'clearAskHistory' | 'reset';
 
 const INITIAL: Omit<FortuneStateShape, ActionKeys> = {
     fortuneId: null,
@@ -87,6 +97,7 @@ const INITIAL: Omit<FortuneStateShape, ActionKeys> = {
     dataModel: null,
     lastSeq: 0,
     status: 'idle',
+    narrativeReady: false,
     askInput: '',
     askLoading: false,
     askHistory: [],
@@ -104,6 +115,10 @@ export const useFortuneStore = create<FortuneStateShape>()(
                     s.askMemoryEverDegraded = false;
                     s.dataModel = null;
                     s.lastSeq = 0;
+                    // Clear narrativeReady on fortune change so the
+                    // "Verifying safety…" banner doesn't bleed across
+                    // sessions during a same-tab create→create flow.
+                    s.narrativeReady = false;
                 }
                 s.fortuneId = fortuneId;
                 s.runId = runId;
@@ -119,6 +134,11 @@ export const useFortuneStore = create<FortuneStateShape>()(
         setStatus: (status) =>
             set((s) => {
                 s.status = status;
+            }),
+
+        setNarrativeReady: (ready) =>
+            set((s) => {
+                s.narrativeReady = ready;
             }),
 
         applyPatch: (path, value) =>
@@ -164,6 +184,12 @@ export const useFortuneStore = create<FortuneStateShape>()(
                 s.persistenceDegraded = !!replay.metadata?.persistence_degraded;
                 s.dataModel = replay.data_model;
                 s.askHistory = replay.ask_history || [];
+                // A replay snapshot whose narrative already streamed has
+                // ``narrative.isComplete = true`` baked into ``data_model``.
+                // Pre-set the flag so the page header doesn't briefly flash
+                // the "Verifying safety…" banner during hydration.
+                const narrativeBlock = (replay.data_model as { narrative?: { isComplete?: boolean } } | null)?.narrative;
+                s.narrativeReady = !!narrativeBlock?.isComplete;
             }),
 
         setAskInput: (v) =>
@@ -205,6 +231,11 @@ export const useFortuneStore = create<FortuneStateShape>()(
         reset: () =>
             set((s) => {
                 Object.assign(s, INITIAL);
+                // Object.assign copies the keys we wrote, but
+                // ``narrativeReady`` is a primitive so it's already
+                // covered. Defensive belt-and-braces in case INITIAL grows
+                // additional nested defaults later.
+                s.narrativeReady = false;
             }),
     })),
 );

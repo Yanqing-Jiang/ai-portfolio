@@ -61,7 +61,10 @@ export const FortuneAgentCompatibilityResult: React.FC<FortuneAgentCompatibility
                     status={thinkingStatus}
                     onPause={cancel}
                     paused={pausing}
-                    showCompletedDock={activeTab === 'Ask'}
+                    // PR-Panel: always-visible thinking panel — the
+                    // 5-row schema is now a first-class UX surface, not
+                    // an Ask-tab affordance. Was: showCompletedDock={activeTab === 'Ask'}.
+                    showCompletedDock={true}
                 />
             )}
 

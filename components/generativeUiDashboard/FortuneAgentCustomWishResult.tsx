@@ -70,7 +70,8 @@ export const FortuneAgentCustomWishResult: React.FC<FortuneAgentCustomWishResult
                     status={thinkingStatus}
                     onPause={cancel}
                     paused={pausing}
-                    showCompletedDock={activeTab === 'Ask'}
+                    // PR-Panel: always-visible thinking panel.
+                    showCompletedDock={true}
                 />
             )}
 

@@ -61,7 +61,8 @@ export const FortuneAgentOccasionResult: React.FC<FortuneAgentOccasionResultProp
                     status={thinkingStatus}
                     onPause={cancel}
                     paused={pausing}
-                    showCompletedDock={activeTab === 'Ask'}
+                    // PR-Panel: always-visible thinking panel.
+                    showCompletedDock={true}
                 />
             )}
 

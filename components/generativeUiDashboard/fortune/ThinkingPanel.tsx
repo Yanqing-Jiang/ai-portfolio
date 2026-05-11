@@ -23,6 +23,7 @@ import {
     ChevronUp,
     MessageSquare,
     Pause,
+    Shield,
     Sparkles,
     Users,
     X,
@@ -30,6 +31,7 @@ import {
 } from 'lucide-react';
 import type { FortunePurposeId } from '../fortuneAgentTheme';
 import { FORTUNE_THEMES } from '../fortuneAgentTheme';
+import { useFortuneStore } from '../stores/fortuneStore';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -45,7 +47,19 @@ interface TraceStep {
     outputSummary?: string;
     timestamp?: string;
     durationMs?: number;
-    status?: 'pending' | 'running' | 'success' | 'error' | string;
+    status?: 'pending' | 'running' | 'queued' | 'success' | 'done' | 'error' | 'skipped' | string;
+    // PR-Panel: extended fields from the always-visible 5-step schema.
+    // These flow through ``/data/thinking/steps`` (NEW) — the legacy
+    // ``/data/trace/steps`` surface keeps the operator-side shape above.
+    modelId?: string;
+    sequence?: number;
+    stage?: number;
+    statusReason?: string;
+    elapsedMs?: number;
+    reasoningTokens?: number;
+    reasoningEffort?: 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'deterministic' | string;
+    startedAt?: string | null;
+    endedAt?: string | null;
 }
 
 interface ProgressMeta {
@@ -77,10 +91,14 @@ interface ThinkingPanelProps {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function extractSteps(dataModel: Record<string, unknown> | null): TraceStep[] {
-    if (!dataModel) return [];
-    const trace = (dataModel as { trace?: { steps?: unknown } }).trace;
-    const raw = trace?.steps;
+/**
+ * Flatten a raw ``steps`` blob — supports the keyed-map (PR-Panel
+ * ``/data/thinking/steps``), the ``{ items: [...] }`` initial-batch
+ * shape, and a plain array (legacy). When the blob is a keyed map of
+ * ``{ stepId: { step: {...} } }`` we unwrap the ``step`` payload so
+ * the caller sees a flat ``TraceStep[]``.
+ */
+function flattenStepsBlob(raw: unknown): TraceStep[] {
     if (!raw) return [];
     if (Array.isArray(raw)) return raw as TraceStep[];
     if (typeof raw === 'object') {
@@ -91,9 +109,35 @@ function extractSteps(dataModel: Record<string, unknown> | null): TraceStep[] {
                 if (v && typeof v === 'object' && 'step' in v) return (v as { step: TraceStep }).step;
                 return v as TraceStep;
             })
-            .filter(Boolean);
+            .filter(Boolean) as TraceStep[];
     }
     return [];
+}
+
+/**
+ * Read the 5-row panel timeline. Prefers the PR-Panel
+ * ``/data/thinking/steps`` surface (always-visible canonical schema);
+ * falls back to the legacy ``/data/trace/steps`` (operator sidebar)
+ * during rollout so the UI never goes blank if the panel-aware
+ * backend version is rolled back.
+ *
+ * Steps are sorted by ``sequence`` when present so SSE replay/reconnect
+ * out-of-order events still land in a stable visual order.
+ */
+function extractSteps(dataModel: Record<string, unknown> | null): TraceStep[] {
+    if (!dataModel) return [];
+    // PR-Panel surface — preferred.
+    const thinking = (dataModel as { thinking?: { steps?: unknown } }).thinking;
+    const panelSteps = flattenStepsBlob(thinking?.steps);
+    if (panelSteps.length > 0) {
+        // Stable sort by ``sequence`` (rows without one trail at the end).
+        const withSeq = panelSteps.map((s, i) => ({ s, i, seq: s.sequence ?? 999 + i }));
+        withSeq.sort((a, b) => a.seq - b.seq || a.i - b.i);
+        return withSeq.map((x) => x.s);
+    }
+    // Legacy fallback: operator trace surface.
+    const trace = (dataModel as { trace?: { steps?: unknown } }).trace;
+    return flattenStepsBlob(trace?.steps);
 }
 
 function extractProgress(dataModel: Record<string, unknown> | null): ProgressMeta | null {
@@ -218,9 +262,16 @@ interface LiveViewProps {
     accent: string;
     onPause?: () => void;
     paused?: boolean;
+    /** PR5: when true, narrative finished streaming and only the
+     * guardrail tail (~3.5–4.5s) is left. We swap the live header to
+     * "Verifying Safety" + a Shield icon. The elapsed counter keeps
+     * ticking through the guardrail window — the user can still see
+     * how long the safety check is taking and the running total mirrors
+     * the LiveView header's existing time-on-task signal. */
+    narrativeReady?: boolean;
 }
 
-const LiveView: React.FC<LiveViewProps> = ({ steps, progressText, accent, onPause, paused }) => {
+const LiveView: React.FC<LiveViewProps> = ({ steps, progressText, accent, onPause, paused, narrativeReady }) => {
     const scrollRef = useRef<HTMLDivElement>(null);
     // Elapsed-time indicator — gives the user a heartbeat during the
     // otherwise-silent narrative generation window. Resets when a new
@@ -267,24 +318,35 @@ const LiveView: React.FC<LiveViewProps> = ({ steps, progressText, accent, onPaus
                 className="flex items-center gap-2.5 px-4 py-3 border-b"
                 style={{ borderColor: 'rgba(148,163,184,0.12)' }}
             >
-                <motion.div
-                    animate={{ rotate: 360 }}
-                    transition={{ duration: 6, repeat: Infinity, ease: 'linear' }}
-                >
-                    <Sparkles size={16} color={accent} />
-                </motion.div>
+                {narrativeReady ? (
+                    <motion.div
+                        animate={{ scale: [1, 1.08, 1] }}
+                        transition={{ duration: 1.6, repeat: Infinity, ease: 'easeInOut' }}
+                    >
+                        <Shield size={16} color={accent} />
+                    </motion.div>
+                ) : (
+                    <motion.div
+                        animate={{ rotate: 360 }}
+                        transition={{ duration: 6, repeat: Infinity, ease: 'linear' }}
+                    >
+                        <Sparkles size={16} color={accent} />
+                    </motion.div>
+                )}
                 <div className="min-w-0 flex-1">
                     <div
                         className="text-[10px] font-mono uppercase tracking-[0.18em]"
                         style={{ color: accent }}
                     >
-                        Agent Thinking · Live
+                        {narrativeReady ? 'Verifying Safety' : 'Agent Thinking · Live'}
                     </div>
                     <div className="text-[13px] text-slate-200 truncate">
-                        {progressText ||
-                            (latest?.label
-                                ? latest.label
-                                : 'Consulting the pillars…')}
+                        {narrativeReady
+                            ? 'Reading rendered — running final safety check…'
+                            : progressText ||
+                              (latest?.label
+                                  ? latest.label
+                                  : 'Consulting the pillars…')}
                     </div>
                 </div>
                 <div className="flex items-center gap-2 text-[10px] font-mono text-slate-400">
@@ -322,7 +384,7 @@ const LiveView: React.FC<LiveViewProps> = ({ steps, progressText, accent, onPaus
             >
                 {steps.length === 0 ? (
                     <p className="text-[12px] text-slate-500 italic">
-                        Waiting for the first step…
+                        Queueing pipeline…
                     </p>
                 ) : (
                     steps.map((step, i) => (
@@ -528,12 +590,24 @@ export const ThinkingPanel: React.FC<ThinkingPanelProps> = ({
     const steps = useMemo(() => extractSteps(dataModel), [dataModel]);
     const progress = useMemo(() => extractProgress(dataModel), [dataModel]);
     const progressText = progress?.message ?? '';
+    // PR5: read the live narrative-complete flag from the store. When the
+    // backend ships its ``isComplete: true`` patch on /data/narrative,
+    // ``useFortuneStream`` flips this so we can swap the live header to
+    // "Verifying safety…" while the guardrail tail finishes.
+    const narrativeReady = useFortuneStore((s) => s.narrativeReady);
 
-    // Nothing to show if we're complete and have no steps at all.
-    if (status === 'complete' && steps.length === 0) return null;
-    // Suppressed dock — caller only wants the live streaming view (e.g. the
-    // Ask tab surfaces reasoning inline via OracleChat instead).
-    if (status === 'complete' && !showCompletedDock) return null;
+    // PR-Panel: always-visible — the panel renders the canonical 5-row
+    // schema as queued placeholders the moment the stream opens, then
+    // transitions them to running/done. We no longer return null on
+    // empty/complete; the worst case is a 5-row "queued" skeleton.
+    //
+    // The ``showCompletedDock=false`` opt-out still suppresses the
+    // floating pull-up pill on the Ask tab (which surfaces reasoning
+    // inline via OracleChat instead) — but this only matters when
+    // ``status === 'complete'``; live streaming is always shown.
+    if (status === 'complete' && !showCompletedDock && steps.length === 0) {
+        return null;
+    }
 
     return (
         <AnimatePresence mode="wait">
@@ -545,6 +619,7 @@ export const ThinkingPanel: React.FC<ThinkingPanelProps> = ({
                     accent={accent}
                     onPause={onPause}
                     paused={paused}
+                    narrativeReady={narrativeReady}
                 />
             ) : (
                 <Dock key="dock" steps={steps} accent={accent} />

@@ -17,6 +17,11 @@ Public surface
   fortune_message
 - ``allocate_seq(run_id)``: race-free per-run sequence allocation via
   ``UPDATE fortune_run SET last_emitted_seq = last_emitted_seq + 1 RETURNING``
+- ``allocate_seq_batch(run_id, count)``: same row-locked atomicity, but
+  reserves a contiguous block of ``count`` seqs in one roundtrip. Caller
+  reconstructs the reserved range as ``[new_max - count + 1, new_max]``
+  and dispenses locally — used by the stream route to amortize DB latency
+  across the ~30 emits per fortune reading.
 """
 
 from __future__ import annotations
@@ -265,6 +270,30 @@ class FortuneRepository:
             RETURNING last_emitted_seq
             """,
             run_id,
+        )
+        return int(row["last_emitted_seq"]) if row else 0
+
+    async def allocate_seq_batch(self, run_id: UUID, count: int) -> int:
+        """Reserve a contiguous block of replay seqs in one Postgres roundtrip.
+
+        Returns the new ``last_emitted_seq`` after the bump. The reserved
+        range is ``[new_max - count + 1, new_max]`` inclusive — the caller
+        dispenses these locally without further DB hits, falling back to a
+        single-step ``allocate_seq`` only when the pool is unavailable. A
+        ``count`` of ≤0 is normalized to 1 so callers can't accidentally
+        burn seqs.
+        """
+        if self.pool is None:
+            return 0
+        n = max(1, int(count))
+        row = await self.pool.fetchrow(
+            """
+            UPDATE fortune_run
+            SET last_emitted_seq = last_emitted_seq + $2
+            WHERE id = $1
+            RETURNING last_emitted_seq
+            """,
+            run_id, n,
         )
         return int(row["last_emitted_seq"]) if row else 0
 

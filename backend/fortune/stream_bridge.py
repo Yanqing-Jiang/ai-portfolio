@@ -1400,6 +1400,94 @@ class FortuneStreamBridge:
         """Emit aggregate trace summary (total duration, counts)."""
         return self.emitter.data_update(summary, path="/data/trace/summary")
 
+    # ------------------------------------------------------------------
+    # PR-Panel — Always-visible 5-step Thinking Panel
+    # ------------------------------------------------------------------
+    # The Thinking Panel surface mirrors the trace, but with an explicit
+    # queued→running→done lifecycle for every canonical pipeline agent so
+    # the frontend can render placeholder rows the moment the stream opens
+    # (no more "Waiting for the first step..."). Reuses the same
+    # ``dataModelUpdate`` envelope shape; keys live under
+    # ``/data/thinking/steps/{stepId}`` to avoid colliding with the
+    # operator-style ``/data/trace/steps``.
+
+    def emit_agent_step(
+        self,
+        step_id: str,
+        agent_name: str,
+        status: str,
+        *,
+        model_id: str,
+        sequence: int,
+        status_reason: str = "ok",
+        elapsed_ms: int = 0,
+        reasoning_tokens: int = 0,
+        reasoning_effort: str | None = None,
+        started_at: str | None = None,
+        ended_at: str | None = None,
+        stage: int = 1,
+    ) -> str:
+        """Emit a single Thinking Panel row.
+
+        ``status`` ∈ {``"queued"``, ``"running"``, ``"done"``, ``"error"``,
+        ``"skipped"``}. ``reasoning_effort`` ∈ {``"none"``, ``"low"``,
+        ``"medium"``, ``"high"``, ``"xhigh"``, ``"deterministic"``}; the
+        frontend renders ``deterministic`` as ``"—"`` for the reasoning
+        cell and a numeric ``reasoning_tokens`` count for everything else.
+
+        ``status_reason`` lets us distinguish ``"ok"``,
+        ``"no_data"`` (classics no-match — row still renders), and
+        ``"post_complete_enrichment"`` (PR-5 stage-2). The reducer is
+        keyed by ``stepId`` so later ``done`` events naturally overwrite
+        prior ``queued``/``running`` rows.
+        """
+        normalized = {
+            "stepId": step_id,
+            "agentName": agent_name,
+            "status": status,
+            "statusReason": status_reason,
+            "modelId": model_id,
+            "sequence": sequence,
+            "stage": stage,
+            "elapsedMs": elapsed_ms,
+            "reasoningTokens": reasoning_tokens,
+            "reasoningEffort": reasoning_effort,
+            "startedAt": started_at,
+            "endedAt": ended_at,
+        }
+        return self.emitter.data_update(
+            {"step": normalized},
+            path=f"/data/thinking/steps/{step_id}",
+        )
+
+    def emit_agent_steps_batch(self, rows: list[dict[str, Any]]) -> str:
+        """Emit several rows as one envelope — used at stream open to
+        seed all 5 (or 6) canonical rows as ``queued`` placeholders.
+
+        Each ``row`` must contain the same keys ``emit_agent_step`` accepts.
+        """
+        normalized = [
+            {
+                "stepId": r["step_id"],
+                "agentName": r["agent_name"],
+                "status": r.get("status", "queued"),
+                "statusReason": r.get("status_reason", "ok"),
+                "modelId": r["model_id"],
+                "sequence": r["sequence"],
+                "stage": r.get("stage", 1),
+                "elapsedMs": r.get("elapsed_ms", 0),
+                "reasoningTokens": r.get("reasoning_tokens", 0),
+                "reasoningEffort": r.get("reasoning_effort"),
+                "startedAt": r.get("started_at"),
+                "endedAt": r.get("ended_at"),
+            }
+            for r in rows
+        ]
+        return self.emitter.data_update(
+            {"items": normalized},
+            path="/data/thinking/steps",
+        )
+
     def emit_progress(self, phase: str, message: str) -> str:
         """Emit a progress event so the frontend can show phase status."""
         return self.emitter.data_update(

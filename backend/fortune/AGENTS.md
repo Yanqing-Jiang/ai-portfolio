@@ -12,6 +12,8 @@
 | Verbosity    | `low`                            |
 | Max tokens   | compat=10000, occasion=9000, wish=6000, luck_cycle=4500, guardrail=1200 |
 
+**PR-Panel (always-visible Thinking Panel):** every stream emits the 5 canonical rows (calendar → bazi_interpreter → classics_retriever → narrative → guardrail) under `/data/thinking/steps/{step_id}` with a queued→running→done lifecycle. See `backend/fortune/stream_bridge.py::emit_agent_step` and `routes.py::_panel_canonical_rows`. Audit covered by `tests/fortune/test_thinking_panel_completeness.py`.
+
 The reasoning + model wiring lives in `backend/fortune/config.py` and is read
 by `_model_settings()` in `backend/fortune/agents.py`. Override live LLM stages
 via `FORTUNE_NARRATIVE_REASONING=high` etc. in `.env`.
