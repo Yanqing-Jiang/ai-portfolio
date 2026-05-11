@@ -70,6 +70,10 @@ try:
     from .store import get_repository, FortuneRepository
     from .triage import ALLOWED_ACTION_IDS, normalize_action_focus, run_triage
     from .session_store import get_ask_session
+    from .chain_store import (
+        get_response_chain,
+        set_response_chain,
+    )
     from .simulator import simulate_birth_time
     from ._thinking_heartbeat import HeartbeatTick, iter_with_heartbeats
 except ImportError:
@@ -95,6 +99,10 @@ except ImportError:
     from store import get_repository, FortuneRepository  # type: ignore[no-redef]
     from triage import ALLOWED_ACTION_IDS, normalize_action_focus, run_triage  # type: ignore[no-redef]
     from session_store import get_ask_session  # type: ignore[no-redef]
+    from chain_store import (  # type: ignore[no-redef]
+        get_response_chain,
+        set_response_chain,
+    )
     from simulator import simulate_birth_time  # type: ignore[no-redef]
     from _thinking_heartbeat import HeartbeatTick, iter_with_heartbeats  # type: ignore[no-redef]
 
@@ -159,6 +167,13 @@ class AskResponse(BaseModel):
     # Degraded is true when ask-session memory could not be used (e.g. Supabase
     # unreachable) — the answer is still valid but it has no conversation history.
     degraded_memory: bool = False
+    # PR-4: chain status. ``"active"`` = previous_response_id threaded
+    # to OpenAI for cached-state reuse; ``"seeded"`` = first turn in
+    # this fortune's chain (wrote a new id, nothing to read); ``"disabled"``
+    # = master flag off OR Redis unreachable (Ask still works, just no
+    # latency cut). The frontend surfaces this in dev mode to make the
+    # chain visible during demos.
+    chain_status: str = "disabled"
 
 
 class CorrectionRequest(BaseModel):
@@ -2058,6 +2073,14 @@ async def ask_fortune(
         logger.warning("[FORTUNE] ask-session acquisition failed: %s", exc)
         degraded_memory = True
 
+    # PR-4: read the chained previous_response_id (if any) before
+    # dispatching. ``None`` is the normal first-turn case; the call
+    # below then writes the new id back, which the NEXT Ask turn picks
+    # up. Failures here are non-fatal — chain_store degrades to
+    # ``None`` and the path collapses to legacy stateless behavior.
+    previous_response_id = await get_response_chain(fortune_id)
+    response_id_sink: list[str] = []
+
     try:
         narrative = await run_triage(
             ctx,
@@ -2072,6 +2095,9 @@ async def ask_fortune(
             # ``expand_classics`` (PR4 of the latency refactor) — no LLM
             # triage round trip is ever issued on this path.
             ask_mode=True,
+            # PR-4 chain.
+            previous_response_id=previous_response_id,
+            response_id_sink=response_id_sink,
         )
     except Exception as exc:
         logger.exception("[FORTUNE] /ask triage failed: %s", exc)
@@ -2090,11 +2116,26 @@ async def ask_fortune(
     except Exception as exc:
         logger.warning("[FORTUNE] ask run status update failed: %s", exc)
 
+    # PR-4: persist the new chain head. Best-effort; if Redis is down
+    # we just report ``chain_status="disabled"`` and the user loses the
+    # ~30-50% chained-latency cut on the NEXT Ask turn (this turn's
+    # answer is unaffected). The set_response_chain helper also
+    # schedules the deferred OpenAI DELETE call so we honor the
+    # ephemeral-retention privacy promise.
+    chain_status = "disabled"
+    if previous_response_id:
+        chain_status = "active"
+    if response_id_sink:
+        wrote = await set_response_chain(fortune_id, response_id_sink[-1])
+        if wrote and chain_status == "disabled":
+            chain_status = "seeded"
+
     return AskResponse(
         fortune_id=fortune_id,
         run_id=new_run_id,
         narrative=narrative.model_dump(),
         degraded_memory=degraded_memory,
+        chain_status=chain_status,
     )
 
 

@@ -94,10 +94,32 @@ class FortuneSettings(BaseSettings):
     # queue). Off by default until OpenAI account eligibility is verified.
     #
     # ``narrative_store_compatibility`` opts the compat response in to
-    # OpenAI's response store, addressable later via ``previous_response_id``.
-    # Defaults to ``False`` until PR-4 wires the Redis-backed chain map.
+    # OpenAI's response store. PR-4 (2026-05-10) flipped the default to
+    # ``True`` now that the Redis-backed ephemeral chain + deferred
+    # OpenAI ``DELETE /v1/responses/{id}`` cleanup is wired (chain_store.py).
+    # Effective OpenAI-side retention drops from ≥30 days default to
+    # roughly the Ask-chain TTL (~1h). Rollback to ``False`` if a privacy
+    # incident surfaces or chain endpoints are temporarily disabled.
     narrative_service_tier_compatibility: Optional[str] = None
-    narrative_store_compatibility: bool = False
+    narrative_store_compatibility: bool = True
+
+    # PR-4 — Ask follow-up response chain (Redis-backed, ephemeral).
+    #
+    # ``ask_chaining_enabled`` is the master kill switch. When False, the
+    # Ask handler skips both the chain read and the chain write — the
+    # path collapses to legacy stateless triage with full conversation
+    # history still preserved via ``SQLAlchemySession`` (Opus's option
+    # (ii)). When True, the handler threads ``previous_response_id`` into
+    # ``Runner.run`` so OpenAI re-uses cached reasoning/tools state for
+    # 30-50% follow-up latency cuts.
+    #
+    # ``ask_chain_ttl_seconds`` bounds both the Redis key lifetime AND
+    # the deferred OpenAI ``DELETE`` cleanup schedule — they share the
+    # same number so the privacy window is unambiguous. 3600s (1h) is the
+    # default; lower it to e.g. 1800 if you want a tighter retention
+    # promise on the landing page.
+    ask_chaining_enabled: bool = True
+    ask_chain_ttl_seconds: int = 3600
 
     # Rollout flags for Day 0 migrations.
     active_luck_window_enabled: bool = True

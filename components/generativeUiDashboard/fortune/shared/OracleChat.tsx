@@ -124,8 +124,19 @@ function inferSpecialistLabel(question: string | undefined, focus: string | unde
     const f = (focus || '').toLowerCase();
     const has = (keys: string[]) => keys.some((k) => q.includes(k));
 
-    if (has(['source', 'reference', 'citation', 'classic'])) return SPECIALIST_LABELS.show_sources;
-    if (has(['expand on', 'philosophy', 'tradition', 'deeper meaning'])) return SPECIALIST_LABELS.expand_classics;
+    // Order mirrors backend `infer_specialist_action` (triage.py:155+):
+    // classics is checked BEFORE sources because "explain the classic
+    // text" should land on expand_classics, not show_sources. PR4 of the
+    // latency refactor surfaced this drift in code review.
+    if (has(['classic', 'classical text', 'expand on', 'philosophy', 'tradition', 'scripture', 'deeper meaning', 'more from']))
+        return SPECIALIST_LABELS.expand_classics;
+    // Sources keys mirror backend `_SOURCES_PHRASES` + `_SOURCES_WORDS`
+    // (triage.py:99-104). The two long phrases without a "source" /
+    // "reference" / "citation" / "passage" substring — "where does this
+    // come from" and "where did you get" — must be enumerated explicitly
+    // or the optimistic chat label drifts from the actual specialist.
+    if (has(['source', 'reference', 'citation', 'passage', 'where does this come from', 'where did you get']))
+        return SPECIALIST_LABELS.show_sources;
     if (has(['career', 'job', 'work', 'promotion', 'boss', 'salary', 'company', 'office', 'raise', 'interview', 'resign', 'quit']))
         return SPECIALIST_LABELS.career_focus;
     if (has(['relationship', 'partner', 'marry', 'marriage', 'love', 'spouse', 'wife', 'husband', 'girlfriend', 'boyfriend', 'us ', 'we ', 'together']))
