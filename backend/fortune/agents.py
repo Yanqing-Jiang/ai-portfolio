@@ -180,8 +180,12 @@ class CompatMechanism(BaseModel):
 class CompatibilityNarrativeFields(BaseModel):
     """Compat-specific output, only populated when focus is 'compatibility:*'."""
     overview: CompatOverview
-    pair_interactions: list[CompatPairInteraction] = Field(default_factory=list)
-    mechanisms: list[CompatMechanism] = Field(default_factory=list)
+    pair_interactions: list[CompatPairInteraction] = Field(
+        default_factory=list, min_length=3, max_length=6
+    )
+    mechanisms: list[CompatMechanism] = Field(
+        default_factory=list, min_length=4, max_length=6
+    )
 
 
 # --- Occasion (lucky-day) ---
@@ -408,8 +412,8 @@ chart as the top-level fields AND Person B's chart under `person_b`. Produce a \
   - person_b: "Year" | "Month" | "Day" | "Hour"
   - description: 1-2 sentence interpretation
   - effect: short practical effect, e.g. "late-night decision fatigue"
-  Skip neutral pairs. Aim for 3-6 total entries.
-- compatibility.mechanisms: 3-6 classical mechanism cards. Each has:
+  Skip neutral pairs. Return at least 3 pair interactions (max 6).
+- compatibility.mechanisms: Return at least 4 classical mechanism cards (max 6). Each has:
   - id: snake_case slug
   - title: short serif-friendly title in PLAIN ENGLISH ONLY. Use phrasings
     like "Yang Fire warmed by Yin Earth", "Tiger meets Monkey clash",
