@@ -4,7 +4,6 @@ import Lenis from 'lenis';
 import { Helmet } from 'react-helmet-async';
 import { HOMER_THEME } from './theme';
 import Hero from './sections/Hero';
-import ProofStrip from './sections/ProofStrip';
 import Why from './sections/Why';
 import Architecture from './sections/Architecture';
 import TryHomer from './sections/TryHomer';
@@ -15,7 +14,8 @@ import CTA from './sections/CTA';
 
 // Function: HomerLitePage — entry point for the /homer route.
 // Section flow (live-product framing, not case study):
-//   Hero (LIVE badge) → ProofStrip → Why (with rolling number) →
+//   Hero (LIVE badge + terminal status block) →
+//   Why (five Before/After couplets) →
 //   Architecture (interactive — Memory schema lives inside) →
 //   TryHomer (telemetry trace) → MorningRoutineVideo →
 //   Lessons → Roadmap → CTA (consulting)
@@ -23,6 +23,10 @@ import CTA from './sections/CTA';
 // Metrics section removed 2026-05-13 — placeholder tiles were never wired to
 // real ECharts panels and the page reads cleaner without them. File kept at
 // sections/Metrics.tsx in case we revive it.
+//
+// ProofStrip retired 2026-05-13 — its four credibility one-liners were folded
+// into the Hero terminal block as `#` mono comments on each `homer --status`
+// row. File kept at sections/ProofStrip.tsx for easy revert.
 //
 // Provides Lenis smooth-scroll over the inherited <main> scroller (mirrors
 // LandingPageFlow), Helmet meta block, and a top progress bar.
@@ -120,7 +124,6 @@ const HomerLitePage: React.FC = () => {
 
         <div className="relative z-10">
           <Hero />
-          <ProofStrip />
           <Why />
           <Architecture />
           <TryHomer />

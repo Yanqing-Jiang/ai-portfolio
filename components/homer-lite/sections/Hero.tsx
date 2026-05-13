@@ -141,7 +141,13 @@ export const Hero: React.FC = () => {
           style={{ background: HOMER_THEME.accent }}
         />
 
-        {/* Terminal proof block — fed by /homer/metrics.json */}
+        {/* Terminal proof block — fed by /homer/metrics.json
+            Each row is `label  value  # note`, where the right-hand `#` note
+            is the corresponding ProofStrip line folded in as a real-looking
+            mono comment. On mobile the note wraps under the value (grid
+            `col-start-2`) so the row stays scannable on a 375px viewport.
+            ProofStrip is intentionally retired now that its content lives
+            here. */}
         <motion.div
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
@@ -156,17 +162,48 @@ export const Hero: React.FC = () => {
           <div className="text-sm md:text-base" style={{ color: HOMER_THEME.text }}>
             <div style={{ color: HOMER_THEME.accent }}>$ homer --status</div>
             <div
-              className="mt-3 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 md:gap-x-6 gap-y-1.5 text-[13px] md:text-sm break-words [overflow-wrap:anywhere]"
+              className="mt-3 grid grid-cols-[auto_minmax(0,1fr)] md:grid-cols-[auto_auto_minmax(0,1fr)] gap-x-4 md:gap-x-6 gap-y-1.5 text-[13px] md:text-sm break-words [overflow-wrap:anywhere]"
               style={{ color: HOMER_THEME.textMuted }}
             >
+              {/* uptime  →  runs autonomously on a Mac Mini */}
               <span>uptime:</span>
               <span style={{ color: HOMER_THEME.text }}>{uptime}d</span>
+              <span
+                className="col-start-2 md:col-start-3 pl-0 md:pl-2 text-[12px] md:text-[13px]"
+                style={{ color: 'rgba(212, 160, 86, 0.55)' }}
+              >
+                # runs autonomously on a Mac Mini
+              </span>
+
+              {/* claims  →  8 agents share one memory layer */}
               <span>claims:</span>
               <span style={{ color: HOMER_THEME.text }}>{claims.toLocaleString()}</span>
+              <span
+                className="col-start-2 md:col-start-3 pl-0 md:pl-2 text-[12px] md:text-[13px]"
+                style={{ color: 'rgba(212, 160, 86, 0.55)' }}
+              >
+                # 8 agents share one memory layer
+              </span>
+
+              {/* scheduled runs  →  6 months continuous, no manual restarts */}
               <span>scheduled runs:</span>
               <span style={{ color: HOMER_THEME.text }}>{scheduled.toLocaleString()}</span>
+              <span
+                className="col-start-2 md:col-start-3 pl-0 md:pl-2 text-[12px] md:text-[13px]"
+                style={{ color: 'rgba(212, 160, 86, 0.55)' }}
+              >
+                # 6 months continuous, no manual restarts
+              </span>
+
+              {/* executors  →  5 CLIs orchestrated under one runtime */}
               <span>executors:</span>
               <span style={{ color: HOMER_THEME.text }}>{stats.executors.join(' · ')}</span>
+              <span
+                className="col-start-2 md:col-start-3 pl-0 md:pl-2 text-[12px] md:text-[13px]"
+                style={{ color: 'rgba(212, 160, 86, 0.55)' }}
+              >
+                # 5 CLIs orchestrated under one runtime
+              </span>
             </div>
           </div>
         </motion.div>
