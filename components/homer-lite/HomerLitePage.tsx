@@ -9,7 +9,6 @@ import Why from './sections/Why';
 import Architecture from './sections/Architecture';
 import TryHomer from './sections/TryHomer';
 import MorningRoutineVideo from './sections/MorningRoutineVideo';
-import Metrics from './sections/Metrics';
 import Lessons from './sections/Lessons';
 import Roadmap from './sections/Roadmap';
 import CTA from './sections/CTA';
@@ -18,8 +17,12 @@ import CTA from './sections/CTA';
 // Section flow (live-product framing, not case study):
 //   Hero (LIVE badge) → ProofStrip → Why (with rolling number) →
 //   Architecture (interactive — Memory schema lives inside) →
-//   TryHomer (telemetry trace) → MorningRoutineVideo → Metrics →
+//   TryHomer (telemetry trace) → MorningRoutineVideo →
 //   Lessons → Roadmap → CTA (consulting)
+//
+// Metrics section removed 2026-05-13 — placeholder tiles were never wired to
+// real ECharts panels and the page reads cleaner without them. File kept at
+// sections/Metrics.tsx in case we revive it.
 //
 // Provides Lenis smooth-scroll over the inherited <main> scroller (mirrors
 // LandingPageFlow), Helmet meta block, and a top progress bar.
@@ -122,7 +125,6 @@ const HomerLitePage: React.FC = () => {
           <Architecture />
           <TryHomer />
           <MorningRoutineVideo />
-          <Metrics />
           <Lessons />
           <Roadmap />
           <CTA />

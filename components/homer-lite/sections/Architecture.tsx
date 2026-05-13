@@ -1,31 +1,40 @@
-// Variant: SAFE WINNER (Pro Direction A).
-// Two-column scannable layout — list left, sticky detail panel right.
-// Source: ~/homer/output/gemini/architecture-redesign-pro-A-2026-05-03-1700.md.
+// Variant: OPERATOR CONSOLE (Pro Direction B) — mobile-first port.
+// Sticky chip strip (thumb-reachable) + animated card. Replaces the previous
+// 2-column "list-left / sticky-panel-right" layout, which stacked badly on
+// mobile (tap → no scroll-into-view; sticky doesn't stick once columns collapse).
+// Source: ~/homer/output/gemini/homer-architecture-mobile-pro-2026-05-13/concept-B.html.
 //
-// Fidelity fixes vs. raw extract:
-//   - Scheduler "Built for me" bullets rewritten to map 1:1 to phases 0/1/2 of
-//     ground-truth animation (3 AM consolidate / survives sleep-wake / loud
-//     failures via Telegram or voice). Original variant drifted to "intelligence
-//     briefs / retry flaky APIs / trigger from Slack" which contradicts ground
-//     truth and breaks the bullet↔phase sync.
-//   - SectionShell title aligned to canonical "Six subsystems, one loop." with
-//     the locked subtitle so the variant page is recognizable.
+// Carryover from the prior Safe Winner port (kept on purpose):
+//   - SUBSYSTEMS data + the six Framer Motion vizzes are unchanged.
+//   - Scheduler / Executors / MCP / Voice / Web UI bullets stay locked to the
+//     ground-truth phase mapping (don't let copy drift re-introduce the old
+//     "intelligence briefs / Slack triggers / native FS access" variants).
+//   - SectionShell title "Six subsystems, one loop." stays canonical.
+//
+// What changed vs. concept-B.html:
+//   - Mobile-first sticky position lives inside the section (not page-global),
+//     so it doesn't fight other sections on the long scroll.
+//   - Bullet phase-cycling highlight from the prior implementation is preserved
+//     (concept B's static bullets dropped this; it's a defining touch of the
+//     live-telemetry feel).
+//   - Receipts kept as mono chips; icons removed from chips (cleaner), kept
+//     inside the card next to the headline for a small visual anchor.
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { Brain, Calendar, Cpu, Plug, Phone, Globe, Database, Terminal, MessageSquare, Zap, AlertCircle, RefreshCw, Shield, Mic, FileText, Smartphone, Lock } from 'lucide-react';
 import { SectionShell } from '../SectionShell';
 import { HOMER_THEME } from '../theme';
 
 export const META = {
-  slug: 'safe-winner',
-  name: 'Safe Winner',
+  slug: 'operator-console',
+  name: 'Operator Console',
   philosophy:
-    'Telegraphic 2-column layout — punchy bullets, bigger viz container, scannable left rail.',
+    'Mobile-first sticky chip strip + animated card. Thumb-reachable navigation, app-like telemetry feel, identical content density on mobile and desktop.',
   riskLevel: 'low' as const,
-  layoutChange: 'none' as const,
+  layoutChange: 'shell' as const,
   distinctiveAnimation:
-    'Per-subsystem viz cycles 3 phases (2s loop) — DB writes / launchd run / API failover / shield + fan-out / mic + transcript / phone-to-dashboard.',
+    'Pulsing live-telemetry dot above chips + per-subsystem 3-phase viz (2s loop) — same vizzes as the prior variant.',
 };
 
 const usePhase = (intervalMs = 2000) => {
@@ -278,115 +287,214 @@ const SUBSYSTEMS = [
 ] as const;
 
 // --- MAIN COMPONENT ---
+// Layout note: we deliberately do NOT wrap the card in <AnimatePresence mode="wait">.
+// usePhase re-renders this tree every 2s; a wait-for-exit cycle on the keyed
+// child gets interrupted on each tick and the new card never mounts — leaving
+// the panel stuck on whatever was active first. Plain key-based remount on
+// <motion.div> is enough: React unmounts the old, mounts the new, and
+// `initial → animate` plays the fade-in. (Carried over from the prior variant
+// — re-introducing AnimatePresence here will reproduce the freeze bug.)
 export const Architecture: React.FC = () => {
   const [activeId, setActiveId] = useState<string>(SUBSYSTEMS[0].id);
   const phase = usePhase(2000);
+  const chipStripRef = useRef<HTMLDivElement>(null);
+  const shouldReduceMotion = useReducedMotion();
 
   const activeSub = SUBSYSTEMS.find(s => s.id === activeId) || SUBSYSTEMS[0];
   const ActiveViz = activeSub.viz;
+  const ActiveIcon = activeSub.icon;
+
+  // Auto-center the active chip in the horizontal strip when activeId changes.
+  // Mirrors the concept-B prototype detail (`scrollIntoView` on tap) but driven
+  // by state so programmatic activations work too. inline:'center' keeps the
+  // chip visually centered without disturbing vertical page scroll.
+  useEffect(() => {
+    const strip = chipStripRef.current;
+    if (!strip) return;
+    const el = strip.querySelector(`[data-chip-id="${activeId}"]`) as HTMLElement | null;
+    el?.scrollIntoView({
+      behavior: shouldReduceMotion ? 'auto' : 'smooth',
+      block: 'nearest',
+      inline: 'center',
+    });
+  }, [activeId, shouldReduceMotion]);
 
   return (
     <SectionShell
       id="architecture"
       eyebrow="architecture"
       title="Six subsystems, one loop."
-      subtitle="Each panel is a real subsystem in production. Click to see its actual telemetry."
+      subtitle="Each panel is a real subsystem in production. Tap a chip to see its actual telemetry."
     >
-      <div className="mt-12 grid grid-cols-1 lg:grid-cols-12 gap-12 lg:gap-16 items-start">
-        {/* Left Column: Navigation List */}
-        <div className="lg:col-span-5 flex flex-col gap-2">
+      {/* Sticky chip strip — thumb-reachable on mobile, horizontal on desktop.
+          Sticks within the section (not page-global) so the long scroll past
+          this section behaves normally. The `top` offset clears the 1px reading
+          progress bar in HomerLitePage. */}
+      <div
+        className="sticky top-2 z-20 -mx-4 md:-mx-12 px-4 md:px-12 pt-3 pb-3 mb-8 backdrop-blur-md border-b"
+        style={{
+          background: 'rgba(11, 10, 8, 0.82)',
+          borderColor: HOMER_THEME.divider,
+        }}
+      >
+        <div className="flex items-center gap-2 mb-3">
+          <span
+            className="w-1.5 h-1.5 rounded-full"
+            style={{
+              background: HOMER_THEME.accent,
+              animation: shouldReduceMotion ? 'none' : 'homer-pulse 1.6s ease-in-out infinite',
+              boxShadow: `0 0 8px ${HOMER_THEME.accentGlow}`,
+            }}
+          />
+          <span
+            className="text-[10px] tracking-[0.32em] uppercase"
+            style={{ fontFamily: HOMER_THEME.fontMono, color: HOMER_THEME.accent }}
+          >
+            live telemetry / architecture
+          </span>
+        </div>
+
+        <div
+          ref={chipStripRef}
+          className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
+          // Inline keyframes for the pulse — keeps this section self-contained
+          // without touching globals.css (which is governed by the Tailwind
+          // build). One <style> tag inside the section is cheaper than a new
+          // global rule for a single animation used only here.
+        >
+          <style>{`@keyframes homer-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }`}</style>
           {SUBSYSTEMS.map((sub) => {
             const isActive = sub.id === activeId;
-            const Icon = sub.icon;
             return (
               <button
                 key={sub.id}
+                data-chip-id={sub.id}
                 onClick={() => setActiveId(sub.id)}
-                className="w-full min-h-[64px] text-left p-4 rounded-xl transition-all duration-300 flex items-center gap-4 group"
+                className="flex-shrink-0 px-4 py-2 rounded-full text-sm font-medium transition-all duration-200 border whitespace-nowrap"
                 style={{
-                  backgroundColor: isActive ? HOMER_THEME.bgSoft : 'transparent',
-                  borderColor: isActive ? HOMER_THEME.divider : 'transparent',
-                  borderWidth: 1,
+                  background: isActive ? HOMER_THEME.accentSoft : HOMER_THEME.bgSoft,
+                  color: isActive ? HOMER_THEME.accent : HOMER_THEME.textMuted,
+                  borderColor: isActive ? HOMER_THEME.accent : HOMER_THEME.divider,
+                  fontFamily: HOMER_THEME.fontMono,
+                  fontSize: '0.78rem',
+                  letterSpacing: '0.02em',
                 }}
               >
-                <div
-                  className="p-3 rounded-lg transition-colors"
-                  style={{
-                    backgroundColor: isActive ? HOMER_THEME.accentSoft : 'transparent',
-                    color: isActive ? HOMER_THEME.accent : HOMER_THEME.textMuted
-                  }}
-                >
-                  <Icon size={20} />
-                </div>
-                <div className="min-w-0">
-                  <h3
-                    className="font-mono text-lg transition-colors"
-                    style={{ color: isActive ? HOMER_THEME.text : HOMER_THEME.textMuted }}
-                  >
-                    {sub.label}
-                  </h3>
-                  <p className="text-sm font-serif italic mt-1" style={{ color: isActive ? HOMER_THEME.accent : HOMER_THEME.textMuted }}>
-                    {sub.headline}
-                  </p>
-                </div>
+                {sub.label}
               </button>
             );
           })}
         </div>
-
-        {/* Right Column: Sticky Detail Panel
-            NOTE: We deliberately do NOT wrap this in <AnimatePresence mode="wait">.
-            With framer-motion 11 + React 19, the parent re-renders every 2s
-            (from `usePhase`); a wait-for-exit cycle on the keyed child gets
-            interrupted on each tick and the new viz never mounts — leaving the
-            right panel stuck on whatever was active first (Memory by default).
-            Plain key-based remount on <motion.div> is enough: React unmounts
-            the old, mounts the new, and `initial → animate` plays the fade-in. */}
-        <div className="lg:col-span-7 lg:sticky lg:top-24 flex flex-col gap-8">
-          <motion.div
-            key={activeSub.id}
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.3 }}
-            className="flex flex-col gap-8"
-          >
-              <ActiveViz phase={phase} />
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                <div>
-                  <h4 className="font-mono text-sm mb-4" style={{ color: HOMER_THEME.text }}>Built for me</h4>
-                  <ul className="space-y-3">
-                    {activeSub.me.map((b, i) => (
-                      <li key={i} className="flex items-start gap-2 text-sm transition-opacity duration-300" style={{ color: HOMER_THEME.textMuted, opacity: phase === i ? 1 : 0.4 }}>
-                        <span className="mt-1.5 w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: phase === i ? HOMER_THEME.accent : HOMER_THEME.divider }} />
-                        {b}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-                <div>
-                  <h4 className="font-mono text-sm mb-4" style={{ color: HOMER_THEME.text }}>Deployed for your team</h4>
-                  <ul className="space-y-3">
-                    {activeSub.team.map((b, i) => (
-                      <li key={i} className="flex items-start gap-2 text-sm transition-opacity duration-300" style={{ color: HOMER_THEME.textMuted, opacity: phase === i ? 1 : 0.4 }}>
-                        <span className="mt-1.5 w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: phase === i ? HOMER_THEME.accent : HOMER_THEME.divider }} />
-                        {b}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              </div>
-
-              <div className="flex flex-wrap gap-4 pt-6 border-t" style={{ borderColor: HOMER_THEME.divider }}>
-                {activeSub.receipts.map((r, i) => (
-                  <div key={i} className="px-3 py-1.5 rounded text-xs font-mono whitespace-nowrap" style={{ backgroundColor: HOMER_THEME.bgSoft, color: HOMER_THEME.textMuted, border: `1px solid ${HOMER_THEME.divider}` }}>
-                    {r}
-                  </div>
-                ))}
-              </div>
-          </motion.div>
-        </div>
       </div>
+
+      {/* Card — viz on top (mobile), viz-left/content-right (md+). Re-mounts on
+          activeId change to play the fade-in via key + initial/animate. */}
+      <motion.div
+        key={activeSub.id}
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+        className="rounded-2xl border overflow-hidden flex flex-col md:flex-row"
+        style={{ background: HOMER_THEME.bgSoft, borderColor: HOMER_THEME.divider }}
+      >
+        <div className="md:w-2/5 md:border-r" style={{ borderColor: HOMER_THEME.divider }}>
+          <ActiveViz phase={phase} />
+        </div>
+
+        <div className="md:w-3/5 p-6 md:p-8 flex flex-col gap-6">
+          <div>
+            <div className="flex items-center gap-3 mb-1">
+              <div
+                className="p-2 rounded-lg"
+                style={{ background: HOMER_THEME.accentSoft, color: HOMER_THEME.accent }}
+              >
+                <ActiveIcon size={18} />
+              </div>
+              <h3
+                className="text-2xl md:text-3xl"
+                style={{ fontFamily: HOMER_THEME.fontSerif, color: HOMER_THEME.text }}
+              >
+                {activeSub.label}
+              </h3>
+            </div>
+            <p
+              className="text-lg italic mt-1 ml-12"
+              style={{ fontFamily: HOMER_THEME.fontSerif, color: HOMER_THEME.accent }}
+            >
+              {activeSub.headline}
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+            <div>
+              <h4
+                className="font-mono text-[10px] tracking-[0.18em] uppercase mb-3 pb-2 border-b"
+                style={{ color: HOMER_THEME.textMuted, borderColor: HOMER_THEME.divider }}
+              >
+                Built for me
+              </h4>
+              <ul className="space-y-2.5">
+                {activeSub.me.map((b, i) => (
+                  <li
+                    key={i}
+                    className="flex items-start gap-2 text-sm transition-opacity duration-300"
+                    style={{ color: HOMER_THEME.text, opacity: phase === i ? 1 : 0.45 }}
+                  >
+                    <span
+                      className="mt-1.5 w-1.5 h-1.5 rounded-full shrink-0"
+                      style={{ backgroundColor: phase === i ? HOMER_THEME.accent : HOMER_THEME.divider }}
+                    />
+                    {b}
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div>
+              <h4
+                className="font-mono text-[10px] tracking-[0.18em] uppercase mb-3 pb-2 border-b"
+                style={{ color: HOMER_THEME.textMuted, borderColor: HOMER_THEME.divider }}
+              >
+                Deployed for your team
+              </h4>
+              <ul className="space-y-2.5">
+                {activeSub.team.map((b, i) => (
+                  <li
+                    key={i}
+                    className="flex items-start gap-2 text-sm transition-opacity duration-300"
+                    style={{ color: HOMER_THEME.text, opacity: phase === i ? 1 : 0.45 }}
+                  >
+                    <span
+                      className="mt-1.5 w-1.5 h-1.5 rounded-full shrink-0"
+                      style={{ backgroundColor: phase === i ? HOMER_THEME.accent : HOMER_THEME.divider }}
+                    />
+                    {b}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+
+          <div
+            className="flex flex-wrap gap-2 pt-4 mt-auto border-t"
+            style={{ borderColor: HOMER_THEME.divider }}
+          >
+            {activeSub.receipts.map((r, i) => (
+              <div
+                key={i}
+                className="px-2.5 py-1 rounded text-[11px] font-mono whitespace-nowrap"
+                style={{
+                  background: HOMER_THEME.bgSoft,
+                  color: HOMER_THEME.accent,
+                  border: `1px solid ${HOMER_THEME.accentSoft}`,
+                  fontFamily: HOMER_THEME.fontMono,
+                }}
+              >
+                {r}
+              </div>
+            ))}
+          </div>
+        </div>
+      </motion.div>
     </SectionShell>
   );
 };
