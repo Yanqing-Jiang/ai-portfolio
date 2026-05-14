@@ -5,13 +5,16 @@ import { HOMER_THEME } from '../theme';
 
 // Why — five Before/After couplets demonstrating why Homer exists.
 //
-// On each row, BEFORE is muted with a thin strikethrough that draws across as
-// the row scrolls into view; AFTER fades up beneath it with a soft gold glow
-// bloom (background flash + box-shadow) that decays back to transparent.
-// Both retrigger on scroll-back (useInView is not pinned with `once: true`).
+// On each row, BEFORE is muted and a yellow highlighter underline draws
+// left→right under the key phrase as the row scrolls into view; AFTER fades
+// up beneath it with a soft gold glow bloom (background flash + box-shadow)
+// that decays back to transparent. Both retrigger on scroll-back (useInView
+// is not pinned with `once: true`).
 //
-// Source of the animation pattern: Direction A (Strikethrough Reveal) from
-// ~/homer/output/gemini/homer-why-v2-flash-2026-05-13/anim-demo.html.
+// The underline replaces the prior full-width strikethrough — instead of
+// crossing out the whole line, it marks just the phrase that matters
+// (`highlight`), reading as emphasis rather than deletion.
+//
 // Copy is the user's voice; sequence is deliberate — bookmarks and voice
 // lead because they're the most concrete to a recruiter / founder skimming
 // on a phone. Memory, phone, and skills follow.
@@ -20,30 +23,41 @@ import { HOMER_THEME } from '../theme';
 // section. RollingNumber and the eyebrow subtitle are intentionally gone;
 // the closing italic "I'm asleep. Homer isn't." carries the close instead.
 
+// Highlighter yellow for the underline marker — distinct from the page's
+// gold accent so it reads as a deliberate "marker" emphasis.
+const HIGHLIGHT_YELLOW = '#ffd84d';
+
 interface Pair {
   before: string;
+  // Substring of `before` to underline. Must appear verbatim in `before`.
+  highlight: string;
   after: string;
 }
 
 const PAIRS: ReadonlyArray<Pair> = [
   {
     before: 'My X bookmarks were where articles remained unread.',
+    highlight: 'My X bookmarks',
     after: "Homer hands me the insights, based on what I'd care about.",
   },
   {
     before: 'My best thinking got lost between the car and the laptop.',
+    highlight: 'the car and the laptop',
     after: 'I talk. Homer transcribes, files, and keeps the nuance.',
   },
   {
     before: 'I copy & pasted my style prompts into every new chat window.',
+    highlight: 'copy & pasted',
     after: 'It remembered my preferences. Applied them without mentioning.',
   },
   {
     before: "Critical alerts buried in an inbox I'd check tomorrow.",
+    highlight: 'Critical alerts',
     after: 'Homer calls my phone and we talk it through.',
   },
   {
     before: 'Every new assistant needed me to re-teach how I work.',
+    highlight: 're-teach how I work',
     after: 'Homer learned once. Every CLI I use now knows the way.',
   },
 ];
@@ -55,11 +69,19 @@ const PAIRS: ReadonlyArray<Pair> = [
 //   anim-demo prototype.
 // - shouldReduceMotion collapses every timing to 0 and skips the bloom
 //   keyframes, so reduced-motion users see the final state instantly.
-const PairRow: React.FC<Pair> = ({ before, after }) => {
+const PairRow: React.FC<Pair> = ({ before, highlight, after }) => {
   const ref = useRef<HTMLDivElement>(null);
   const inView = useInView(ref, { amount: 0.4 });
   const shouldReduceMotion = useReducedMotion();
   const t = shouldReduceMotion ? 0 : 1;
+
+  // Split `before` around the highlight phrase so only that phrase carries
+  // the underline. If the phrase isn't found, `pre` holds the whole string
+  // and the underline span renders empty (harmless).
+  const idx = before.indexOf(highlight);
+  const pre = idx === -1 ? before : before.slice(0, idx);
+  const mark = idx === -1 ? '' : highlight;
+  const post = idx === -1 ? '' : before.slice(idx + highlight.length);
 
   return (
     <div
@@ -76,30 +98,35 @@ const PairRow: React.FC<Pair> = ({ before, after }) => {
           Before
         </span>
         <p
-          className="relative inline text-base md:text-[1.05rem] leading-snug"
+          className="text-base md:text-[1.05rem] leading-snug"
           style={{ color: HOMER_THEME.textMuted }}
         >
-          {before}
-          {/* Strikethrough — draws left→right on entry, gold at 1.5px to
-              match the anim-demo Variant A (which used `var(--accent)`).
-              Earlier version used muted gray at 1px which faded into the
-              text and read visually short. */}
-          <motion.span
-            aria-hidden
-            className="absolute left-0 right-0 origin-left pointer-events-none"
-            style={{
-              top: '50%',
-              height: 1.5,
-              background: HOMER_THEME.accent,
-            }}
-            initial={{ scaleX: 0 }}
-            animate={{ scaleX: inView ? 1 : 0 }}
-            transition={{
-              duration: 0.6 * t,
-              delay: 0.1 * t,
-              ease: [0.16, 1, 0.3, 1],
-            }}
-          />
+          {pre}
+          {/* Highlighter underline — draws left→right on entry under just
+              the key phrase. 3px yellow bar sitting on the text baseline,
+              slightly rounded so it reads as a marker stroke rather than a
+              border. Replaces the prior full-width gold strikethrough. */}
+          <span className="relative inline">
+            {mark}
+            <motion.span
+              aria-hidden
+              className="absolute left-0 right-0 origin-left pointer-events-none"
+              style={{
+                bottom: -1,
+                height: 3,
+                borderRadius: 2,
+                background: HIGHLIGHT_YELLOW,
+              }}
+              initial={{ scaleX: 0 }}
+              animate={{ scaleX: inView ? 1 : 0 }}
+              transition={{
+                duration: 0.6 * t,
+                delay: 0.1 * t,
+                ease: [0.16, 1, 0.3, 1],
+              }}
+            />
+          </span>
+          {post}
         </p>
       </div>
 
