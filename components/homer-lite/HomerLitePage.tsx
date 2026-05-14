@@ -14,7 +14,7 @@ import CTA from './sections/CTA';
 
 // Function: HomerLitePage — entry point for the /homer route.
 // Section flow (live-product framing, not case study):
-//   Hero (LIVE badge + terminal status block) →
+//   Hero (typewriter boot sequence + fixed LIVE pill) →
 //   Why (five Before/After couplets) →
 //   Architecture (interactive — Memory schema lives inside) →
 //   TryHomer (telemetry trace) → MorningRoutineVideo →
@@ -24,9 +24,14 @@ import CTA from './sections/CTA';
 // real ECharts panels and the page reads cleaner without them. File kept at
 // sections/Metrics.tsx in case we revive it.
 //
-// ProofStrip retired 2026-05-13 — its four credibility one-liners were folded
-// into the Hero terminal block as `#` mono comments on each `homer --status`
-// row. File kept at sections/ProofStrip.tsx for easy revert.
+// ProofStrip retired 2026-05-13 — its four credibility one-liners were
+// expressed in the Hero terminal boot block itself (memory layer, token
+// usage, scheduler, executors, voice, mcp). File kept at sections/ProofStrip.tsx
+// for easy revert.
+//
+// Hero redesigned 2026-05-13 — replaced the static `$ homer --status` block
+// with a character-by-character typewriter boot sequence (ported from
+// pro-C-typewriter.html). LIVE badge moved to a fixed top-right pill.
 //
 // Provides Lenis smooth-scroll over the inherited <main> scroller (mirrors
 // LandingPageFlow), Helmet meta block, and a top progress bar.

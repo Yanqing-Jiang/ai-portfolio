@@ -80,17 +80,17 @@ const PairRow: React.FC<Pair> = ({ before, after }) => {
           style={{ color: HOMER_THEME.textMuted }}
         >
           {before}
-          {/* Strikethrough — draws left→right on entry. For wrapped text it
-              draws through the bounding-box mid-line, matching the demo's
-              behavior. */}
+          {/* Strikethrough — draws left→right on entry, gold at 1.5px to
+              match the anim-demo Variant A (which used `var(--accent)`).
+              Earlier version used muted gray at 1px which faded into the
+              text and read visually short. */}
           <motion.span
             aria-hidden
             className="absolute left-0 right-0 origin-left pointer-events-none"
             style={{
               top: '50%',
-              height: 1,
-              background: HOMER_THEME.textMuted,
-              opacity: 0.85,
+              height: 1.5,
+              background: HOMER_THEME.accent,
             }}
             initial={{ scaleX: 0 }}
             animate={{ scaleX: inView ? 1 : 0 }}
