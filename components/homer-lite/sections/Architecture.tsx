@@ -307,10 +307,31 @@ export const Architecture: React.FC = () => {
   // Auto-center the active chip in the horizontal strip when activeId changes.
   // Mirrors the concept-B prototype detail (`scrollIntoView` on tap) but driven
   // by state so programmatic activations work too. inline:'center' keeps the
-  // chip visually centered without disturbing vertical page scroll.
+  // chip visually centered horizontally.
+  //
+  // Two guards added 2026-05-14:
+  //   1. Skip the first run. On mount, scrollIntoView({block:'nearest'}) was
+  //      bringing the (below-the-fold) chip strip into the viewport — yanking
+  //      the page past the Hero. We only want this to fire on real user-driven
+  //      activeId changes.
+  //   2. Skip when the strip is not currently visible in the viewport.
+  //      Prevents future programmatic activations (e.g. deep links) from
+  //      forcing a vertical scroll when the user is reading another section.
+  //      Horizontal scroll-into-view inside the strip is still safe because
+  //      we scroll the chip's nearest scrollable ancestor (the strip itself),
+  //      not the page — but only when the strip is on screen.
+  const didMountRef = useRef(false);
   useEffect(() => {
+    if (!didMountRef.current) {
+      didMountRef.current = true;
+      return;
+    }
     const strip = chipStripRef.current;
     if (!strip) return;
+    const stripRect = strip.getBoundingClientRect();
+    const stripOnScreen =
+      stripRect.bottom > 0 && stripRect.top < window.innerHeight;
+    if (!stripOnScreen) return;
     const el = strip.querySelector(`[data-chip-id="${activeId}"]`) as HTMLElement | null;
     el?.scrollIntoView({
       behavior: shouldReduceMotion ? 'auto' : 'smooth',
