@@ -4,6 +4,8 @@
 
 [![Yanqing Jiang — AI Portfolio preview](docs/preview.png)](https://yanqing.app)
 
+[![Project gallery preview](docs/preview-projects.png)](https://yanqing.app)
+
 Interactive AI portfolio that combines a Vite-powered React frontend, a FastAPI backend, and multiple agentic workflows (analytics copilots, resume Q&A, LinkedIn headshot generator, and research assistants). The site prerenders static pages, streams live AI responses, and exposes JSON-LD/SEO metadata for every project.
 
 > For deeper diagrams and sequence flows, see `ARCHITECTURE.md`, `docs/architecture-conversational-analytics.md`, `docs/linkedin-photo-*`, and `backend/analytics/ARCHITECTURE.md` (legacy).
