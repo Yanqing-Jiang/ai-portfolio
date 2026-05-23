@@ -8,7 +8,7 @@
 
 Interactive AI portfolio that combines a Vite-powered React frontend, a FastAPI backend, and multiple agentic workflows (analytics copilots, resume Q&A, LinkedIn headshot generator, and research assistants). The site prerenders static pages, streams live AI responses, and exposes JSON-LD/SEO metadata for every project.
 
-> For deeper diagrams and sequence flows, see `ARCHITECTURE.md`, `docs/architecture-conversational-analytics.md`, `docs/linkedin-photo-*`, and `backend/analytics/ARCHITECTURE.md` (legacy).
+> For deeper diagrams and sequence flows, see `ARCHITECTURE.md`.
 
 ## Repository Layout
 
@@ -19,11 +19,9 @@ Interactive AI portfolio that combines a Vite-powered React frontend, a FastAPI 
 ├── constants/               # Project catalog, SEO config, structured data builders
 ├── services/                # Frontend API clients (Gemini, REST, config)
 ├── backend/                 # FastAPI app, analytics suite, LinkedIn photo pipeline
-├── docs/                    # Design notes, rate-limit plans, roadmap material
 ├── scripts/                 # Prerender output, demo clients, automation helpers
 ├── ssr/                     # Server-side rendering entry for Vite build
-├── public/                  # Static assets served by Vite
-└── tests/ / backend/tests/  # Frontend (vitest) and backend (pytest) harnesses
+└── public/                  # Static assets served by Vite
 ```
 
 ## Key Features
@@ -61,14 +59,12 @@ Interactive AI portfolio that combines a Vite-powered React frontend, a FastAPI 
 - **Conversational analytics** (`backend/conversational_analytics/`):
   - Claude-driven agent and supervisor orchestration with SSE endpoints at `/api/conv-analytics`.
   - Skills, memory, and trading integrations live under `skills/`, `memory/`, and `tools/`.
-  - See `docs/architecture-conversational-analytics.md` for diagrams and flow notes.
 - **Analytics suite** (`backend/analytics/`, legacy):
   - `flows/workflow.py` orchestrates planner-executor, single-agent, and multi-agent pipelines.
   - SQL templates sourced from `backend/config/schemas/*.yaml`.
   - Uses LangGraph-inspired task graphs, ECharts-ready payloads, and telemetry for the frontend process panel.
 - **LinkedIn photo pipeline** (`backend/linkedin_photo/`):
   - Validates uploads (Pillow), enforces prompt quotas, expands style instructions, and calls Gemini image editing via Banana-hosted Nano models.
-  - `docs/linkedin-photo-rate-limit-plan.md` and `docs/linkedin-photo-next-steps.md` track rate-limit rollout and backlog.
 - **Shared services**:
   - `gemini_service.py` – session manager for Gemini text agents.
   - `rate_limiter.py` – Redis + in-memory fallback for global/per-user quotas with scopes.
@@ -190,12 +186,7 @@ curl https://portfolio-api.yanqing.app/health
 ## Additional Resources
 
 - `ARCHITECTURE.md` – high-level diagrams and module references.
-- `docs/architecture-conversational-analytics.md` – diagrams and notes for the new analytics stack.
-- `backend/analytics/ARCHITECTURE.md` – detailed analytics flow documentation (legacy).
 - `analytics-legacy/next-gen-analytics-agent/README.md` – where the archived Next Gen Analytics UI lives.
-- `docs/linkedin-photo-rate-limit-plan.md` – rollout plan for global/regional safeguards.
-- `docs/linkedin-photo-next-steps.md` – backlog for the LinkedIn generator.
-- `docs/analytics-agent-openai-sdk-roadmap.md` – future work on the analytics OpenAI SDK integration.
 
 ## Support & Maintainers
 

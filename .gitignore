@@ -59,12 +59,44 @@ temp_view.txt
 *.sqlite
 *.sqlite3
 
-# Testing
+# Testing — exclude test code and reports from version control
+tests/
+__tests__/
+**/tests/
+**/__tests__/
+*.test.ts
+*.test.tsx
+*.test.js
+*.test.jsx
+*.spec.ts
+*.spec.tsx
+*.spec.js
+*.spec.jsx
+pytest_*.txt
 coverage/
 .coverage
 htmlcov/
 .pytest_cache/
 .mypy_cache/
+
+# Internal docs — only ship the README hero previews
+/docs/*
+/docs/*/
+!/docs/preview.png
+!/docs/preview-projects.png
+
+# Internal agent / model instructions — never publish
+CLAUDE.md
+GEMINI.md
+AGENTS.md
+
+# Local scratch / inspection scripts
+inspect_*.py
+_inspect_*.py
+temp_*.py
+**/_inspect_*.py
+**/temp_*.py
+vite.log*
 
 # Debug files and traces
 .traces/
