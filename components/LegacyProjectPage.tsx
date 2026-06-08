@@ -11,7 +11,10 @@ const LegacyProjectPage: React.FC<LegacyProjectPageProps> = ({ project }) => {
   return (
     <>
       <ProjectHelmet project={project} />
-      <div className="flex flex-col min-h-full bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 text-slate-100">
+      <article
+        className="flex flex-col min-h-full bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 text-slate-100"
+        aria-labelledby={`legacy-project-title-${project.id}`}
+      >
         <header className="relative overflow-hidden">
           {(project.videoUrl || project.coverUrl) && (
             <div className="absolute inset-0">
@@ -26,14 +29,19 @@ const LegacyProjectPage: React.FC<LegacyProjectPageProps> = ({ project }) => {
           )}
           <div className="relative mx-auto max-w-5xl px-4 py-16 sm:py-20">
             <p className="text-sm font-semibold uppercase tracking-[0.3em] text-sky-300">Pre-AI Project</p>
-            <h1 className="mt-4 text-3xl sm:text-4xl md:text-5xl font-bold text-white">{project.title}</h1>
+            <h1
+              id={`legacy-project-title-${project.id}`}
+              className="mt-4 text-3xl sm:text-4xl md:text-5xl font-bold text-white"
+            >
+              {project.title}
+            </h1>
             <p className="mt-6 max-w-3xl text-base sm:text-lg text-slate-200 leading-relaxed">
               {project.description}
             </p>
           </div>
         </header>
 
-        <main className="flex-1">
+        <section className="flex-1" aria-label={`${project.title} details`}>
           <style>{`
         .legacy-content-wrapper :where(h1,h2,h3,h4) {
           color: inherit;
@@ -111,8 +119,8 @@ const LegacyProjectPage: React.FC<LegacyProjectPageProps> = ({ project }) => {
               <p className="text-slate-300">Detailed content coming soon.</p>
             )}
           </div>
-        </main>
-      </div>
+        </section>
+      </article>
     </>
   );
 };

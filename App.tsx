@@ -180,7 +180,7 @@ const Layout: React.FC = () => {
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const navigate = useNavigate();
   const location = useLocation();
-  const mainContentRef = useRef<HTMLDivElement>(null);
+  const mainContentRef = useRef<HTMLElement>(null);
 
   // Check if screen is mobile size - but keep sidebar closed by default
   useEffect(() => {
@@ -331,7 +331,13 @@ const Layout: React.FC = () => {
         )}
 
         {/* Main content area with fluid dimensions */}
-        <main ref={mainContentRef} className="flex-1 overflow-y-auto">
+        <main
+          ref={mainContentRef}
+          id="site-main"
+          className="flex-1 overflow-y-auto"
+          aria-label="Primary content"
+          tabIndex={-1}
+        >
           <Routes>
             <Route
               path="/"

@@ -29,6 +29,19 @@
     value: number;
     unitText?: string;
   };
+  // Phase C — schema.org entity-graph density fields. Cited 2026 research
+  // (digitalapplied) attributes a 4.8x AI-citation boost to pages connected
+  // to 15+ canonical entities. `mentions` lists canonical entity names that
+  // appear in the project's body (e.g., "LangGraph", "Claude Agent SDK",
+  // "A2UI Protocol"). `about` is the broader topical aboutness (defaults to
+  // serviceTags when omitted). Both render as schema.org Thing objects.
+  mentions?: string[];
+  about?: string[];
+  // Phase C — VideoObject support. `videoUrl` already exists above; these
+  // extend it for the schema.org VideoObject embed in Article markup.
+  // Multi-modal content (text + image + video) gets +156% AI selection rate.
+  videoThumbnailUrl?: string;
+  videoDurationISO?: string; // ISO 8601 duration, e.g., "PT2M30S"
 }
 
 export interface ProjectYear {

@@ -960,7 +960,11 @@ export function GenerativeUIPage(): React.ReactElement {
                 </Helmet>
             )}
 
-            <div className="generative-ui-page relative min-h-screen overflow-hidden" style={{ backgroundColor: theme.colors.bg.primary }}>
+            <article
+                className="generative-ui-page relative min-h-screen overflow-hidden"
+                aria-labelledby="a2ui-project-title"
+                style={{ backgroundColor: theme.colors.bg.primary }}
+            >
 
                 {/* Ambient Background */}
 
@@ -993,7 +997,7 @@ export function GenerativeUIPage(): React.ReactElement {
                         <section className="px-4 sm:px-8 pt-10 pb-6 max-w-6xl mx-auto space-y-4 text-slate-100">
                             <div className="flex flex-wrap items-start gap-4 justify-between">
                                 <div className="space-y-3 max-w-3xl">
-                                    <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-white">
+                                    <h1 id="a2ui-project-title" className="text-2xl sm:text-3xl font-bold tracking-tight text-white">
                                         {a2uiProject?.title ?? 'Agent to UI'}
                                     </h1>
                                     <p className="text-sm sm:text-base text-slate-300 leading-relaxed">
@@ -1930,7 +1934,7 @@ export function GenerativeUIPage(): React.ReactElement {
 
                 {/* Debug Panel Portal */}
                 {renderDebugPanel()}
-            </div>
+            </article>
 
             {/* Clarification Overlay - OUTSIDE main container to escape stacking context */}
             <ClarificationOverlay

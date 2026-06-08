@@ -1,6 +1,7 @@
 // Function: ProjectHelmet — called from ProjectView, GenerativeUIPage, and any project route to emit canonical SEO tags; invokes buildArticleSchema/buildBreadcrumbList plus Open Graph/Twitter meta; exists to keep project metadata consistent for prerender, sitemaps, and social previews.
-// Helper: toAbsoluteUrl — normalizes relative/partial asset URLs for OG/Twitter cards; used inside ProjectHelmet.
 // Helper: truncate — trims meta descriptions to safe lengths for SERP/OG tags; used inside ProjectHelmet.
+// Phase C — `toAbsoluteUrl` now imported from constants/structuredData (was duplicated here);
+// consolidation per refactor discipline (net-negative diff, single source of truth).
 
 import React, { useMemo } from 'react';
 import { Helmet } from 'react-helmet-async';
@@ -16,21 +17,14 @@ import {
 import {
   buildArticleSchema,
   buildBreadcrumbList,
+  buildSoftwareApplicationSchema,
   buildSoftwareSchema,
+  toAbsoluteUrl,
 } from '../constants/structuredData';
 
 interface ProjectHelmetProps {
   project: Project;
 }
-
-const toAbsoluteUrl = (value?: string) => {
-  if (!value || !value.trim()) return undefined;
-  try {
-    return new URL(value, SITE_BASE_URL).toString();
-  } catch {
-    return value;
-  }
-};
 
 const truncate = (value: string, maxLength = 160) => {
   if (!value) return '';
@@ -61,6 +55,7 @@ export const ProjectHelmet: React.FC<ProjectHelmetProps> = ({ project }) => {
   );
   const articleSchema = useMemo(() => buildArticleSchema(project), [project]);
   const softwareSchema = useMemo(() => buildSoftwareSchema(project), [project]);
+  const softwareApplicationSchema = useMemo(() => buildSoftwareApplicationSchema(project), [project]);
   const imageType = useMemo(() => {
     if (!image) return undefined;
     try {
@@ -134,6 +129,7 @@ export const ProjectHelmet: React.FC<ProjectHelmetProps> = ({ project }) => {
       ))}
 
       <script type="application/ld+json">{JSON.stringify(articleSchema)}</script>
+      <script type="application/ld+json">{JSON.stringify(softwareApplicationSchema)}</script>
       <script type="application/ld+json">{JSON.stringify(softwareSchema)}</script>
       <script type="application/ld+json">{JSON.stringify(breadcrumbSchema)}</script>
     </Helmet>

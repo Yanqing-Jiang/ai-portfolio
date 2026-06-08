@@ -35,7 +35,9 @@ const ProjectView: React.FC<ProjectViewProps> = ({ project }) => {
     return (
       <>
         <ProjectHelmet project={project} />
-        <ConversationalAnalyticsPage />
+        <article className="h-full" aria-label={project.title}>
+          <ConversationalAnalyticsPage />
+        </article>
       </>
     );
   }
@@ -44,7 +46,9 @@ const ProjectView: React.FC<ProjectViewProps> = ({ project }) => {
     return (
       <>
         <ProjectHelmet project={project} />
-        <AnalyticsSqlPage />
+        <article className="h-full" aria-label={project.title}>
+          <AnalyticsSqlPage />
+        </article>
       </>
     );
   }
@@ -53,7 +57,9 @@ const ProjectView: React.FC<ProjectViewProps> = ({ project }) => {
     return (
       <>
         <ProjectHelmet project={project} />
-        <LinkedInPhotoPage />
+        <article className="h-full" aria-label={project.title}>
+          <LinkedInPhotoPage />
+        </article>
       </>
     );
   }
@@ -65,8 +71,8 @@ const ProjectView: React.FC<ProjectViewProps> = ({ project }) => {
   return (
     <>
       <ProjectHelmet project={project} />
-      <div className="flex flex-col h-full overflow-hidden">
-        <motion.div
+      <article className="flex flex-col h-full overflow-hidden" aria-labelledby={`project-title-${project.id}`}>
+        <motion.header
           initial={false}
           animate={isHeaderCollapsed ? { height: 60 } : { height: 'auto' }}
           transition={{ duration: 0.3, ease: 'easeInOut' }}
@@ -75,7 +81,9 @@ const ProjectView: React.FC<ProjectViewProps> = ({ project }) => {
         {isHeaderCollapsed ? (
           <div className="h-full flex items-center justify-between px-4 md:px-6 lg:px-8">
             <div className="flex items-center gap-3 min-w-0 flex-1">
-              <h2 className="text-lg md:text-xl font-bold text-white truncate">{project.title}</h2>
+              <h1 id={`project-title-${project.id}`} className="text-lg md:text-xl font-bold text-white truncate">
+                {project.title}
+              </h1>
               <div className="hidden sm:flex gap-2">
                 {project.technologies.slice(0, 3).map(tech => (
                   <span
@@ -96,6 +104,8 @@ const ProjectView: React.FC<ProjectViewProps> = ({ project }) => {
               onClick={() => setIsHeaderCollapsed(!isHeaderCollapsed)}
               className="p-2 hover:bg-gray-700 rounded-lg transition-colors text-gray-400 hover:text-white shrink-0"
               title="Expand header"
+              aria-label="Expand project header"
+              aria-expanded={!isHeaderCollapsed}
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
@@ -106,7 +116,10 @@ const ProjectView: React.FC<ProjectViewProps> = ({ project }) => {
           <div className="p-3 sm:p-4 md:p-6 lg:p-8 relative">
             <div className="flex flex-col md:flex-row gap-4 sm:gap-6 md:gap-8">
               <div className="flex-1 flex flex-col justify-center min-w-0">
-                <h1 className="text-xl sm:text-2xl md:text-3xl lg:text-4xl xl:text-5xl font-bold text-white mb-2 sm:mb-3 md:mb-4 leading-tight">
+                <h1
+                  id={`project-title-${project.id}`}
+                  className="text-xl sm:text-2xl md:text-3xl lg:text-4xl xl:text-5xl font-bold text-white mb-2 sm:mb-3 md:mb-4 leading-tight"
+                >
                   {project.title}
                 </h1>
                 <div className="text-gray-400 text-sm sm:text-base md:text-base lg:text-lg max-w-none md:max-w-3xl mb-3 sm:mb-4 md:mb-6 space-y-2 sm:space-y-3 overflow-y-auto flex-1 md:flex-none">
@@ -175,6 +188,8 @@ const ProjectView: React.FC<ProjectViewProps> = ({ project }) => {
               onClick={() => setIsHeaderCollapsed(!isHeaderCollapsed)}
               className="absolute bottom-2 right-2 p-2 hover:bg-gray-700 rounded-lg transition-colors text-gray-400 hover:text-white"
               title="Collapse header"
+              aria-label="Collapse project header"
+              aria-expanded={!isHeaderCollapsed}
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
@@ -182,11 +197,11 @@ const ProjectView: React.FC<ProjectViewProps> = ({ project }) => {
             </button>
           </div>
         )}
-      </motion.div>
-      <div className="flex-1 min-h-0 bg-gray-900">
+      </motion.header>
+      <section className="flex-1 min-h-0 bg-gray-900" aria-label={`${project.title} interactive workspace`}>
         <Chat project={project} onFirstMessage={handleFirstMessage} />
-      </div>
-    </div>
+      </section>
+    </article>
     </>
   );
 };

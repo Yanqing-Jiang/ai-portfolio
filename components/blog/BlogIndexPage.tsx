@@ -95,7 +95,10 @@ const BlogIndexPage: React.FC = () => {
       {/* Subtle noise overlay — matches landing aesthetic without competing with the prose */}
       <div className="fixed inset-0 z-0 pointer-events-none opacity-20 bg-[url('https://grainy-gradients.vercel.app/noise.svg')]" />
 
-      <main className="relative z-10 max-w-[860px] mx-auto px-6 pt-24 pb-32">
+      <section
+        className="relative z-10 max-w-[860px] mx-auto px-6 pt-24 pb-32"
+        aria-label={tag ? `Posts tagged ${tag}` : 'Writing index'}
+      >
         {/* Tag-filter notice (only when filtering). Replaces the old "FIELD
             NOTES" page header — under the editorial design the hero IS the
             page header. */}
@@ -142,7 +145,7 @@ const BlogIndexPage: React.FC = () => {
             yanqing.app
           </div>
         </footer>
-      </main>
+      </section>
     </div>
   );
 };

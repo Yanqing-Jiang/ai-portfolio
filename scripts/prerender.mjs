@@ -147,10 +147,14 @@ const buildUrlSet = (entries) => [
 const sitemapXml = buildUrlSet(allEntries);
 
 const rootDir = path.resolve(__dirname, '..');
-await writeFile(path.join(rootDir, 'public', 'sitemap.xml'), sitemapXml, 'utf-8');
+// Phase A — write only to dist/ (the deploy target). Previously this also wrote to
+// public/sitemap.xml, but Vite copies public/* into dist/* before prerender runs,
+// which meant the public/ copy was overwritten by us on every build and kept showing
+// up as a git diff — the actual drift vector. Source of truth: getSitemapEntries()
+// in ssr/entry-server.tsx. Build output: dist/sitemap.xml only.
 await writeFile(path.join(distDir, 'sitemap.xml'), sitemapXml, 'utf-8');
 
-console.log('Generated single flat sitemap.xml in public/ and dist/');
+console.log(`Generated dist/sitemap.xml with ${allEntries.length} URLs`);
 
 // ---- RSS feed (uses the same SSR bundle so post bodies render to HTML once) ----
 try {
@@ -158,6 +162,27 @@ try {
   await writeRssFeed(rssEntries, distDir, rootDir);
 } catch (err) {
   console.warn('RSS generation failed (continuing build):', err);
+}
+
+// ---- llms.txt + llms-full.txt (Phase B) ----
+// Build-time generation from PROJECT_DATA + allPosts via getLlmsCorpus().
+// Replaces the static public/llms.txt + public/llms-full.txt — those drifted
+// every time a new project or post landed. Failure is non-fatal so a body-
+// render bug doesn't block the deploy.
+try {
+  const { writeLlmsArtifacts } = await import(
+    pathToFileURL(path.resolve(__dirname, 'generate-llms.mjs')).href
+  );
+  const { getLlmsCorpus } = await import(pathToFileURL(ssrEntryPath).href);
+  const preludePath = path.resolve(__dirname, '..', 'data', 'llms-prelude.md');
+  const preludeMd = await readFile(preludePath, 'utf-8');
+  const corpus = getLlmsCorpus();
+  const sizes = await writeLlmsArtifacts(corpus, preludeMd, distDir);
+  console.log(
+    `Generated dist/llms.txt (${sizes.shortBytes}b) + dist/llms-full.txt (${sizes.fullBytes}b)`
+  );
+} catch (err) {
+  console.warn('llms.txt generation failed (continuing build):', err);
 }
 
 const siteOrigin = pages[0] ? `${new URL(pages[0].loc).origin}/` : 'https://yanqing.app/';

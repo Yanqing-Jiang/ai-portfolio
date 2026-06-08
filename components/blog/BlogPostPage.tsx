@@ -159,7 +159,7 @@ const ArticleShell: React.FC<ShellProps> = ({ post }) => {
         />
       </div>
 
-      <main className="relative z-10 max-w-7xl mx-auto px-6 lg:px-12 pt-20 pb-12">
+      <div className="relative z-10 max-w-7xl mx-auto px-6 lg:px-12 pt-20 pb-12">
         <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,720px)_minmax(0,1fr)] gap-16">
           <article ref={articleRef} className="max-w-[68ch] mx-auto lg:mx-0 w-full">
             {/* === Title block (Medium-classic: title FIRST, then hero) === */}
@@ -328,7 +328,7 @@ const ArticleShell: React.FC<ShellProps> = ({ post }) => {
             </div>
           </aside>
         </div>
-      </main>
+      </div>
 
       {/* === Read Next trio === */}
       {related.length > 0 && (

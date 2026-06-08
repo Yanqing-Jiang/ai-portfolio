@@ -2,6 +2,7 @@ import React from 'react';
 // @ts-ignore — react-helmet-async types not bundled cleanly with ESM
 import { Helmet } from 'react-helmet-async';
 import type { BlogPost } from '../../lib/blog/mdx';
+import { buildFaqSchema } from '../../constants/structuredData';
 
 const SITE = 'https://yanqing.app';
 const SITE_NAME = 'Yanqing Jiang';
@@ -182,6 +183,15 @@ const BlogHelmet: React.FC<Props> = ({ post }) => {
 
       <script type="application/ld+json">{JSON.stringify(articleSchema)}</script>
       <script type="application/ld+json">{JSON.stringify(breadcrumbSchema)}</script>
+      {/* Phase C — selective FAQPage schema. Pure FAQ format hurts AI citation
+          per geo-citation-lab; opt-in (emitFaqSchema=true) keeps schema
+          reserved for posts that are genuinely Q&A-shaped, satisfying the
+          March-2026 core update demotion of abused FAQ markup. */}
+      {frontmatter.emitFaqSchema === true && (frontmatter.faqItems?.length ?? 0) >= 3 && (
+        <script type="application/ld+json">
+          {JSON.stringify(buildFaqSchema(frontmatter.faqItems))}
+        </script>
+      )}
     </Helmet>
   );
 };

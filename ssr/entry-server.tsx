@@ -124,6 +124,107 @@ export const getRssEntries = (): RssEntry[] => {
   });
 };
 
+/**
+ * LLM corpus payload — single source of truth for the build-time
+ * `llms.txt` + `llms-full.txt` generator (scripts/generate-llms.mjs).
+ * Mirrors getRssEntries but optimized for plain-text consumption: bodies are
+ * rendered via renderToStaticMarkup then stripped of HTML so the output file
+ * is RAG-friendly without inflating byte size with tag noise.
+ *
+ * Why route this through the SSR bundle (vs. reading PROJECT_DATA + MDX
+ * directly in the script): the MDX components are React modules — only the
+ * SSR bundle can render them in Node. Same constraint that drives the RSS
+ * path.
+ */
+export interface LlmsCorpusProject {
+  id: string;
+  canonicalId?: string;
+  title: string;
+  description: string;
+  url: string;
+  technologies: string[];
+  serviceTags: string[];
+  statHighlights: string[];
+  primaryMetric?: { label?: string; value: number; unitText?: string };
+  datePublished?: string;
+  dateModified?: string;
+}
+export interface LlmsCorpusPost {
+  slug: string;
+  title: string;
+  description: string;
+  url: string;
+  publishedAt: string;
+  updatedAt?: string;
+  tags: string[];
+  /** Plain-text body, HTML stripped. Used for the llms-full.txt long form. */
+  plainTextBody: string;
+}
+export interface LlmsCorpus {
+  projects: LlmsCorpusProject[];
+  posts: LlmsCorpusPost[];
+}
+
+/** Strip HTML tags and decode the few entities we emit. Keep it tiny — these
+ *  go into a plain-text file, not back into HTML. */
+const stripHtmlToText = (html: string): string =>
+  html
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<\/(p|div|li|h\d|br|tr|blockquote)>/gi, '\n')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .trim();
+
+export const getLlmsCorpus = (): LlmsCorpus => {
+  const projects: LlmsCorpusProject[] = PROJECT_DATA.flatMap((year) =>
+    year.projects.map((project) => ({
+      id: project.id,
+      canonicalId: project.canonicalId,
+      title: project.seoTitle ?? project.title,
+      description: project.seoDescription ?? project.description,
+      url: `${SITE_BASE_URL}/project/${project.canonicalId ?? project.id}`,
+      technologies: project.technologies ?? [],
+      serviceTags: project.serviceTags ?? [],
+      statHighlights: project.statHighlights ?? [],
+      primaryMetric: project.primaryMetricValue,
+      datePublished: project.datePublished,
+      dateModified: project.dateModified,
+    }))
+  );
+
+  const posts: LlmsCorpusPost[] = allPosts.map((post) => {
+    const { Component, frontmatter } = post;
+    let bodyHtml = '';
+    try {
+      bodyHtml = renderToStaticMarkup(<Component />);
+    } catch (err) {
+      bodyHtml = `<p>Body unavailable — read the full post at ${SITE_BASE_URL}/blog/${post.slug}.</p>`;
+      console.warn(`[llms] body render failed for ${post.slug}: ${(err as Error).message}`);
+    }
+    return {
+      slug: post.slug,
+      title: frontmatter.title,
+      description: frontmatter.description,
+      url: `${SITE_BASE_URL}/blog/${post.slug}`,
+      publishedAt: frontmatter.publishedAt,
+      updatedAt: frontmatter.updatedAt,
+      tags: frontmatter.tags,
+      plainTextBody: stripHtmlToText(bodyHtml),
+    };
+  });
+
+  return { projects, posts };
+};
+
 export const render = (url: string): RenderResult => {
   const helmetContext: FilledContext = {};
 
