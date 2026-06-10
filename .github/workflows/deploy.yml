@@ -23,6 +23,9 @@ jobs:
       # GEO regression net (Phase G): sitemap completeness, Helmet injection,
       # JSON-LD shape, llms-full.txt size + coverage. Must pass before deploy.
       - run: npm run test
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
 
       - run: npm run build
         env:
