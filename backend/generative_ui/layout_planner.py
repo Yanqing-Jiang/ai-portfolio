@@ -316,8 +316,8 @@ class LayoutPlanner:
         Invokes: anthropic.Anthropic.messages.create (direct API).
         Why: Uses Anthropic API to propose higher quality layout adjustments.
         
-        Note: This version uses direct Anthropic Messages API instead of Claude Agent SDK
-        to avoid cold-boot overhead (2-12s) that causes timeouts on Render.com.
+        Note: This version uses the direct Anthropic Messages API instead of
+        Claude Agent SDK to stay within the API startup budget.
         """
         # Check if Anthropic is available
         if not ANTHROPIC_AVAILABLE or anthropic is None:

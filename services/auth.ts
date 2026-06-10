@@ -51,7 +51,7 @@ class AuthService {
       })
 
       // Listen for auth changes
-      supabase.auth.onAuthStateChange((event, session) => {
+      supabase.auth.onAuthStateChange((_event, session) => {
         this.updateState({
           user: session?.user || null,
           loading: false,

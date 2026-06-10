@@ -12,7 +12,7 @@ interface MyBookingsSectionProps {
 }
 
 export const MyBookingsSection: React.FC<MyBookingsSectionProps> = ({ user }) => {
-  const { bookings, loading, error, cancelBooking, rescheduleBooking, refetch } = useMyBookings();
+  const { bookings, loading, error, cancelBooking, rescheduleBooking } = useMyBookings();
   const [cancelTarget, setCancelTarget] = useState<string | null>(null);
   const [rescheduleTarget, setRescheduleTarget] = useState<string | null>(null);
 

@@ -665,9 +665,6 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                 <div className="relative z-20">
                     {/* Hero Section with 3D Holographic Dashboard */}
                     <section ref={heroRef} className="relative min-h-0 md:min-h-screen flex flex-col items-center justify-start md:justify-center overflow-hidden pt-4 pb-6 md:pb-12 md:py-12 px-4 sm:px-6 lg:px-8 border-b border-white/5">
-                        {/* Noise Texture (Consistent with Sidebar & Rest of Page) */}
-                        <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20 pointer-events-none" />
-
                         {/* Ambient Nebula Glows */}
                         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full h-full pointer-events-none">
                             <div className="absolute top-1/4 -left-1/4 w-[800px] h-[800px] bg-sky-600/10 rounded-full blur-[200px]" />
@@ -749,8 +746,6 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                                     filter: 'blur(60px)'
                                 }}
                             />
-                            {/* NOISE OVERLAY */}
-                            <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20" />
                         </div>
 
                         <div className="h-full w-full relative z-10 overflow-visible">

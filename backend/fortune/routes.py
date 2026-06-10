@@ -197,7 +197,6 @@ class FortuneSession(BaseModel):
     latest_foundation: dict[str, Any] = Field(default_factory=dict)
     latest_narrative: dict[str, Any] | None = None
     latest_guardrail: dict[str, Any] | None = None
-    corrections: dict[int, dict[str, str]] = Field(default_factory=dict)
     # Set by POST /action; consumed by the next GET /stream so the triage
     # agent runs instead of the default narrative agent. Cleared after stream.
     pending_action_id: str | None = None
@@ -1000,16 +999,7 @@ async def stream_fortune(fortune_id: str, request: Request):
 
             _alloc_seq = _make_seq_allocator(run_uuid, repo)
 
-            # Key events we mirror into fortune_event for durable replay. Most
-            # high-frequency data updates stay Redis-only; we keep only the
-            # semantic milestones the client needs to render a coherent partial
-            # state after reconnect.
-            DURABLE_EVENTS = {
-                "progress", "narrative_complete", "guardrail",
-                "trace_summary", "complete", "error",
-            }
-
-            async def _emit(payload: str, *, event_name: str | None = None) -> str:
+            async def _emit(payload: str) -> str:
                 seq = await _alloc_seq()
                 try:
                     inner = _json.loads(payload)
@@ -1021,19 +1011,6 @@ async def stream_fortune(fortune_id: str, request: Request):
                     "seq": seq,
                     "payload": inner,
                 }
-                if event_name and event_name in DURABLE_EVENTS and run_uuid is not None and repo.available:
-                    try:
-                        await repo.append_event(
-                            run_id=run_uuid,
-                            fortune_id=uuid.UUID(fortune_id_str),
-                            seq=seq,
-                            event_name=event_name,
-                            payload=inner,
-                        )
-                    except Exception as exc:
-                        logger.debug(
-                            "[FORTUNE] append_event(%s) skipped: %s", event_name, exc,
-                        )
                 return f"data: {_json.dumps(env)}\n\n"
 
             # Track whether we've actually started streaming. ``pending_action_id``
@@ -1080,7 +1057,6 @@ async def stream_fortune(fortune_id: str, request: Request):
                 )
                 return await _emit(
                     bridge.emit_progress("cancelled", message),
-                    event_name="progress",
                 )
 
             if run_uuid is not None:
@@ -1165,7 +1141,6 @@ async def stream_fortune(fortune_id: str, request: Request):
                 else:
                     yield await _emit(
                         bridge.emit_progress("foundation", "Computing Four Pillars..."),
-                        event_name="progress",
                     )
                     _t_found = _time.monotonic()
                     foundation = await run_foundation(ctx)
@@ -1217,7 +1192,6 @@ async def stream_fortune(fortune_id: str, request: Request):
                     if person_b_info is not None:
                         yield await _emit(
                             bridge.emit_progress("foundation", "Computing Person B's Four Pillars..."),
-                            event_name="progress",
                         )
                         cancel_msg = await _cancel_event("foundation", trace)
                         if cancel_msg:
@@ -1341,7 +1315,6 @@ async def stream_fortune(fortune_id: str, request: Request):
                         bridge.emit_progress(
                             "narrative", f"Routing follow-up via triage ({pending_action})...",
                         ),
-                        event_name="progress",
                     )
                     if trace:
                         trace.add_instant(
@@ -1398,7 +1371,6 @@ async def stream_fortune(fortune_id: str, request: Request):
                 else:
                     yield await _emit(
                         bridge.emit_progress("narrative", "Generating interpretation..."),
-                        event_name="progress",
                     )
                     if trace:
                         trace.add_instant(
@@ -1457,10 +1429,8 @@ async def stream_fortune(fortune_id: str, request: Request):
                             yield cancel_msg
                             return
                         if isinstance(event, HeartbeatTick):
-                            # Synthetic progress — emitted *without* event_name
-                            # so it stays out of DURABLE_EVENTS (no Postgres
-                            # mirror). Format mirrors the LiveView elapsed
-                            # counter so the user sees consistent timing.
+                            # Format mirrors the LiveView elapsed counter so
+                            # the user sees consistent timing.
                             yield await _emit(
                                 bridge.emit_progress(
                                     "narrative",
@@ -1657,7 +1627,6 @@ async def stream_fortune(fortune_id: str, request: Request):
 
                 yield await _emit(
                     bridge.emit_narrative_complete(session.latest_narrative),
-                    event_name="narrative_complete",
                 )
 
                 # Compatibility fan-out: if the narrative includes a
@@ -1755,7 +1724,6 @@ async def stream_fortune(fortune_id: str, request: Request):
                     return
                 yield await _emit(
                     bridge.emit_progress("guardrail", "Running safety check..."),
-                    event_name="progress",
                 )
                 if trace:
                     trace.add_instant("llm_start", "guardrail", label="Running Safety Check")
@@ -1817,14 +1785,12 @@ async def stream_fortune(fortune_id: str, request: Request):
 
                 yield await _emit(
                     bridge.emit_guardrail(session.latest_guardrail),
-                    event_name="guardrail",
                 )
 
                 if trace:
                     yield await _emit(bridge.emit_trace_steps_batch(trace.steps))
                     yield await _emit(
                         bridge.emit_trace_summary(trace.summary()),
-                        event_name="trace_summary",
                     )
 
                 # 7. Complete — persist snapshot + update run status.
@@ -1859,7 +1825,7 @@ async def stream_fortune(fortune_id: str, request: Request):
                         logger.warning("[FORTUNE] snapshot/status persistence failed: %s", exc)
 
                 for msg in bridge.emit_complete():
-                    yield await _emit(msg, event_name="complete")
+                    yield await _emit(msg)
 
             except Exception as exc:
                 logger.exception("[FORTUNE] %s stream error: %s", session.fortune_id, exc)
@@ -1887,7 +1853,7 @@ async def stream_fortune(fortune_id: str, request: Request):
                 # clear it now to avoid a poisoned re-dispatch on retry.
                 await _maybe_clear_pending()
                 for msg in bridge.emit_error(str(exc)):
-                    yield await _emit(msg, event_name="error")
+                    yield await _emit(msg)
 
     return StreamingResponse(
         with_heartbeat(event_generator()),
@@ -2196,7 +2162,6 @@ async def submit_correction(
 
     Writes through to ``fortune_snapshot.latest_retrodictions.corrections`` so
     the note survives a worker restart and a subsequent replay can render it.
-    In-memory ``session.corrections`` stays in sync for the live dashboard.
     """
     await smart_rate_limit(request, scope=RateLimitScope.FORTUNE_CORRECTION, weight=1)
 
@@ -2233,9 +2198,6 @@ async def submit_correction(
                 record = persisted
         except Exception as exc:
             logger.warning("[FORTUNE] correction persistence failed: %s", exc)
-
-    if session is not None:
-        session.corrections[request_body.year] = record
 
     return {
         "fortune_id": fortune_id,

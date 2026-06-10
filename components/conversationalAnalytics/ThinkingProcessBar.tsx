@@ -5,7 +5,7 @@
  * Note: Skill visualization has been moved to ProcessPanel for better UX
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { PlanStep, DebugLog, SkillInfo, AgentInfo, HandoffInfo } from './hooks/useSSEStream';
 import { theme } from './styles';
@@ -35,16 +35,12 @@ const ThinkingProcessBar: React.FC<ThinkingProcessBarProps> = ({
   currentStepId,
   isExpanded,
   onToggle,
-  debugLogs = [],
   error = null,
   errorDetails = null,
-  skillInfo = null,
   isStreaming = false,
-  activeAgent = null,
   handoffs = [],
   isPaused = false,
 }) => {
-  const [isDebugExpanded, setIsDebugExpanded] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const stepsContainerRef = useRef<HTMLDivElement>(null);
 

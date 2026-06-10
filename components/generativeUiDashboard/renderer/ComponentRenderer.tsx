@@ -123,7 +123,7 @@ function getLayoutType(
     if (LAYOUT_WIDGET_TYPES.has(componentType)) return componentType;
 
     if (componentType === 'Card') {
-        const childId = (props as CardProps).child;
+        const childId = (props as unknown as CardProps).child;
         if (!childId) return null;
         const childDef = components.get(childId);
         if (!childDef) return null;
@@ -134,7 +134,7 @@ function getLayoutType(
     }
 
     if (componentType === 'Row' || componentType === 'Column') {
-        const nestedChildren = resolveChildIds((props as RowProps | ColumnProps).children, dataModel);
+        const nestedChildren = resolveChildIds((props as unknown as RowProps | ColumnProps).children, dataModel);
         const nestedTypes = new Set<string>();
         for (const nestedId of nestedChildren) {
             const nestedDef = components.get(nestedId);

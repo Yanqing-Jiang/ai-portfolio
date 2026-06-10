@@ -600,6 +600,7 @@ export function useSSEStream(apiUrl: string = '/api/conv-analytics/stream'): Use
         handoffs,
         processNodes,
         processEdges,
+        lastAgentLabel,
         sendMessage,
         pauseStream,
         resumeLast,

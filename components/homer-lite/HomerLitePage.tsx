@@ -118,15 +118,6 @@ const HomerLitePage: React.FC = () => {
           minHeight: '100vh',
         }}
       >
-        <div
-          aria-hidden
-          className="absolute inset-0 pointer-events-none"
-          style={{
-            backgroundImage: 'url("https://grainy-gradients.vercel.app/noise.svg")',
-            opacity: 0.06,
-          }}
-        />
-
         <div className="relative z-10">
           <Hero />
           <Why />

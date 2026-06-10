@@ -8,7 +8,7 @@ the answer to build on prior turns. That needs durable conversation memory.
 We use the Agents SDK's ``SQLAlchemySession`` pointed at Supabase so:
 
 1. Memory survives process restarts (Mac Mini reboots, Docker redeploys).
-2. All workers share the same history (no Redis fanout needed yet).
+2. Conversation history remains available across process restarts.
 3. The SDK handles compaction via ``SessionSettings(limit=…)`` — oldest
    messages beyond the limit are dropped on read. Good enough for a 20-turn
    thread per fortune.

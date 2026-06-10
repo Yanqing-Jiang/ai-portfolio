@@ -9,7 +9,9 @@ import type { EChartsReactProps } from 'echarts-for-react';
 
 const ReactEChartsLazy = lazy(async () => {
   const mod = await import('echarts-for-react');
-  return { default: (mod as any).default ?? mod };
+  return {
+    default: ((mod as any).default ?? mod) as React.ComponentType<EChartsReactProps>,
+  };
 });
 
 type LazyEChartsProps = EChartsReactProps & {

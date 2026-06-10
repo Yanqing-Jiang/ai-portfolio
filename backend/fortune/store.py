@@ -297,31 +297,6 @@ class FortuneRepository:
         )
         return int(row["last_emitted_seq"]) if row else 0
 
-    # -- fortune_event ------------------------------------------------------
-
-    async def append_event(
-        self,
-        *,
-        run_id: UUID,
-        fortune_id: UUID,
-        seq: int,
-        event_name: str,
-        payload: dict[str, Any],
-        target_tab: str | None = None,
-    ) -> None:
-        if self.pool is None:
-            return
-        import json
-        await self.pool.execute(
-            """
-            INSERT INTO fortune_event (
-                run_id, fortune_id, seq, event_name, target_tab, payload
-            )
-            VALUES ($1,$2,$3,$4,$5,$6::jsonb)
-            """,
-            run_id, fortune_id, seq, event_name, target_tab, json.dumps(payload),
-        )
-
     # -- fortune_snapshot ---------------------------------------------------
 
     async def upsert_snapshot(

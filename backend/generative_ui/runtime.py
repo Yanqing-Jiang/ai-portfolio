@@ -22,9 +22,8 @@ This module wraps the existing A2UI agent + emitter into a reusable runtime
 loop that can be incrementally extended (layout overrides, step-level audits,
 pause/resume on clarifications, execution traces, etc.).
 
-Note: This version uses direct agent execution instead of SDK flow to avoid
-cold-boot overhead (~2-12s) that causes timeouts on resource-constrained
-backends like Render.com.
+Note: This version uses direct agent execution instead of the SDK flow to stay
+within the API startup budget.
 """
 
 from __future__ import annotations

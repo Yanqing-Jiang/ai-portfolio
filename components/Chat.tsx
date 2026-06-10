@@ -7,10 +7,9 @@ import { RobotIcon } from './icons/RobotIcon';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { QuestionMarkIcon } from './icons/QuestionMarkIcon';
-import { fetchEventSource } from '@microsoft/fetch-event-source';
 import { AuthModal } from './AuthModal';
 import { authService, type AuthState } from '../services/auth';
-import { apiService, handleApiError, type UsageStats } from '../services/apiService';
+import { apiService, type UsageStats } from '../services/apiService';
 import { configService } from '../services/config';
 
 // --- Function/Class Map ---
@@ -37,242 +36,6 @@ const GOGGINS_DEFAULT_PROMPTS = [
 const GOGGINS_IMG_URL = 'https://yanqinghot.blob.core.windows.net/public-access/Goggins%20Yelling.jpg';
 const LINKEDIN_FOLLOW_URL = 'https://www.linkedin.com/in/jiangyanqing/';
 
-// --- Sub-components for performance optimization ---
-
-const AgentStatusView = React.memo(({ agentStatus }: { agentStatus: string }) => {
-  return (
-    <div className="bg-gray-800/90 border-b border-gray-700/50 p-2 sm:p-3 max-w-4xl mx-auto w-full">
-      <div className="flex items-center gap-2 mb-2">
-        <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
-        <span className="text-xs font-medium text-gray-300">Agent Status</span>
-      </div>
-      <div className="bg-gray-900/50 rounded-lg p-2 sm:p-3 max-h-32 sm:max-h-40 overflow-y-auto">
-        <div className="text-xs text-gray-300 whitespace-pre-wrap font-mono leading-relaxed">
-          {agentStatus.split('\n').map((line, index) => (
-            <div key={index} className={`
-              ${line.startsWith('🔎') || line.startsWith('🔍') || line.startsWith('📄') || line.startsWith('🤖') || line.startsWith('📝') || line.startsWith('💭') || line.startsWith('✅') ? 'text-blue-400 font-medium' : ''}
-              ${line.startsWith('>') ? 'text-gray-500 ml-2' : ''}
-              ${line.includes('Invoking:') ? 'text-yellow-400' : ''}
-              ${line.includes('completed') ? 'text-green-400' : ''}
-            `}>
-              {line}
-            </div>
-          ))}
-          {!agentStatus && <span className="text-gray-500">Initializing...</span>}
-        </div>
-      </div>
-    </div>
-  );
-});
-AgentStatusView.displayName = 'AgentStatusView';
-
-const MessageItem = React.memo(({ 
-  message, 
-  isGogginsProject, 
-  isGogginsMode, 
-  isLoading, 
-  isLast 
-}: { 
-  message: ChatMessage; 
-  isGogginsProject: boolean; 
-  isGogginsMode: boolean;
-  isLoading: boolean;
-  isLast: boolean;
-}) => {
-  const isModelGoggins = isGogginsProject && isGogginsMode && message.role === 'model';
-  
-  return (
-    <div className={`flex items-start gap-2 sm:gap-3 md:gap-4`}>
-        {message.role === 'model' && (
-        <div className="w-6 h-6 sm:w-8 sm:h-8 rounded-full bg-gray-600 flex items-center justify-center shrink-0 mt-1 overflow-hidden">
-            {isModelGoggins ? (
-                <img src={GOGGINS_IMG_URL} alt="David Goggins" className="w-full h-full object-cover" />
-            ) : (
-              <div className="w-full h-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center">
-                <RobotIcon />
-              </div>
-            )}
-        </div>
-        )}
-        <div className={`flex-1 flex flex-col min-w-0 ${message.role === 'user' ? 'items-end' : 'items-start'}`}>
-            <div className={`max-w-full sm:max-w-xl md:max-w-2xl rounded-xl shadow-md ${message.role === 'user' ? 'bg-blue-600 text-white rounded-br-none' : 'bg-gray-700 text-gray-200 rounded-bl-none'}`}>
-                {message.role === 'user' ? (
-                    <p className="text-sm sm:text-base whitespace-pre-wrap leading-relaxed px-3 sm:px-4 py-2 sm:py-3 break-words">{message.text}</p>
-                ) : (
-                    <div className="prose prose-sm sm:prose-base prose-invert max-w-none p-3 sm:p-4 prose-p:text-gray-200 prose-headings:text-white prose-strong:text-white prose-a:text-blue-400 hover:prose-a:text-blue-300 prose-pre:text-xs sm:prose-pre:text-sm prose-code:text-xs sm:prose-code:text-sm">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                            {message.text}
-                        </ReactMarkdown>
-                        {isLoading && isLast && !message.text && (
-                            <span className="inline-block w-2 h-4 bg-gray-400 animate-pulse rounded-full"></span>
-                        )}
-                    </div>
-                )}
-            </div>
-        </div>
-        {message.role === 'user' && (
-        <div className="w-6 h-6 sm:w-8 sm:h-8 rounded-full bg-gray-600 flex items-center justify-center shrink-0 mt-1">
-            <UserIcon />
-        </div>
-        )}
-    </div>
-  );
-});
-MessageItem.displayName = 'MessageItem';
-
-const MessageList = React.memo(({ 
-  messages, 
-  isGogginsProject, 
-  isGogginsMode, 
-  isLoading, 
-  messagesEndRef 
-}: {
-  messages: ChatMessage[];
-  isGogginsProject: boolean;
-  isGogginsMode: boolean;
-  isLoading: boolean;
-  messagesEndRef: React.RefObject<HTMLDivElement>;
-}) => {
-  return (
-    <div className="flex-1 overflow-y-auto">
-      <div className="max-w-4xl mx-auto p-3 sm:p-4 md:p-6 space-y-4 sm:space-y-6 md:space-y-8">
-          {messages.filter(msg => msg.role !== 'audio').map((message, index) => (
-            <MessageItem 
-              key={message.id} 
-              message={message} 
-              isGogginsProject={isGogginsProject} 
-              isGogginsMode={isGogginsMode}
-              isLoading={isLoading}
-              isLast={index === messages.length - 1}
-            />
-          ))}
-          <div ref={messagesEndRef} />
-      </div>
-    </div>
-  );
-});
-MessageList.displayName = 'MessageList';
-
-const UsageStatusView = React.memo(({ 
-  authState, 
-  usageStats, 
-  onSignOut, 
-  onSignIn 
-}: { 
-  authState: AuthState; 
-  usageStats: UsageStats | null;
-  onSignOut: () => void;
-  onSignIn: () => void;
-}) => {
-  return (
-    <div className="max-w-4xl mx-auto mt-2 flex justify-between items-center text-xs text-gray-400">
-      <div className="flex items-center gap-2">
-        {authState.user ? (
-          <>
-            <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-            <span>Signed in as {authState.user.email}</span>
-            <span>• {usageStats ? `${usageStats.current_usage}/${usageStats.limit}` : 'Loading...'} requests/day</span>
-            <button
-              onClick={onSignOut}
-              className="text-blue-400 hover:text-blue-300 underline ml-2"
-            >
-              Sign out
-            </button>
-          </>
-        ) : (
-          <>
-            <div className="w-2 h-2 bg-yellow-500 rounded-full"></div>
-            <span>Guest</span>
-            <span>• {usageStats ? `${usageStats.current_usage}/${usageStats.limit}` : 'Loading...'} requests/day</span>
-            <button
-              onClick={onSignIn}
-              className="text-blue-400 hover:text-blue-300 underline ml-2"
-            >
-              Sign in for more
-            </button>
-          </>
-        )}
-      </div>
-    </div>
-  );
-});
-UsageStatusView.displayName = 'UsageStatusView';
-
-const ChatInput = React.memo(({ 
-  onSend, 
-  isLoading, 
-  isGogginsProject, 
-  isGogginsMode 
-}: {
-  onSend: (text: string) => void;
-  isLoading: boolean;
-  isGogginsProject: boolean;
-  isGogginsMode: boolean;
-}) => {
-  const [localInput, setLocalInput] = useState('');
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-
-  const adjustTextareaHeight = () => {
-    const textarea = textareaRef.current;
-    if (textarea) {
-      textarea.style.height = 'auto';
-      textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
-    }
-  };
-
-  useEffect(adjustTextareaHeight, [localInput]);
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (localInput.trim() && !isLoading) {
-      onSend(localInput);
-      setLocalInput('');
-    }
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        handleSubmit(e as unknown as React.FormEvent);
-    }
-  };
-
-  return (
-    <form onSubmit={handleSubmit} className="relative max-w-4xl mx-auto">
-      <textarea
-        ref={textareaRef}
-        rows={1}
-        value={localInput}
-        onChange={e => setLocalInput(e.target.value)}
-        onKeyDown={handleKeyDown}
-        placeholder={isGogginsProject && isGogginsMode ? "What's your excuse?" : "Ask a question..."}
-        disabled={isLoading}
-        className="w-full bg-gray-700 border border-gray-600 rounded-lg py-2 sm:py-3 pl-3 sm:pl-4 pr-12 sm:pr-14 text-sm sm:text-base text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all resize-none leading-tight min-h-[44px] sm:min-h-[52px]"
-      />
-      <button
-        type="submit"
-        disabled={isLoading || !localInput.trim()}
-        className="absolute right-2 sm:right-3 top-1/2 -translate-y-1/2 p-1.5 sm:p-2 rounded-full bg-blue-600 text-white hover:bg-blue-500 disabled:bg-gray-500 disabled:cursor-not-allowed transition-colors"
-        aria-label="Send message"
-      >
-        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 sm:h-5 sm:w-5" viewBox="0 0 20 20" fill="currentColor">
-          <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" />
-        </svg>
-      </button>
-    </form>
-  );
-});
-ChatInput.displayName = 'ChatInput';
-
-// Add this at the top of the file (or in a types file if preferred)
-declare global {
-  interface ImportMeta {
-    env: {
-      [key: string]: any;
-    };
-  }
-}
-
 const Chat: React.FC<ChatProps> = ({ project, onFirstMessage }) => {
   const { systemInstruction, id: projectId, defaultPrompts } = project;
   const [chat, setChat] = useState<BackendGeminiService | null>(null);
@@ -280,12 +43,9 @@ const Chat: React.FC<ChatProps> = ({ project, onFirstMessage }) => {
   const [userInput, setUserInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isGogginsMode, setIsGogginsMode] = useState(false);
-  const [agentStatus, setAgentStatus] = useState<string>('');
-  const [showAgentStatus, setShowAgentStatus] = useState(false);
   const [hasUserSentMessage, setHasUserSentMessage] = useState(false);
   const gogginsAudioRef = useRef<{ playAudio: (text: string) => void; stop: () => void } | null>(null);
-  // Remove all steps/progress state and rendering
-  
+
   // Auth state
   const [authState, setAuthState] = useState<AuthState>({ user: null, loading: true, error: null });
   const [showAuthModal, setShowAuthModal] = useState(false);
@@ -315,20 +75,11 @@ const Chat: React.FC<ChatProps> = ({ project, onFirstMessage }) => {
       ? GOGGINS_SYSTEM_INSTRUCTION 
       : systemInstruction;
 
-    // Determine welcome text first
-    let welcomeText: string;
-    
-    if (isGogginsProject) {
-      welcomeText = isGogginsMode
+    const welcomeText = isGogginsProject
+      ? isGogginsMode
         ? "It's time to get after it. What's your excuse today? Let's go!"
-        : "You are in Q&A mode. Ask me anything about this project's features or the technologies used to build it.";
-    } else if (projectId === 'research-gpt') {
-      welcomeText = "Hello! I am the 'Research GPT' agent. I am connected to a live backend that uses LangChain and the OpenAI API to perform real-time web searches and research. What topic can I help you investigate today?";
-    } else if (projectId === 'ask-my-resume') {
-        welcomeText = "Hello! I am Yanqing's personal AI assistant with access to his complete resume. What would you like to know about his experience or qualifications?";
-    } else {
-      welcomeText = "🤖 Initializing chat service...";
-    }
+        : "You are in Q&A mode. Ask me anything about this project's features or the technologies used to build it."
+      : "🤖 Initializing chat service...";
 
     // Set initial welcome message
     setMessages([{
@@ -337,37 +88,30 @@ const Chat: React.FC<ChatProps> = ({ project, onFirstMessage }) => {
       text: welcomeText,
     }]);
 
-    // Only use backend Gemini for non-backend projects
-    if (!['research-gpt', 'ask-my-resume'].includes(projectId)) {
-      createBackendChat(activeSystemInstruction, backendUrl)
-        .then(newChat => {
-          setChat(newChat);
-          // Update welcome message on successful connection
-          if (!isGogginsProject) {
-            setMessages([{
-              id: 'initial-message',
-              role: 'model',
-              text: "Hello! How can I help you today regarding this project?",
-            }]);
-          }
-        })
-        .catch(error => {
-          console.error('Failed to create backend chat:', error);
-          setChat(null);
-          // Show generic API key error
+    createBackendChat(activeSystemInstruction, backendUrl)
+      .then(newChat => {
+        setChat(newChat);
+        if (!isGogginsProject) {
           setMessages([{
             id: 'initial-message',
             role: 'model',
-            text: "⚠️ **Chat service not available**\n\nThe Gemini API key is not configured or invalid. Please:\n\n1. Check your backend `.env` file has `GEMINI_API_KEY=your_key`\n2. Verify your API key is valid\n3. Restart the backend server\n4. Check the browser console for detailed errors",
+            text: "Hello! How can I help you today regarding this project?",
           }]);
-        });
-    } else {
-      setChat(null);
-    }
+        }
+      })
+      .catch(error => {
+        console.error('Failed to create backend chat:', error);
+        setChat(null);
+        setMessages([{
+          id: 'initial-message',
+          role: 'model',
+          text: "⚠️ **Chat service not available**\n\nThe Gemini API key is not configured or invalid. Please:\n\n1. Check your backend `.env` file has `GEMINI_API_KEY=your_key`\n2. Verify your API key is valid\n3. Restart the backend server\n4. Check the browser console for detailed errors",
+        }]);
+      });
     
     // Cleanup function
     return () => {
-      if (chat && !['research-gpt', 'ask-my-resume'].includes(projectId)) {
+      if (chat) {
         chat.cleanup();
       }
     };
@@ -483,181 +227,6 @@ const Chat: React.FC<ChatProps> = ({ project, onFirstMessage }) => {
     
     const modelMessageId = (Date.now() + 1).toString();
 
-    // Handle backend-powered projects
-    if (projectId === 'research-gpt' || projectId === 'ask-my-resume') {
-        
-        // Use streaming for research-gpt and resume search
-        if (projectId === 'research-gpt') {
-            setMessages((prev: ChatMessage[]) => [...prev, { id: modelMessageId, role: 'model', text: '' }]);
-            setShowAgentStatus(true);
-            setAgentStatus('');
-            
-            try {
-                let currentText = '';
-                let statusText = '';
-                
-                await apiService.streamWithAuth(
-                    `/api/research/stream?query=${encodeURIComponent(messageText)}`,
-                    (data) => {
-                        if (data.type === 'heartbeat') {
-                            // Ignore heartbeat messages - they're just for keeping connection alive
-                            return;
-                        } else if (data.type === 'status') {
-                            // Always accumulate status messages
-                            statusText += data.message + '\n';
-                            setAgentStatus(statusText);
-                            
-                        } else if (data.type === 'chunk') {
-                            // All chunks should now go to status window since we have proper separation
-                            statusText += data.text;
-                            setAgentStatus(statusText);
-                        } else if (data.type === 'response') {
-                            // Final response content - always goes to main chat
-                            currentText += data.text;
-                            setMessages((prev: ChatMessage[]) =>
-                                prev.map((msg: ChatMessage) =>
-                                    msg.id === modelMessageId ? { ...msg, text: currentText } : msg
-                                )
-                            );
-                        } else if (data.type === 'error') {
-                            currentText = `Sorry, I encountered an error during research.\n\n**Details:** ${data.message}`;
-                            setMessages((prev: ChatMessage[]) =>
-                                prev.map((msg: ChatMessage) =>
-                                    msg.id === modelMessageId ? { ...msg, text: currentText } : msg
-                                )
-                            );
-                        } else if (data.type === 'done') {
-                            // Stream completed successfully
-                            setIsLoading(false);
-                            setShowAgentStatus(false);
-                            return;
-                        }
-                    },
-                    (error, needsAuth) => {
-                        if (needsAuth) {
-                            setShowAuthModal(true);
-                            currentText = 'Please sign in to continue using the research service.';
-                        } else {
-                            currentText = currentText || `Sorry, I encountered an error connecting to the research service: ${error}`;
-                        }
-                        setMessages((prev: ChatMessage[]) =>
-                            prev.map((msg: ChatMessage) =>
-                                msg.id === modelMessageId ? { ...msg, text: currentText } : msg
-                            )
-                        );
-                        setIsLoading(false);
-                        setShowAgentStatus(false);
-                    },
-                    () => {
-                        setIsLoading(false);
-                        setShowAgentStatus(false);
-                    }
-                );
-            } catch (error) {
-                console.error('Error setting up stream:', error);
-                setMessages((prev: ChatMessage[]) =>
-                    prev.map((msg: ChatMessage) =>
-                        msg.id === modelMessageId
-                            ? { ...msg, text: 'Sorry, I encountered an error setting up the research stream. Please try again.' }
-                            : msg
-                    )
-                );
-                setIsLoading(false);
-                setShowAgentStatus(false);
-            }
-            return;
-        }
-        
-        // Use streaming for ask-my-resume as well
-        if (projectId === 'ask-my-resume') {
-            setMessages((prev: ChatMessage[]) => [...prev, { id: modelMessageId, role: 'model', text: '' }]);
-            setShowAgentStatus(true);
-            setAgentStatus('');
-            
-            try {
-                let currentText = '';
-                let statusText = '';
-                
-                const history = messages
-                    .filter(msg => msg.id !== 'initial-message')
-                    .map(msg => [msg.role, msg.text]);
-                
-                const chatHistoryParam = encodeURIComponent(JSON.stringify(history));
-                
-                await apiService.streamWithAuth(
-                    `/api/resume-search/stream?query=${encodeURIComponent(messageText)}&chat_history=${chatHistoryParam}`,
-                    (data) => {
-                        if (data.type === 'heartbeat') {
-                            // Ignore heartbeat messages - they're just for keeping connection alive
-                            return;
-                        } else if (data.type === 'status') {
-                            // Always accumulate status messages
-                            statusText += data.message + '\n';
-                            setAgentStatus(statusText);
-                            
-                        } else if (data.type === 'chunk') {
-                            // All chunks should now go to status window since we have proper separation
-                            statusText += data.text;
-                            setAgentStatus(statusText);
-                        } else if (data.type === 'response') {
-                            // Final response content - always goes to main chat
-                            currentText += data.text;
-                            setMessages((prev: ChatMessage[]) =>
-                                prev.map((msg: ChatMessage) =>
-                                    msg.id === modelMessageId ? { ...msg, text: currentText } : msg
-                                )
-                            );
-                        } else if (data.type === 'error') {
-                            currentText = `Sorry, I encountered an error during resume search.\n\n**Details:** ${data.message}`;
-                            setMessages((prev: ChatMessage[]) =>
-                                prev.map((msg: ChatMessage) =>
-                                    msg.id === modelMessageId ? { ...msg, text: currentText } : msg
-                                )
-                            );
-                        } else if (data.type === 'done') {
-                            // Stream completed successfully
-                            setIsLoading(false);
-                            setShowAgentStatus(false);
-                            return;
-                        }
-                    },
-                    (error, needsAuth) => {
-                        if (needsAuth) {
-                            setShowAuthModal(true);
-                            currentText = 'Please sign in to continue using the resume search service.';
-                        } else {
-                            currentText = currentText || `Sorry, I encountered an error connecting to the resume search service: ${error}`;
-                        }
-                        setMessages((prev: ChatMessage[]) =>
-                            prev.map((msg: ChatMessage) =>
-                                msg.id === modelMessageId ? { ...msg, text: currentText } : msg
-                            )
-                        );
-                        setIsLoading(false);
-                        setShowAgentStatus(false);
-                    },
-                    () => {
-                        setIsLoading(false);
-                        setShowAgentStatus(false);
-                    }
-                );
-            } catch (error) {
-                console.error('Error setting up resume search stream:', error);
-                setMessages((prev: ChatMessage[]) =>
-                    prev.map((msg: ChatMessage) =>
-                        msg.id === modelMessageId
-                            ? { ...msg, text: 'Sorry, I encountered an error setting up the resume search stream. Please try again.' }
-                            : msg
-                    )
-                );
-                setIsLoading(false);
-                setShowAgentStatus(false);
-            }
-            return;
-        }
-        return;
-    }
-
     if (!chat) {
       setMessages((prev: ChatMessage[]) => [...prev, { id: modelMessageId, role: 'model', text: '⚠️ **Chat service not available**\n\nThe Gemini API key is not configured or invalid. Please:\n\n1. Check your backend `.env` file has `GEMINI_API_KEY=your_key`\n2. Verify your API key is valid\n3. Restart the backend server\n4. Check the browser console for detailed errors' }]);
       setIsLoading(false);
@@ -743,31 +312,6 @@ const Chat: React.FC<ChatProps> = ({ project, onFirstMessage }) => {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Agent Status Window - responsive */}
-      {showAgentStatus && (
-        <div className="bg-gray-800/90 border-b border-gray-700/50 p-2 sm:p-3 max-w-4xl mx-auto w-full">
-          <div className="flex items-center gap-2 mb-2">
-            <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
-            <span className="text-xs font-medium text-gray-300">Agent Status</span>
-          </div>
-          <div className="bg-gray-900/50 rounded-lg p-2 sm:p-3 max-h-32 sm:max-h-40 overflow-y-auto">
-            <div className="text-xs text-gray-300 whitespace-pre-wrap font-mono leading-relaxed">
-              {agentStatus.split('\n').map((line, index) => (
-                <div key={index} className={`
-                  ${line.startsWith('🔎') || line.startsWith('🔍') || line.startsWith('📄') || line.startsWith('🤖') || line.startsWith('📝') || line.startsWith('💭') || line.startsWith('✅') ? 'text-blue-400 font-medium' : ''}
-                  ${line.startsWith('>') ? 'text-gray-500 ml-2' : ''}
-                  ${line.includes('Invoking:') ? 'text-yellow-400' : ''}
-                  ${line.includes('completed') ? 'text-green-400' : ''}
-                `}>
-                  {line}
-                </div>
-              ))}
-              {!agentStatus && <span className="text-gray-500">Initializing...</span>}
-            </div>
-          </div>
-        </div>
-      )}
-      
       {/* Messages area - responsive */}
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-4xl mx-auto p-3 sm:p-4 md:p-6 space-y-4 sm:space-y-6 md:space-y-8">

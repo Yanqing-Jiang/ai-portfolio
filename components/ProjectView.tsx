@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import type { Project } from '../types';
 import Chat from './Chat';
-import { Page as AnalyticsSqlPage } from './analytics/sql';
 import { Page as LinkedInPhotoPage } from './linkedinPhoto/Page';
 import { ConversationalAnalyticsPage } from './conversationalAnalytics';
 import LegacyProjectPage from './LegacyProjectPage';
@@ -37,17 +36,6 @@ const ProjectView: React.FC<ProjectViewProps> = ({ project }) => {
         <ProjectHelmet project={project} />
         <article className="h-full" aria-label={project.title}>
           <ConversationalAnalyticsPage />
-        </article>
-      </>
-    );
-  }
-
-  if (project.id === 'next-gen-analytics-sql') {
-    return (
-      <>
-        <ProjectHelmet project={project} />
-        <article className="h-full" aria-label={project.title}>
-          <AnalyticsSqlPage />
         </article>
       </>
     );

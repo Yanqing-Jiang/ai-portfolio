@@ -230,6 +230,7 @@ export interface ExplainMovePanelProps {
     explanation: BoundString;
     factors?: BoundArray;
     citations?: BoundArray;
+    reasoningSteps?: BoundArray;
 }
 
 export interface ErrorPanelProps {

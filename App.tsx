@@ -367,7 +367,7 @@ const Layout: React.FC = () => {
             <Route path="/project/fortune-agent/compatibility/:fortuneId" element={<FortuneAgentCompatibilityResultRoute />} />
             <Route path="/project/fortune-agent/lucky-day/:fortuneId" element={<FortuneAgentOccasionResultRoute />} />
 
-            {/* Legacy result routes (mock-data fallback during migration) */}
+            {/* State-backed result routes used by the current input flows */}
             <Route path="/project/fortune-agent/compatibility/result" element={<FortuneAgentCompatibilityResultRoute />} />
             <Route path="/project/fortune-agent/lucky-day/result" element={<FortuneAgentOccasionResultRoute />} />
             <Route path="/project/fortune-agent/luck-draw/result" element={<FortuneAgentCycleResultRoute />} />

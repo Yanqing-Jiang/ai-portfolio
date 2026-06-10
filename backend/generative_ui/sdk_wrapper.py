@@ -26,9 +26,8 @@ Called from: agent_v2.py
 Invokes: anthropic Messages API
 Why: Centralizes API initialization and query handling for A2UI flows.
 
-Note: This version uses the direct Anthropic Messages API instead of Claude Agent SDK
-to avoid cold-boot overhead (~2-12s) that causes timeouts on resource-constrained
-backends like Render.com.
+Note: This version uses the direct Anthropic Messages API instead of Claude
+Agent SDK to stay within the API startup budget.
 
 Implements optimizations:
 - #8: Improved System Prompt Caching with TTL
@@ -424,8 +423,8 @@ class A2UISDKWrapper:
     Invokes: anthropic.Anthropic.messages.create
     Why: Centralizes Anthropic API initialization and response parsing for A2UI.
     
-    Note: Uses direct Anthropic Messages API instead of Claude Agent SDK to avoid
-    cold-boot overhead (2-12s) that causes timeouts on Render.com.
+    Note: Uses the direct Anthropic Messages API instead of Claude Agent SDK to
+    stay within the API startup budget.
     """
 
     def __init__(
@@ -515,9 +514,6 @@ class A2UISDKWrapper:
         self,
         system_prompt: Optional[str | Dict[str, Any]] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
-        allowed_tools: Optional[List[str]] = None,
-        mcp_tools: Optional[List[Any]] = None,
-        use_sdk: Optional[bool] = None,
     ) -> bool:
         """
         Method: A2UISDKWrapper.initialize - initialize Anthropic API client for A2UI.
@@ -528,7 +524,6 @@ class A2UISDKWrapper:
         Args:
             system_prompt: Optional system prompt for the conversation
             tools: Optional list of tool definitions for Claude to use
-            allowed_tools, mcp_tools, use_sdk: Ignored (API mode only)
         """
         if not ANTHROPIC_AVAILABLE or anthropic is None:
             raise RuntimeError(

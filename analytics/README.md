@@ -1,7 +1,6 @@
 # Conversational Analytics (canonical)
 
 - Primary analytics stack: `backend/conversational_analytics` (FastAPI router mounted at `/api/conv-analytics`) with the React UI in `components/conversationalAnalytics`.
-- Legacy agent UI is archived under `analytics-legacy/next-gen-analytics-agent`; SQL demo remains in `components/analytics/sql` for comparison.
 - Architecture reference: `docs/architecture-conversational-analytics.md`.
 
 ## Quick start (PowerShell)
@@ -33,6 +32,5 @@ npm run dev
 
 ## What changed
 - The `project/next-gen-analytics-agent` slug now routes to the Conversational Analytics experience.
-- Memory-flow artifacts and tests live in `analytics-legacy/next-gen-analytics-agent` for reference only.
+- The superseded analytics UI, SQL workflow, and memory-flow implementation were retired in June 2026.
 - Marketing/SEO links should prefer `conversational-analytics` naming; see `constants/seo.ts` and `constants.ts`.
-

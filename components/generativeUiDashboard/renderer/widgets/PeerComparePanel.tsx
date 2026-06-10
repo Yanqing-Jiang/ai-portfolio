@@ -162,7 +162,7 @@ export function PeerComparePanel({
     const isRevisit = Boolean(getByPath(dataModel, '/data/explanation/isRevisit'));
 
     // Check if we have real content (not placeholder) to prevent streaming placeholder text
-    const hasRealContent = explanationText && explanationText !== defaultText;
+    const hasRealContent = Boolean(explanationText && explanationText !== defaultText);
 
     // Get news data from dataModel using getByPath
     const newsData = useMemo(() => {

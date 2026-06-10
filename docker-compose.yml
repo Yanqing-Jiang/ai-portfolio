@@ -52,13 +52,9 @@ services:
     deploy:
       resources:
         limits:
-          # PR-Infra (2026-05-10): lifted from 1G/2 CPUs to 4G/8 CPUs.
-          # Mac Mini has 12 CPUs / 24 GB total (Docker engine sees 12 CPUs
-          # / 7.65 GB). At 2 CPUs we were using ~17% of Docker's CPU
-          # slice while OpenAI API latency was the demo bottleneck — wasted
-          # headroom. 6 gunicorn workers × ~600 MB Python footprint fits
-          # comfortably under 4G; the extra cores absorb concurrent demo
-          # sessions during portfolio walkthroughs.
+          # The backend runs one gunicorn worker because active Fortune streams
+          # use process-local state. CPU headroom still benefits calculations
+          # and concurrent async requests within that worker.
           memory: 4G
           cpus: "8.0"
     logging:

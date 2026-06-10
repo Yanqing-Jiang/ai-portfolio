@@ -29,11 +29,9 @@ Cancellation: identical to ``with_heartbeat`` — uses ``asyncio.wait`` (NOT
 it eats the ``CancelledError``/``StopAsyncIteration`` so propagation stays
 clean.
 
-Cost: zero Postgres roundtrips. The consumer in ``routes.py`` issues
-``_emit(bridge.emit_progress(...))`` *without* ``event_name="progress"``,
-which keeps the emit out of the ``DURABLE_EVENTS`` mirror. The local seq
-pool already comes from PR1's batched ``allocate_seq`` (chunks of 16), so
-~6 heartbeats over a 50s narrative fit comfortably inside one prefetch.
+Cost: zero additional Postgres roundtrips beyond the existing batched sequence
+allocator. Roughly six heartbeats over a 50-second narrative fit inside one
+prefetched sequence block.
 """
 
 from __future__ import annotations

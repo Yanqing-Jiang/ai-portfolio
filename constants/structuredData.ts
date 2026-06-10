@@ -2,7 +2,6 @@ import type { Project } from '../types';
 import {
   DEFAULT_OG_IMAGE,
   DEFAULT_SAME_AS,
-  DEFAULT_TWITTER_HANDLE,
   LANDING_METRICS,
   LANDING_SEO,
   LANDING_SERVICE_SUMMARY,

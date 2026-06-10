@@ -96,7 +96,6 @@ export function ClarificationOverlay({
     request,
     onSubmit,
     onDismiss,
-    fullScreen = true,
 }: ClarificationOverlayProps): React.ReactElement | null {
     const [responses, setResponses] = useState<Record<string, string | string[]>>({});
     const overlayRef = useRef<HTMLDivElement>(null);

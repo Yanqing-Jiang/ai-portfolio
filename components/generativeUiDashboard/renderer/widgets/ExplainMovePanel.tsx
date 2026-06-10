@@ -116,7 +116,7 @@ export function ExplainMovePanel({
     );
 
     // Check if we have real content (not placeholder) to prevent streaming placeholder text
-    const hasRealContent = fullExplanation && fullExplanation !== DEFAULT_EXPLANATION;
+    const hasRealContent = Boolean(fullExplanation && fullExplanation !== DEFAULT_EXPLANATION);
 
     // Use streaming text hook for the narrative
     // Skip streaming entirely for revisited dashboards - show full text immediately

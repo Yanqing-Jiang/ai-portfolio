@@ -10,10 +10,10 @@
 #   Invokes: yaml.safe_load, json.load, A2UISkillMeta
 #   Why: Supports the official Claude Agent Skills format.
 # Function: load_all_skills
-#   Role: Load skills from both .claude/skills/ and legacy directories.
+#   Role: Load skills from the authoritative .claude/skills/ directory.
 #   Called from: backend.generative_ui.skills.get_a2ui_skills
-#   Invokes: load_claude_skills, load_legacy_skills
-#   Why: Enables gradual migration to new format while maintaining backward compat.
+#   Invokes: load_claude_skills
+#   Why: Provides one canonical skill format and source.
 # Function: get_a2ui_skills
 #   Role: Return cached list of skills for reuse across requests.
 #   Called from: backend.generative_ui.agent_v2.A2UIAgent
@@ -270,11 +270,6 @@ def load_claude_skill(skill_dir: Path) -> A2UISkillMeta:
         tools=tools,
         layout_config=layout_config,
     )
-
-
-def load_legacy_skills(directory: Path | None = None) -> List[A2UISkillMeta]:
-    """Legacy loader removed after full SDK adoption."""
-    raise RuntimeError("Legacy skill format is no longer supported.")
 
 
 def load_claude_skills(directory: Path | None = None) -> List[A2UISkillMeta]:

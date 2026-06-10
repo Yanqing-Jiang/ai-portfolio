@@ -1,195 +1,117 @@
-# AI Portfolio (Yanqing Jiang)
+# AI Portfolio
 
-**🌐 Live site: [yanqing.app](https://yanqing.app)**
+Live site: [yanqing.app](https://yanqing.app)
 
-[![Yanqing Jiang — AI Portfolio preview](docs/preview.png)](https://yanqing.app)
+Yanqing Jiang's portfolio is a React and FastAPI application that combines
+prerendered project pages with a small set of live AI experiences.
 
-[![Project gallery preview](docs/preview-projects.png)](https://yanqing.app)
+## Active Experiences
 
-Interactive AI portfolio that combines a Vite-powered React frontend, a FastAPI backend, and multiple agentic workflows (analytics copilots, resume Q&A, LinkedIn headshot generator, and research assistants). The site prerenders static pages, streams live AI responses, and exposes JSON-LD/SEO metadata for every project.
+- Conversational Analytics: Claude-driven financial analysis with SQL, charts,
+  clarifications, and SSE progress at `/api/conv-analytics`.
+- Agent to UI: generative dashboards rendered from A2UI messages.
+- Fortune Agent: streamed BaZi readings, replayable snapshots, corrections,
+  follow-up actions, and an Ask workflow.
+- LinkedIn Photo: image validation, prompt expansion, and Gemini image editing.
+- Project chat: Gemini-backed Q&A for portfolio entries. Retired projects such
+  as Research GPT and Ask My Resume are presented as historical case studies;
+  they no longer have dedicated backend agents.
 
-> For deeper diagrams and sequence flows, see `ARCHITECTURE.md`.
+The old analytics workflow, research agent, resume agent, and their streaming
+routes were retired in June 2026. The `next-gen-analytics-agent` project slug
+now opens the canonical Conversational Analytics experience.
 
 ## Repository Layout
 
-```
+```text
 .
-├── App.tsx                  # Client router and layout wrapper
-├── components/              # React feature modules (analytics, LinkedIn photo, chat, UI)
-├── constants/               # Project catalog, SEO config, structured data builders
-├── services/                # Frontend API clients (Gemini, REST, config)
-├── backend/                 # FastAPI app, analytics suite, LinkedIn photo pipeline
-├── scripts/                 # Prerender output, demo clients, automation helpers
-├── ssr/                     # Server-side rendering entry for Vite build
-└── public/                  # Static assets served by Vite
+|-- App.tsx                         React router and application shell
+|-- components/
+|   |-- conversationalAnalytics/    Canonical analytics UI
+|   |-- generativeUiDashboard/      A2UI dashboard and Fortune UI
+|   |-- linkedinPhoto/              Headshot workflow
+|   `-- Chat.tsx                    Shared Gemini project chat
+|-- backend/
+|   |-- conversational_analytics/   Analytics agent and API routes
+|   |-- generative_ui/              A2UI dashboard runtime
+|   |-- fortune/                    Fortune runtime and persistence
+|   |-- linkedin_photo/             Headshot service
+|   `-- main.py                     FastAPI application
+|-- constants.ts                    Project catalog and project SEO
+|-- scripts/prerender.mjs           Static route generation
+|-- ssr/                            Vite SSR entry
+`-- public/                         Static assets and generated feeds
 ```
 
-## Key Features
+## Local Development
 
-- **Agent showcase landing page** – Rich project grid, animations, and SEO tags (Open Graph, Twitter, JSON-LD) driven by `constants.ts` and `components/LandingPage.tsx`.
-- **Next Gen Analytics (Agents)** – `/project/next-gen-analytics-agent` now runs on the Conversational Analytics backend (`/api/conv-analytics`) while retaining the original Next Gen naming and SEO; uses `components/conversationalAnalytics` for the chat UI.
-- **Legacy analytics (archived)** – The former Next Gen Analytics agent UI is stored under `analytics-legacy/next-gen-analytics-agent`; SQL flows remain under `components/analytics/sql` for comparison.
-- **LinkedIn Photo generator** – `/components/linkedinPhoto/Page.tsx` integrates the FastAPI `linkedin_photo` router to expand style prompts, call Gemini image editing, and manage user-facing transparency.
-- **Resume & research agents** – Backend endpoints in `backend/resume_agent.py` and `backend/research_agent.py` answer targeted queries with streaming reasoning.
-- **Structured SEO + prerendering** – `ProjectHelmet` and `constants/structuredData.ts` inject page-level metadata, while `scripts/prerender.mjs` prebuilds static HTML, sitemaps, and JSON assets.
-- **Rate limiting & payments ready** – Redis-backed limiter (`backend/rate_limiter.py`) with Stripe/PayPal hooks for token packs; docs outline the future safeguard plan.
+Prerequisites:
 
-## Frontend Overview
-
-- **Stack**: React 19 + TypeScript, Vite 6, Tailwind utilities (via `tailwind-merge`), Framer Motion animations, React Router 6.
-- **Data & services**:
-  - `services/apiService.ts` centralizes authenticated REST calls (JWT from Supabase).
-  - `services/config.ts` exposes runtime backend URLs.
-  - `services/backendGeminiService.ts` handles Gemini text streaming.
-- **Feature modules**:
-  - `components/conversationalAnalytics/**` for the primary analytics chat.
-  - `components/analytics/**` for SQL demos and legacy comparisons (memory flow archived in `analytics-legacy/`).
-  - `components/linkedinPhoto/**` for the 3-step headshot wizard.
-  - `components/Chat.tsx` for shared agent chat UI.
-  - `components/ProjectHelmet.tsx` for head/meta tags and schema injection.
-- **Routing**: `App.tsx` mounts the landing page at `/` and project pages at `/project/:id`. SSR builds reuse `ssr/entry-server.tsx`.
-- **SEO**: `constants/seo.ts` tracks canonical tags, sameAs profiles, default OG images, and AI crawler policies. Project-specific SEO lives in `constants.ts`.
-
-## Backend Overview
-
-- **FastAPI app** (`backend/main.py`):
-  - Loads `.env`, configures CORS, registers routers for analytics, research, resume, text-to-speech, payments, and LinkedIn photo flows.
-  - Streams Server-Sent Events for analytics workflows (progress, tool calls, reasoning traces).
-  - Serves pre-render assets (`public/ai-projects.json`) and health endpoints.
-- **Conversational analytics** (`backend/conversational_analytics/`):
-  - Claude-driven agent and supervisor orchestration with SSE endpoints at `/api/conv-analytics`.
-  - Skills, memory, and trading integrations live under `skills/`, `memory/`, and `tools/`.
-- **Analytics suite** (`backend/analytics/`, legacy):
-  - `flows/workflow.py` orchestrates planner-executor, single-agent, and multi-agent pipelines.
-  - SQL templates sourced from `backend/config/schemas/*.yaml`.
-  - Uses LangGraph-inspired task graphs, ECharts-ready payloads, and telemetry for the frontend process panel.
-- **LinkedIn photo pipeline** (`backend/linkedin_photo/`):
-  - Validates uploads (Pillow), enforces prompt quotas, expands style instructions, and calls Gemini image editing via Banana-hosted Nano models.
-- **Shared services**:
-  - `gemini_service.py` – session manager for Gemini text agents.
-  - `rate_limiter.py` – Redis + in-memory fallback for global/per-user quotas with scopes.
-  - `analytics_agent.py` – legacy standalone orchestrator kept for compatibility.
-  - `tts.py` – text-to-speech synthesis.
-- **Integrations**: Supabase JWT validation, Stripe and PayPal tokens, optional external search APIs, Gemini SDK.
-
-## Setup & Development
-
-### Prerequisites
 - Node.js 20+
-- Python 3.11+
-- PowerShell (scripts expect PS; adjust if using another shell)
-- Optional: Redis for production-like rate limiting
+- Python 3.12
+- Redis for production-like rate limiting and ephemeral shared state
 
-### Frontend Setup
-```powershell
-# from repo root
+Frontend:
+
+```bash
 npm install
-Copy-Item .env.example .env        # supply VITE_* values if needed
-npm run dev                        # dev server at http://localhost:5173
+npm run dev
 ```
 
-Environment keys (`.env`):
+Backend:
+
+```bash
+python3 -m venv backend/.venv
+backend/.venv/bin/pip install -r backend/requirements.txt
+backend/.venv/bin/uvicorn main:app --app-dir backend --reload --port 8000
 ```
+
+Common environment variables:
+
+```text
 VITE_BACKEND_URL=http://localhost:8000
 VITE_SUPABASE_URL=...
 VITE_SUPABASE_ANON_KEY=...
-```
-
-### Backend Setup
-```powershell
-Set-Location backend
-pip install -r requirements.txt
-Copy-Item .env.example .env        # populate API keys and secrets
-py -m uvicorn main:app --reload --port 8000
-```
-
-`backend/.env` expects (subset):
-```
-GEMINI_API_KEY=...
 CLAUDE_API_KEY=...
-DATABASE_URL=...
-CONV_ANALYTICS_DEBUG=true
+GEMINI_API_KEY=...
 OPENAI_API_KEY=...
+SUPABASE_DB_URL=...
 SUPABASE_JWT_SECRET=...
 REDIS_URL=redis://localhost:6379/0
-STRIPE_SECRET_KEY=...
-PAYPAL_CLIENT_ID=...
-PAYPAL_CLIENT_SECRET=...
 ```
 
-### Quick PowerShell Workflow
-The repo root contains a ready-made sequence (see user instructions above):
-1. Clear ports 8000/5173.
-2. Launch FastAPI with logging and capture PID.
-3. Verify `/docs` health check and tail `backend_uvicorn.log`.
-4. Start Vite dev server with logs to `vite.log`.
-5. Validate `http://localhost:5173/@vite/client`.
-6. Stop both processes when finished.
+Feature-specific integrations degrade or stay disabled when their keys are not
+configured. Secrets belong in local environment files and must not be committed.
 
-## Builds, Tests, and Quality
+## Verification
 
-| Target | Command | Notes |
-|--------|---------|-------|
-| Client bundle | `npm run build` | Runs Vite client build, SSR bundle, and `scripts/prerender.mjs` (generates `dist`, `dist-ssr`, `sitemap*.xml`). |
-| SSR only | `npm run build:ssr` | Produces server bundle at `dist-ssr/entry-server.js`. |
-| Static prerender | `npm run prerender` | Recreates HTML snapshots for every project route. |
-| Unit tests (frontend) | `npm run test` | Uses Vitest (see `components/**/__tests__`). |
-| Backend tests | `pytest backend` | Mocks Gemini, Supabase, and HTTP calls via fixtures. |
-| Type check (TS) | `npx tsc --noEmit` | Validates TypeScript across components and services. |
+```bash
+npm run test
+npx tsc --noEmit
+npm run build
+backend/.venv/bin/python -m pytest backend/tests
+backend/.venv/bin/python -m compileall -q backend scripts
+```
 
-Continuous integration should run `npm run build` and `pytest backend` before deployment; large analytics bundles may trigger Vite chunk warnings (see build logs).
+`npm run build` creates the client bundle, SSR bundle, prerendered project
+pages, sitemaps, and public JSON feeds.
 
 ## Deployment
 
-### Production Architecture
+The frontend deploys to Cloudflare Pages through
+`.github/workflows/deploy.yml`.
 
-| Component | Host | URL |
-|-----------|------|-----|
-| Frontend | Cloudflare Pages | `https://yanqing.app` |
-| Backend API | Mac Mini (Docker) | `https://portfolio-api.yanqing.app` |
-| Redis | Mac Mini (Docker) | Internal Docker network |
-| Database | Supabase (AWS) | PostgreSQL via `asyncpg` |
-| DNS & CDN | Cloudflare | Authoritative for `yanqing.app` |
-
-### Frontend (Cloudflare Pages)
-
-- Auto-deployed on push to `main` via GitHub Actions (`.github/workflows/deploy.yml`)
-- Build: `npm run build` → output `dist/`
-- Environment variables configured in CF Pages dashboard
-- Manual deploy: `CLOUDFLARE_API_TOKEN=<token> CLOUDFLARE_ACCOUNT_ID=<id> npx wrangler pages deploy dist --project-name=ai-portfolio`
-
-### Backend (Mac Mini + Docker)
+The backend and Redis run on the Mac Mini through Docker Compose:
 
 ```bash
-# Start/rebuild backend
 docker compose up -d --build
-
-# View logs
 docker compose logs -f backend
-
-# Health check
 curl https://portfolio-api.yanqing.app/health
 ```
 
-- `docker-compose.yml` runs FastAPI + Redis containers
-- Exposed via Cloudflare Tunnel (`~/.cloudflared/config.yml`)
-- Health monitor: `com.portfolio.monitor.plist` (launchd)
-- Env: `backend/.env.production` (mounted by Docker, never committed)
+Cloudflare Tunnel exposes the backend at
+`https://portfolio-api.yanqing.app`. The backend intentionally runs one
+gunicorn worker because active Fortune streams still use process-local session
+state.
 
-### Notes
-
-- **Sitemaps & SEO**: `scripts/prerender.mjs` writes sitemaps. `SITE_BASE_URL` in `constants/seo.ts` must match the deployed domain.
-- **SSE streaming**: Heartbeats every 15-30s required (CF Tunnel 100s idle timeout).
-- **Rate limiting**: Redis-backed (`rate_limiter.py`) with in-memory fallback; Stripe/PayPal enable paid token packs.
-- **Render**: `render.yaml` retained for reference but no longer used in production.
-
-## Additional Resources
-
-- `ARCHITECTURE.md` – high-level diagrams and module references.
-- `analytics-legacy/next-gen-analytics-agent/README.md` – where the archived Next Gen Analytics UI lives.
-
-## Support & Maintainers
-
-- Maintainer: Yanqing Jiang (`https://www.linkedin.com/in/jiangyanqing/`)
-- Issues and feature requests: open GitHub issues on `Yanqing-Jiang/ai-portfolio`.
-
+See `ARCHITECTURE.md` for component boundaries and request flows.

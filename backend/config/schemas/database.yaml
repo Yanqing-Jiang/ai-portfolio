@@ -1,4 +1,0 @@
-# Deprecated: database settings now live under metrics.yaml -> semantic
-# Keeping this file for backward compatibility references.
-database:
-  message: "Configuration moved to metrics.yaml semantic sections"

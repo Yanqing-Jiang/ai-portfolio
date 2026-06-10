@@ -522,7 +522,7 @@ export function buildReplayDataModel(snapshot: Awaited<ReturnType<typeof fortune
     ...(functionId === 'luck-cycle' || Object.keys(asRecord(narrative.luck_cycle)).length ? { luckCycle: luckCycle as any } : {}),
     ...(functionId === 'compatibility' || Object.keys(asRecord(narrative.compatibility)).length ? { compatibility: compatibility as any } : {}),
     ...(functionId === 'lucky-day' || Object.keys(asRecord(narrative.occasion)).length ? { occasion: occasion as any } : {}),
-  } as FortuneDataModel;
+  } as unknown as FortuneDataModel;
 }
 
 function buildCreateRequest(functionId: FortuneFunctionId, payload: Record<string, unknown>) {

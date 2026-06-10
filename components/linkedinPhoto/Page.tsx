@@ -34,7 +34,7 @@ const STEPS = [
 ];
 
 // Premium "Luxury Executive" theme: Midnight Navy + Champagne Gold
-const HEADSHOT_STUDIO_THEME: React.CSSProperties = {
+const HEADSHOT_STUDIO_THEME: React.CSSProperties & Record<`--${string}`, string> = {
   '--background': '222 71% 4%',
   '--foreground': '210 40% 96%',
   '--card': '222 50% 8%',
@@ -283,7 +283,7 @@ const LinkedInPhotoPage: React.FC<LinkedInPhotoPageProps> = ({ apiPath = '/api/h
     };
   }, []);
 
-  const scrollToRef = (ref: React.RefObject<HTMLDivElement>) => {
+  const scrollToRef = (ref: React.RefObject<HTMLDivElement | null>) => {
     ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 

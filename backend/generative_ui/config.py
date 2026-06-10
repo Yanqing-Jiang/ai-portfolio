@@ -29,7 +29,7 @@ class GenerativeUISettings(BaseSettings):
     # Checks multiple env var names for compatibility with different deployment platforms
     claude_api_key: Optional[str] = (
         os.getenv("GENUI_CLAUDE_API_KEY") or 
-        os.getenv("CLAUDE_API_KEY") or   # Render.com uses this
+        os.getenv("CLAUDE_API_KEY") or   # Main application convention
         os.getenv("ANTHROPIC_API_KEY")   # Fallback for other platforms
     )
     claude_model: str = os.getenv("GENUI_CLAUDE_MODEL", "claude-haiku-4-5-20251001")

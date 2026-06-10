@@ -223,9 +223,9 @@ Backend: FastAPI router /api/linkedin-photo/generate, Gemini LLM for prompt expa
           'Show me AMD vs INTC margins - how do they compare to our last analysis?',
           'What clarification features help with ambiguous financial queries?',
         ],
-        coverUrl: 'https://yanqing.app/next-gen-analytics-agent-hero.gif',
-        imageUrl: 'https://yanqing.app/next-gen-analytics-agent-hero.gif',
-        ogImage: 'https://yanqing.app/next-gen-analytics-agent-hero.gif',
+        coverUrl: 'https://yanqinghot.blob.core.windows.net/public-access/next-gen-analytics-agent-hero-poster.jpg',
+        imageUrl: 'https://yanqinghot.blob.core.windows.net/public-access/next-gen-analytics-agent-hero-poster.jpg',
+        ogImage: 'https://yanqinghot.blob.core.windows.net/public-access/next-gen-analytics-agent-hero-poster.jpg',
         videoUrl: 'https://yanqinghot.blob.core.windows.net/public-access/next-gen-analytics-agent-hero.webm',
         posterUrl: 'https://yanqinghot.blob.core.windows.net/public-access/next-gen-analytics-agent-hero-poster.jpg',
         seoTitle: 'Conversational Analytics Agent | Claude Agent SDK + SQL + Charts | Yanqing Jiang',
@@ -457,7 +457,7 @@ This production-grade web application automates the invoice validation and match
         description: `• AI HR Agent powered by my full resume & project history that anyone can chat with freely.\n• Uses LangChain to embed every resume section & work sample into a vector store.\n• When a question arrives, the agent performs similarity search → retrieves the most relevant chunks → crafts a concise, evidence-based answer that advocates for my candidacy.\n• Result: interviewers get instant, accurate insights about my career and projects.`,
         cardDescription: '95% resume coverage answers recruiter questions with citations in seconds.',
         technologies: ['RAG', 'Vector Search', 'FAISS', 'Agent'],
-        systemInstruction: "Hello, I am Yanqing's AI assistant. I have access to his resume data. Please ask me any questions you would have as a hiring manager.",
+        systemInstruction: "You are a portfolio guide for Yanqing's retired Ask My Resume project. Explain the historical RAG architecture and project outcomes using only the embedded project description. Do not claim access to a live resume index or private resume data.",
         defaultPrompts: [
           "How have you used advanced analytics to drive measurable business outcomes in your recent roles?",
           "Can you share an example where you led a cross-functional team to solve a complex business problem using data",
@@ -539,7 +539,7 @@ This production-grade web application automates the invoice validation and match
         description: `Equip GPT 3.5 (2022) with web browsing capabilities (before Perplexity)\n  • Search Tool: Sends the query to Serper API to retrieve current links & articles.\n  • Scraping Tool: Fetches and parses content from URLs using Browserless.\n  • Summary Loop: LangChainAgent agent & memoery chain`,
         cardDescription: 'Pre-Perplexity (2022) web research agent pairing Serper search with Browserless scraping for live briefs.',
         technologies: ['Serper API', 'Browserless Scraping', 'Lang Chain Agent', 'Memory Chain', 'OpenAI API'],
-        systemInstruction: 'You are the "Research GPT" AI. You are a powerful research agent connected to a live backend. When a user gives you a research topic, you will use your tools to browse the internet, gather information, and provide a comprehensive, fact-based answer. Your capabilities are powered by LangChain and the OpenAI API, running on a custom FastAPI server. Start by asking the user what they would like to research.',
+        systemInstruction: 'You are a portfolio guide for the retired Research GPT project. Explain how the 2022 Serper, Browserless, LangChain, and OpenAI implementation worked using the embedded project description. Do not claim live web-browsing or research tools.',
         defaultPrompts: [
           "What is the best reasoning large language model right now?",
           "Make some suggestions for vibe coding.",
@@ -848,7 +848,6 @@ This production-grade web application automates the invoice validation and match
     ],
   },
 ];
-
 
 
 

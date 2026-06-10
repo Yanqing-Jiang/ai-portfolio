@@ -689,12 +689,10 @@ const ProcessPanel: React.FC<ProcessPanelProps> = ({
   }, [isExpanded]);
 
   // Build node hierarchy from edges for multi-agent mode
-  const { rootNodes, childrenMap } = useMemo(() => {
+  const childrenMap = useMemo(() => {
     const childrenMap = new Map<string, ProcessNode[]>();
-    const hasParent = new Set<string>();
 
     processEdges.forEach(edge => {
-      hasParent.add(edge.to_node);
       const children = childrenMap.get(edge.from_node) || [];
       const childNode = processNodes.find(n => n.node_id === edge.to_node);
       if (childNode) {
@@ -703,8 +701,7 @@ const ProcessPanel: React.FC<ProcessPanelProps> = ({
       }
     });
 
-    const rootNodes = processNodes.filter(n => !hasParent.has(n.node_id));
-    return { rootNodes, childrenMap };
+    return childrenMap;
   }, [processNodes, processEdges]);
 
   // Sort nodes by timestamp for linear view
@@ -721,7 +718,6 @@ const ProcessPanel: React.FC<ProcessPanelProps> = ({
   }, [processNodes]);
 
   const isSingleAgent = agentMode === 'single' || !agentMode;
-  const isMultiAgent = !isSingleAgent;
 
   const toggleNode = useCallback((nodeId: string) => {
     setExpandedNodes(prev => {

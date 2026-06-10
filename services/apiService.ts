@@ -2,10 +2,9 @@ import { authService } from './auth'
 import { configService } from './config'
 
 // --- Function/Class Map ---
-// Class: ApiService — shared API client; called across frontend components to add auth headers, surface rate-limit details, and stream SSE responses.
+// Class: ApiService — shared API client; called across frontend components to add auth headers and surface rate-limit details.
 // Method: makeRequest — core fetch wrapper surfacing server-provided detail messages for 401/429 responses.
 // Method: getUsageStats/countUserInput — fetches/consumes per-scope rate limits for chat and other workflows.
-// Method: streamWithAuth — handles SSE streaming with auth + rate-limit handling for research/resume endpoints.
 // Purpose: Centralize backend communication with consistent error handling and auth headers.
 
 export interface ApiResponse<T = any> {
@@ -134,98 +133,13 @@ class ApiService {
     return this.get<UsageStats>(`/api/rate-limit/usage${query}`)
   }
 
-  async countUserInput(options?: { scope?: string }): Promise<ApiResponse<UsageStats>> {
-    const payload = options?.scope ? { scope: options.scope } : undefined
+  async countUserInput(options?: { scope?: string; weight?: number }): Promise<ApiResponse<UsageStats>> {
+    const payload = options
+      ? { ...(options.scope ? { scope: options.scope } : {}), ...(options.weight ? { weight: options.weight } : {}) }
+      : undefined
     return this.post<UsageStats>('/api/user-input', payload)
   }
 
-  // Enhanced streaming method that handles auth errors
-  async streamWithAuth(
-    endpoint: string,
-    onMessage: (data: any) => void,
-    onError?: (error: string, needsAuth?: boolean) => void,
-    onComplete?: () => void,
-    signal?: AbortSignal
-  ): Promise<void> {
-    try {
-      const authHeaders = await authService.getAuthHeaders()
-      
-      // Use fetch for streaming
-      const response = await fetch(`${this.baseUrl}${endpoint}`, {
-        method: 'GET',
-        headers: {
-          'Accept': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-          ...authHeaders,
-        },
-        signal,
-      })
-      
-
-      // Handle rate limiting before starting stream
-      if (response.status === 401) {
-        const retryAfter = response.headers.get('Retry-After')
-        onError?.(
-          'Sign-in required after free quota. Please sign in to continue.',
-          true
-        )
-        return
-      }
-
-      if (response.status === 429) {
-        const retryAfter = response.headers.get('Retry-After')
-        onError?.(`Rate limit exceeded. Please try again in ${retryAfter || 'a few'} seconds.`)
-        return
-      }
-
-      if (!response.ok) {
-        onError?.(`HTTP ${response.status}: ${response.statusText}`)
-        return
-      }
-
-      // Process the stream
-      const reader = response.body?.getReader()
-      if (!reader) {
-        onError?.('Failed to get response stream')
-        return
-      }
-      
-
-      const decoder = new TextDecoder()
-      let buffer = ''
-
-      try {
-        while (true) {
-          const { done, value } = await reader.read()
-          
-          if (done) {
-            onComplete?.()
-            break
-          }
-          
-
-          buffer += decoder.decode(value, { stream: true })
-          const lines = buffer.split('\n')
-          buffer = lines.pop() || '' // Keep the last incomplete line
-
-          for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              try {
-                const data = JSON.parse(line.slice(6))
-                onMessage(data)
-              } catch (parseError) {
-                console.warn('Failed to parse SSE data:', line)
-              }
-            }
-          }
-        }
-      } finally {
-        reader.releaseLock()
-      }
-    } catch (error) {
-      onError?.(error instanceof Error ? error.message : 'Stream connection failed')
-    }
-  }
 }
 
 export const apiService = new ApiService()

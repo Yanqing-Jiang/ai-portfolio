@@ -89,13 +89,13 @@ function getWidgetTypeForComponent(
     if (LAYOUT_WIDGET_TYPES.has(type)) return type;
 
     if (type === 'Card') {
-        const childId = (props as CardProps).child;
+        const childId = (props as unknown as CardProps).child;
         if (!childId) return null;
         return getWidgetTypeForComponent(childId, components, dataModel, depth + 1);
     }
 
     if (type === 'Row' || type === 'Column') {
-        const nestedChildren = resolveChildIds((props as RowProps | ColumnProps).children, dataModel);
+        const nestedChildren = resolveChildIds((props as unknown as RowProps | ColumnProps).children, dataModel);
         const nestedTypes = new Set<string>();
         for (const nestedId of nestedChildren) {
             const nestedType = getWidgetTypeForComponent(nestedId, components, dataModel, depth + 1);
@@ -115,7 +115,7 @@ export function A2UIColumn({
     dataModel,
     components,
     renderChild,
-}: A2UIRendererProps): React.ReactElement {
+}: A2UIRendererProps): React.ReactElement | null {
     const layoutContext = React.useContext(LayoutContext);
     const columnProps = props as unknown as ColumnProps;
     const children = columnProps.children;

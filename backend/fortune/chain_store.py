@@ -3,11 +3,9 @@
 PR-4 of the latency refactor — paired with PR-3 (compat reasoning flip
 to ``low``). Why this exists:
 
-- Compat narrative now ships ``store=True`` so subsequent Ask turns can
-  pass ``previous_response_id=<last>`` to OpenAI for ~30-50% latency
-  cut on follow-up reasoning. The chain map (fortune_id → last
-  response_id) must survive across gunicorn workers (the demo runs 6),
-  which rules out per-process in-memory state.
+- Compat narrative ships ``store=True`` so subsequent Ask turns can pass
+  ``previous_response_id=<last>`` to OpenAI for faster follow-up reasoning.
+  Redis keeps the chain durable across process restarts and deployments.
 - ``portfolio-redis`` was already healthy on the docker network at PR-4
   time; reusing it instead of standing up a new dependency keeps the
   infra surface flat.
@@ -50,7 +48,7 @@ logger = logging.getLogger(__name__)
 # Function: set_response_chain — write last_response_id + schedule expiry.
 # Function: clear_response_chain — explicit early eviction.
 # Function: _schedule_openai_delete — fire-and-forget OpenAI DELETE after TTL.
-# Purpose: Ephemeral OpenAI response chain shared across gunicorn workers.
+# Purpose: Ephemeral OpenAI response chain shared across process lifetimes.
 
 
 # Key shapes (kept in one place so future migrations are mechanical).

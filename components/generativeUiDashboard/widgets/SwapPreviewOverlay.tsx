@@ -1,4 +1,3 @@
-import React from 'react';
 import { motion } from 'framer-motion';
 import { Check, X, Eye, AlertTriangle } from 'lucide-react';
 import { useComponentSwap } from '../context/ComponentSwapContext';

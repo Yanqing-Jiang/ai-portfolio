@@ -1,7 +1,6 @@
-import React from 'react';
 import { renderToString, renderToStaticMarkup } from 'react-dom/server';
 import { StaticRouter } from 'react-router-dom/server';
-import { HelmetProvider, type FilledContext } from 'react-helmet-async';
+import { HelmetProvider, type HelmetServerState } from 'react-helmet-async';
 import { AppRoutes } from '../App';
 import { PROJECT_DATA } from '../constants';
 import { LANDING_SEO, SITE_BASE_URL } from '../constants/seo';
@@ -226,7 +225,7 @@ export const getLlmsCorpus = (): LlmsCorpus => {
 };
 
 export const render = (url: string): RenderResult => {
-  const helmetContext: FilledContext = {};
+  const helmetContext: { helmet?: HelmetServerState } = {};
 
   const app = (
     <HelmetProvider context={helmetContext}>

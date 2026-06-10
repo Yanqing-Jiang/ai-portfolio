@@ -129,7 +129,7 @@ function getPriorityStyles(suggestion: FollowUpSuggestion): React.CSSProperties 
 function deriveAnomaliesFromSuggestions(suggestions: FollowUpSuggestion[]): AnomalyData[] {
     return suggestions
         .filter((suggestion) => suggestion.category === 'anomaly' && suggestion.metadata)
-        .map((suggestion) => suggestion.metadata as AnomalyData)
+        .map((suggestion) => suggestion.metadata as unknown as AnomalyData)
         .filter((anomaly) => Boolean(anomaly?.ticker && anomaly?.metric));
 }
 
@@ -325,4 +325,3 @@ export function FollowUpSuggestions({
 }
 
 export default FollowUpSuggestions;
-

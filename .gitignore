@@ -59,19 +59,7 @@ temp_view.txt
 *.sqlite
 *.sqlite3
 
-# Testing — exclude test code and reports from version control
-tests/
-__tests__/
-**/tests/
-**/__tests__/
-*.test.ts
-*.test.tsx
-*.test.js
-*.test.jsx
-*.spec.ts
-*.spec.tsx
-*.spec.js
-*.spec.jsx
+# Testing reports and caches
 pytest_*.txt
 coverage/
 .coverage

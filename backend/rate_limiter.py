@@ -1,13 +1,11 @@
 import logging
 import redis.asyncio as redis
 from enum import Enum
-from fastapi import Request, HTTPException, status, Depends
+from fastapi import Request, HTTPException, status
 try:
     from fastapi_limiter import FastAPILimiter
-    from fastapi_limiter.depends import RateLimiter
 except ImportError:
     FastAPILimiter = None  # type: ignore
-    RateLimiter = None  # type: ignore
 from jose import jwt, JWTError
 from math import ceil
 import os
@@ -85,8 +83,6 @@ LIMIT_WINDOW = 86400  # legacy fallback; real TTL is until midnight UTC
 
 class RateLimitScope(str, Enum):
     GLOBAL = "global"
-    ANALYTICS_AGENT = "next-gen-analytics-agent"
-    ANALYTICS_SQL = "next-gen-analytics-sql"
     CONVERSATIONAL_ANALYTICS = "conversational-analytics"
     CHAT = "chat"
     # FORTUNE kept as a coarse catch-all for legacy callers. Each fortune
@@ -103,8 +99,6 @@ class RateLimitScope(str, Enum):
 # (guest_limit, member_limit)
 SCOPE_LIMITS: Dict[RateLimitScope, Tuple[int, int]] = {
     RateLimitScope.GLOBAL: (GUEST_LIMIT, MEMBER_LIMIT),
-    RateLimitScope.ANALYTICS_AGENT: (GUEST_LIMIT, MEMBER_LIMIT),
-    RateLimitScope.ANALYTICS_SQL: (GUEST_LIMIT, MEMBER_LIMIT),
     RateLimitScope.CONVERSATIONAL_ANALYTICS: (GUEST_LIMIT, MEMBER_LIMIT),
     RateLimitScope.CHAT: (CHAT_GUEST_LIMIT, CHAT_MEMBER_LIMIT),
     RateLimitScope.FORTUNE: (GUEST_LIMIT, MEMBER_LIMIT),
@@ -123,10 +117,6 @@ SCOPE_LIMITS: Dict[RateLimitScope, Tuple[int, int]] = {
 SCOPE_ALIAS_MAP: Dict[str, RateLimitScope] = {
     "global": RateLimitScope.GLOBAL,
     RateLimitScope.GLOBAL.value: RateLimitScope.GLOBAL,
-    "analytics_agent": RateLimitScope.ANALYTICS_AGENT,
-    "next-gen-analytics-agent": RateLimitScope.ANALYTICS_AGENT,
-    "analytics_sql": RateLimitScope.ANALYTICS_SQL,
-    "next-gen-analytics-sql": RateLimitScope.ANALYTICS_SQL,
     "conversational_analytics": RateLimitScope.CONVERSATIONAL_ANALYTICS,
     RateLimitScope.CONVERSATIONAL_ANALYTICS.value: RateLimitScope.CONVERSATIONAL_ANALYTICS,
     "chat": RateLimitScope.CHAT,
@@ -436,21 +426,6 @@ async def init_rate_limiter():
         logger.info("Falling back to in-memory rate limiting")
         return False
 
-# Create a unified rate limiter
-def create_unified_rate_limiter():
-    """Create a single rate limiter that we'll use for all users"""
-    # Use the higher limit (20) and we'll manually check the appropriate limit in smart_rate_limit
-    return RateLimiter(times=MEMBER_LIMIT, seconds=LIMIT_WINDOW, identifier=who_am_i)
-
-# Initialize unified limiter with error handling
-try:
-    unified_rate_limiter = create_unified_rate_limiter()
-    logger.info("Unified rate limiter created successfully")
-except Exception as e:
-    logger.warning(f"Failed to create rate limiter: {e}")
-    logger.info("Rate limiting will use fallback mechanisms")
-    unified_rate_limiter = None
-
 async def smart_rate_limit(
     request: Request,
     scope: RateLimitScope = RateLimitScope.GLOBAL,
@@ -567,16 +542,6 @@ async def smart_rate_limit(
     except Exception as e:
         logger.error(f"Rate limiting error for {scoped_identifier}: {e}")
         raise
-
-
-async def analytics_agent_rate_limit(request: Request):
-    """Rate limiter dedicated to the analytics memory workflows."""
-    await smart_rate_limit(request, scope=RateLimitScope.ANALYTICS_AGENT)
-
-
-async def analytics_sql_rate_limit(request: Request):
-    """Rate limiter dedicated to the analytics SQL workflows."""
-    await smart_rate_limit(request, scope=RateLimitScope.ANALYTICS_SQL)
 
 
 async def conversational_analytics_rate_limit(request: Request):
