@@ -20,13 +20,13 @@ const SESSIONS = [
     title: 'Discovery Call',
     duration: '30' as SessionType,
     price: 50,
-    features: ['Technical Q&A', 'Career Roadmap', 'Quick Architecture Review'],
+    features: ['Agent OS Consultation', 'Short & Long-Term Memory', 'Talk to Your DB Setup'],
   },
   {
     title: 'Strategic Deep Dive',
     duration: '60' as SessionType,
     price: 90,
-    features: ['Full Product Roadmap', 'Code & Architecture Review', 'Agent Implementation Strategy'],
+    features: ['Full Agent OS Roadmap', '24/7 Agent Assistant Build', 'Memory + Code Review'],
   },
 ];
 
@@ -41,7 +41,7 @@ const FAQ = [
   },
   {
     q: 'What topics can we cover?',
-    a: 'AI agent architecture, Claude/OpenAI API integration, career in AI engineering, building AI products, team training, or custom implementation reviews.',
+    a: 'Agent OS consultation, short & long-term memory systems, talk-to-your-database setups, 24/7 agent assistants, Claude/OpenAI API integration, or custom implementation and code reviews.',
   },
 ];
 
@@ -168,12 +168,12 @@ export const ConsultingPage: React.FC = () => {
         <title>AI Consulting | Yanqing Jiang</title>
         <meta
           name="description"
-          content="Book a 1:1 AI consulting session with Yanqing Jiang. Discuss agent architecture, AI engineering careers, or custom implementation. $50/30min or $90/1hr."
+          content="Book a 1:1 AI consulting session with Yanqing Jiang. Agent OS consultation, short & long-term memory, talk-to-your-database setups, and 24/7 agent assistants. $50/30min or $90/1hr."
         />
         <meta property="og:title" content="AI Consulting | Yanqing Jiang" />
         <meta
           property="og:description"
-          content="Expert 1:1 AI strategy and consulting sessions. Agent architecture, AI careers, and implementation reviews."
+          content="Expert 1:1 AI strategy sessions. Agent OS, memory systems, talk-to-your-DB setups, and 24/7 agent assistants."
         />
         <meta property="og:url" content="https://yanqing.app/consult" />
         <link rel="canonical" href="https://yanqing.app/consult" />
@@ -199,8 +199,8 @@ export const ConsultingPage: React.FC = () => {
             transition={{ delay: 0.1 }}
             className="text-base sm:text-lg text-slate-400 mb-8 max-w-2xl mx-auto leading-relaxed"
           >
-            Accelerate your AI journey. Book a 1:1 strategy session to discuss agent architecture,
-            AI engineering careers, or custom implementation.
+            Book a 1:1 session to design your agent OS — short & long-term memory,
+            talk-to-your-database setups, and 24/7 agent assistants you actually own.
           </motion.p>
         </div>
       </section>
