@@ -38,6 +38,10 @@ services:
     volumes:
       - ./public:/public:ro
       - ./.claude/skills:/.claude/skills:ro
+      # Gmail OAuth creds for booking emails (credentials.json + sibling
+      # gcp-oauth.keys.json for token refresh). Read-only; token write-back
+      # failures are non-fatal (logged warning only).
+      - /Users/yj/.gmail-mcp:/secrets/gmail:ro
     depends_on:
       redis:
         condition: service_healthy
