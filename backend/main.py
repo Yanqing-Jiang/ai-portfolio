@@ -91,6 +91,7 @@ BOOKING_AMOUNT_CENTS = {
 
 from calendar_service import get_available_slots, create_booking_event, delete_booking_event
 from telegram_service import send_booking_notification
+from email_service import send_booking_confirmation_email, send_admin_booking_alert
 from rate_limiter import parse_user_id, ParsedToken
 
 # Booking DB pool (shares SUPABASE_DB_URL with token_store)
@@ -1732,6 +1733,31 @@ async def booking_webhook(request: Request):
         )
     except Exception as exc:
         logger.error("[BOOKING] Telegram notification failed (non-blocking): %s", exc)
+
+    # Send admin email alert (fire-and-forget, non-blocking)
+    try:
+        await send_admin_booking_alert(
+            name=client_name or booking["client_name"],
+            email=client_email or booking["client_email"],
+            session_type=session_type or booking["session_type"],
+            slot_start=slot_start_str or str(booking["slot_start"]),
+            notes=booking.get("notes"),
+            meet_link=meet_link,
+        )
+    except Exception as exc:
+        logger.error("[BOOKING] Admin email alert failed (non-blocking): %s", exc)
+
+    # Send booking confirmation email via Gmail (fire-and-forget, non-blocking)
+    try:
+        await send_booking_confirmation_email(
+            name=client_name or booking["client_name"],
+            email=client_email or booking["client_email"],
+            session_type=session_type or booking["session_type"],
+            slot_start=slot_start_str or str(booking["slot_start"]),
+            meet_link=meet_link,
+        )
+    except Exception as exc:
+        logger.error("[BOOKING] Confirmation email failed (non-blocking): %s", exc)
 
     return JSONResponse(content={"received": True})
 
