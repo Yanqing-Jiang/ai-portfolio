@@ -42,7 +42,7 @@ export const CTA: React.FC = () => (
           fontWeight: 600,
         }}
       >
-        Book a counseling session →
+        Book a consulting session →
       </Link>
 
       <div className="flex items-center gap-3 sm:gap-6">

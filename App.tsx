@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo, useEffect, useRef, Suspense, lazy } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   BrowserRouter,
   Routes,
@@ -33,10 +33,7 @@ import { AskDemoPage } from './components/generativeUiDashboard/fortune/AskDemoP
 import { ConsultingPage } from './components/consulting/ConsultingPage';
 import BlogIndexPage from './components/blog/BlogIndexPage';
 import BlogPostPage from './components/blog/BlogPostPage';
-
-// /homer — Homer Lite case-study landing. Lazy-loaded so /homer's section bundle
-// (Lenis init, Hero animations, etc.) doesn't load on the marketing landing.
-const HomerLitePage = lazy(() => import('./components/homer-lite/HomerLitePage'));
+import HomerLitePage from './components/homer-lite/HomerLitePage';
 
 import { PROJECT_DATA } from './constants';
 import type { Project } from './types';
@@ -390,20 +387,7 @@ const Layout: React.FC = () => {
             <Route path="/blog/:slug" element={<BlogPostPage />} />
 
             {/* Homer Lite case study (target: 2026-05-16) */}
-            <Route
-              path="/homer"
-              element={
-                <Suspense
-                  fallback={
-                    <div className="flex items-center justify-center h-screen text-sm text-slate-400">
-                      loading homer…
-                    </div>
-                  }
-                >
-                  <HomerLitePage />
-                </Suspense>
-              }
-            />
+            <Route path="/homer" element={<HomerLitePage />} />
 
             <Route path="/auth/callback" element={<AuthCallback />} />
           </Routes>

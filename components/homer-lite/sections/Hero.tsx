@@ -12,7 +12,7 @@ import { HOMER_THEME } from '../theme';
 //
 // Implementation note: we do this imperatively with raw DOM nodes inside a
 // `useEffect` rather than React state because there's a single moving DOM
-// node (the cursor) tracking ~400 char-by-char updates over ~7 seconds.
+// node (the cursor) tracking ~400 char-by-char updates over ~4 seconds.
 // State-driven rendering would re-render the whole tree every char.
 //
 // Visible boot values (24.7 GB, 1.4B, 48 daily tasks, 18 tools, executors
@@ -100,8 +100,8 @@ const LINES: Line[] = [
 
 // Type speeds. Lower = faster. Variance adds a subtle natural cadence so it
 // doesn't read as a robotic per-char tick.
-const BASE_DELAY = 12;
-const VARIANCE = 10;
+const BASE_DELAY = 5;
+const VARIANCE = 3;
 const randDelay = () => BASE_DELAY + Math.random() * VARIANCE;
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -109,6 +109,8 @@ export const Hero: React.FC = () => {
   const uptimeDays = useUptimeDays();
   const shouldReduceMotion = useReducedMotion();
   const terminalRef = useRef<HTMLDivElement>(null);
+  const completeBootRef = useRef<(() => void) | null>(null);
+  const [bootComplete, setBootComplete] = useState(false);
   const [brandVisible, setBrandVisible] = useState(false);
   const [ctaVisible, setCtaVisible] = useState(false);
 
@@ -119,10 +121,13 @@ export const Hero: React.FC = () => {
     // Reset on (re-)mount. React strict-mode double-invoke is fine: cleanup
     // sets cancelled=true and clears the DOM, second invoke starts fresh.
     terminal.innerHTML = '';
+    setBootComplete(false);
     setBrandVisible(false);
     setCtaVisible(false);
 
     let cancelled = false;
+    let completed = false;
+    const shouldStop = () => cancelled || completed;
 
     // The single live cursor that travels with the typing. We re-append it
     // to its parent after each char so it ends up positioned right after
@@ -138,7 +143,7 @@ export const Hero: React.FC = () => {
 
     const typeInto = async (el: HTMLSpanElement, text: string) => {
       for (const ch of text) {
-        if (cancelled) return;
+        if (shouldStop()) return;
         el.textContent = (el.textContent ?? '') + ch;
         if (cursor.parentNode) cursor.parentNode.appendChild(cursor);
         await sleep(randDelay());
@@ -147,7 +152,7 @@ export const Hero: React.FC = () => {
 
     const typeBoot = async () => {
       for (const line of LINES) {
-        if (cancelled) return;
+        if (shouldStop()) return;
         const lineEl = document.createElement('div');
         lineEl.className = 'homer-line' + (line.awake ? ' homer-awake-line' : '');
         terminal.appendChild(lineEl);
@@ -158,39 +163,42 @@ export const Hero: React.FC = () => {
           const tsEl = makeSpan('homer-ts');
           lineEl.insertBefore(tsEl, cursor);
           await typeInto(tsEl, line.ts + ' ');
+          if (shouldStop()) return;
         }
 
         const mainEl = makeSpan(line.awake ? 'homer-awake' : undefined);
         lineEl.insertBefore(mainEl, cursor);
         await typeInto(mainEl, line.main);
+        if (shouldStop()) return;
 
         if (line.status) {
           // System "thinks" briefly before reporting the status — this is
           // the moment that gives each `ok` weight.
-          await sleep(180);
-          if (cancelled) return;
+          await sleep(60);
+          if (shouldStop()) return;
           const okEl = makeSpan('homer-ok');
           lineEl.insertBefore(okEl, cursor);
           await typeInto(okEl, '  ' + line.status);
+          if (shouldStop()) return;
         }
 
         if (line.detail) {
-          await sleep(80);
+          await sleep(25);
           for (const seg of line.detail) {
-            if (cancelled) return;
+            if (shouldStop()) return;
             const segEl = makeSpan('homer-detail' + (seg.v ? ' homer-v' : ''));
             lineEl.insertBefore(segEl, cursor);
             await typeInto(segEl, seg.t);
+            if (shouldStop()) return;
           }
         }
 
-        await sleep(130);
+        await sleep(45);
       }
     };
 
-    // Reduced-motion fallback — snap the entire boot output instantly,
-    // cursor rests at the end of the last line.
-    const reducedFallback = () => {
+    const renderFullBoot = () => {
+      terminal.innerHTML = '';
       for (const line of LINES) {
         const lineEl = document.createElement('div');
         lineEl.className = 'homer-line' + (line.awake ? ' homer-awake-line' : '');
@@ -221,23 +229,50 @@ export const Hero: React.FC = () => {
       last?.appendChild(cursor);
     };
 
+    const finishImmediately = () => {
+      if (cancelled || completed) return;
+      completed = true;
+      renderFullBoot();
+      setBootComplete(true);
+      setBrandVisible(true);
+      setCtaVisible(true);
+    };
+
+    completeBootRef.current = finishImmediately;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Enter' || cancelled || completed) return;
+      event.preventDefault();
+      finishImmediately();
+    };
+    window.addEventListener('keydown', onKeyDown);
+
     (async () => {
       if (shouldReduceMotion) {
-        reducedFallback();
+        renderFullBoot();
+        completed = true;
+        setBootComplete(true);
+        setBrandVisible(true);
+        setCtaVisible(true);
+        return;
       } else {
         await typeBoot();
       }
-      if (cancelled) return;
-      await sleep(500);
+      if (shouldStop()) return;
+      completed = true;
+      setBootComplete(true);
+      await sleep(220);
       if (cancelled) return;
       setBrandVisible(true);
-      await sleep(700);
+      await sleep(300);
       if (cancelled) return;
       setCtaVisible(true);
     })();
 
     return () => {
       cancelled = true;
+      window.removeEventListener('keydown', onKeyDown);
+      completeBootRef.current = null;
     };
   }, [shouldReduceMotion]);
 
@@ -324,11 +359,28 @@ export const Hero: React.FC = () => {
       </div>
 
       {/* Terminal viewport — DOM nodes injected imperatively by the effect. */}
-      <div
-        ref={terminalRef}
-        className="w-full max-w-[820px] flex flex-col gap-1 text-sm leading-relaxed"
-        style={{ fontFamily: HOMER_THEME.fontMono, color: HOMER_THEME.text }}
-      />
+      <div className="relative w-full max-w-[820px]">
+        <div
+          ref={terminalRef}
+          className="w-full flex flex-col gap-1 text-sm leading-relaxed"
+          style={{ fontFamily: HOMER_THEME.fontMono, color: HOMER_THEME.text }}
+        />
+        {!bootComplete && !shouldReduceMotion && (
+          <button
+            type="button"
+            onClick={() => completeBootRef.current?.()}
+            className="absolute right-0 -bottom-7 text-[10px] uppercase tracking-[0.18em] transition-opacity hover:opacity-100"
+            style={{
+              fontFamily: HOMER_THEME.fontMono,
+              color: HOMER_THEME.textMuted,
+              opacity: 0.72,
+            }}
+            aria-label="Skip Homer boot sequence"
+          >
+            skip ⏎
+          </button>
+        )}
+      </div>
 
       {/* Brand reveal — fades in after the boot completes. Pre-rendered so
           it reserves layout space; only opacity transitions. */}

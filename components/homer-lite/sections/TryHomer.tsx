@@ -179,7 +179,7 @@ const TRACES: Trace[] = [
 const PROCS = [
   { name: 'mem_gc', tone: 'info' as const, msgs: ['compacted vss0', 'evicted 14 stale rows', 'idle', 'scheduled'] },
   { name: 'inbox_scan', tone: 'work' as const, msgs: ['2 new urls queued', 'youtube/3 medium/1', 'paywall_bypass ok'] },
-  { name: 'sched_tick', tone: 'info' as const, msgs: ['next: portfolio_health (+4m)', 'next: news_brief (+27m)', '47 jobs active'] },
+  { name: 'sched_tick', tone: 'info' as const, msgs: ['next: portfolio_health (+4m)', 'next: news_brief (+27m)', '48 jobs active'] },
   { name: 'tg_relay', tone: 'ok' as const, msgs: ['1 outbound', 'hitl approved', 'idle'] },
   { name: 'mcp.bridge', tone: 'info' as const, msgs: ['memory_search · 12 hits', 'memory_context · 4ms', 'idle'] },
   { name: 'voice.eleven', tone: 'work' as const, msgs: ['ws warm', 'turn_complete', 'idle'] },
@@ -351,7 +351,7 @@ export const TryHomer: React.FC = () => {
       id="try"
       eyebrow="production system"
       title="Not a chat interface."
-      subtitle="Homer is a headless daemon running on a Mac Mini. Five executors, one memory layer, ~50 scheduled jobs. Below is a live telemetry slice and three real archived operations you can step through."
+      subtitle="Homer is a headless daemon running on a Mac Mini. Five executors, one memory layer, 48 scheduled jobs. Below is a live telemetry slice and three real archived operations you can step through."
     >
       <div
         className="grid grid-cols-1 md:grid-cols-[minmax(0,_1fr)_minmax(0,_1.7fr)] gap-4 md:gap-5 mt-2"

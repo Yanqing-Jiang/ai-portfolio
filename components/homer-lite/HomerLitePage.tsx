@@ -7,7 +7,9 @@ import Hero from './sections/Hero';
 import Why from './sections/Why';
 import Architecture from './sections/Architecture';
 import TryHomer from './sections/TryHomer';
-import MorningRoutineVideo from './sections/MorningRoutineVideo';
+import MemorySearchDemo from './sections/MemorySearchDemo';
+import MemoryLifecycleDemo from './sections/MemoryLifecycleDemo';
+import MorningRoutineCast from './sections/MorningRoutineCast';
 import Lessons from './sections/Lessons';
 import Roadmap from './sections/Roadmap';
 import CTA from './sections/CTA';
@@ -15,10 +17,9 @@ import CTA from './sections/CTA';
 // Function: HomerLitePage — entry point for the /homer route.
 // Section flow (live-product framing, not case study):
 //   Hero (typewriter boot sequence + fixed LIVE pill) →
-//   Why (five Before/After couplets) →
+//   TryHomer (telemetry trace) → MemorySearchDemo → MorningRoutineCast →
 //   Architecture (interactive — Memory schema lives inside) →
-//   TryHomer (telemetry trace) → MorningRoutineVideo →
-//   Lessons → Roadmap → CTA (consulting)
+//   Why (three Before/After couplets) → Lessons → Roadmap → CTA (consulting)
 //
 // Metrics section removed 2026-05-13 — placeholder tiles were never wired to
 // real ECharts panels and the page reads cleaner without them. File kept at
@@ -29,12 +30,72 @@ import CTA from './sections/CTA';
 // usage, scheduler, executors, voice, mcp). File kept at sections/ProofStrip.tsx
 // for easy revert.
 //
+// MorningRoutineVideo retired 2026-07-06 — the missing WebM probe could be
+// answered by the SPA fallback as 200-with-HTML, producing an empty video box
+// in production. File kept at sections/MorningRoutineVideo.tsx for easy revert.
+//
 // Hero redesigned 2026-05-13 — replaced the static `$ homer --status` block
 // with a character-by-character typewriter boot sequence (ported from
 // pro-C-typewriter.html). LIVE badge moved to a fixed top-right pill.
 //
 // Provides Lenis smooth-scroll over the inherited <main> scroller (mirrors
 // LandingPageFlow), Helmet meta block, and a top progress bar.
+
+const HOMER_URL = 'https://yanqing.app/homer';
+const HOMER_DESCRIPTION =
+  'Homer is my live personal AI operating system. SQLite-backed memory, five executors, 48 scheduled jobs, MCP tools — running autonomously on a Mac Mini.';
+
+const homerSoftwareSchema = {
+  '@context': 'https://schema.org',
+  '@type': 'SoftwareApplication',
+  name: 'Homer',
+  applicationCategory: 'ProductivityApplication',
+  operatingSystem: 'macOS',
+  url: HOMER_URL,
+  description: HOMER_DESCRIPTION,
+  creator: {
+    '@type': 'Person',
+    name: 'Yanqing Jiang',
+    url: 'https://yanqing.app',
+  },
+  featureList: [
+    'SQLite-backed memory with FTS5 and vector retrieval',
+    'Five CLI executors: claude, codex, gemini, kimi, opencode',
+    '48 scheduled daily tasks',
+    'Telegram and voice escalation loops',
+  ],
+};
+
+const homerPersonSchema = {
+  '@context': 'https://schema.org',
+  '@type': 'Person',
+  name: 'Yanqing Jiang',
+  url: 'https://yanqing.app',
+  sameAs: [
+    'https://www.linkedin.com/in/yanqing-jiang/',
+    'https://github.com/Yanqing-Jiang',
+    'https://medium.com/@yanqing_j',
+  ],
+};
+
+const homerBreadcrumbSchema = {
+  '@context': 'https://schema.org',
+  '@type': 'BreadcrumbList',
+  itemListElement: [
+    {
+      '@type': 'ListItem',
+      position: 1,
+      name: 'Home',
+      item: 'https://yanqing.app/',
+    },
+    {
+      '@type': 'ListItem',
+      position: 2,
+      name: 'Homer',
+      item: HOMER_URL,
+    },
+  ],
+};
 
 const HomerLitePage: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -83,7 +144,7 @@ const HomerLitePage: React.FC = () => {
         <title>Homer — Personal AI Operating System · Yanqing Jiang</title>
         <meta
           name="description"
-          content="Homer is my live personal AI operating system. SQLite-backed memory, multi-CLI executors, scheduled jobs, MCP tools — running autonomously on a Mac Mini. Try it from the public console."
+          content={HOMER_DESCRIPTION}
         />
         <meta property="og:title" content="Homer — Personal AI Operating System" />
         <meta
@@ -91,9 +152,13 @@ const HomerLitePage: React.FC = () => {
           content="A live personal AI OS. Multi-CLI orchestration, hybrid memory, scheduled agents. Try a few real commands from the public console."
         />
         <meta property="og:type" content="website" />
-        <meta property="og:url" content="https://yanqing.app/homer" />
+        <meta property="og:url" content={HOMER_URL} />
         <meta name="twitter:card" content="summary_large_image" />
         <meta name="theme-color" content={HOMER_THEME.bg} />
+        <link rel="canonical" href={HOMER_URL} />
+        <script type="application/ld+json">{JSON.stringify(homerSoftwareSchema)}</script>
+        <script type="application/ld+json">{JSON.stringify(homerPersonSchema)}</script>
+        <script type="application/ld+json">{JSON.stringify(homerBreadcrumbSchema)}</script>
       </Helmet>
 
       {/* Top reading-progress bar */}
@@ -120,10 +185,12 @@ const HomerLitePage: React.FC = () => {
       >
         <div className="relative z-10">
           <Hero />
-          <Why />
-          <Architecture />
           <TryHomer />
-          <MorningRoutineVideo />
+          <MemorySearchDemo />
+          <MemoryLifecycleDemo />
+          <MorningRoutineCast />
+          <Architecture />
+          <Why />
           <Lessons />
           <Roadmap />
           <CTA />

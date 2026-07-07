@@ -3,7 +3,7 @@ import { motion, useInView, useReducedMotion } from 'framer-motion';
 import SectionShell from '../SectionShell';
 import { HOMER_THEME } from '../theme';
 
-// Why — five Before/After couplets demonstrating why Homer exists.
+// Why — three Before/After couplets demonstrating why Homer exists.
 //
 // On each row, BEFORE is muted and a yellow highlighter underline draws
 // left→right under the key phrase as the row scrolls into view; AFTER fades
@@ -15,9 +15,8 @@ import { HOMER_THEME } from '../theme';
 // crossing out the whole line, it marks just the phrase that matters
 // (`highlight`), reading as emphasis rather than deletion.
 //
-// Copy is the user's voice; sequence is deliberate — bookmarks and voice
-// lead because they're the most concrete to a recruiter / founder skimming
-// on a phone. Memory, phone, and skills follow.
+// Copy is the user's voice; sequence is deliberately memory-first: bookmarks,
+// remembered preferences, and phone escalation.
 //
 // Replaces the prior "Most agent demos die in the demo" + RollingNumber
 // section. RollingNumber and the eyebrow subtitle are intentionally gone;
@@ -41,11 +40,6 @@ const PAIRS: ReadonlyArray<Pair> = [
     after: "Homer hands me the insights, based on what I'd care about.",
   },
   {
-    before: 'My best thinking got lost between the car and the laptop.',
-    highlight: 'the car and the laptop',
-    after: 'I talk. Homer transcribes, files, and keeps the nuance.',
-  },
-  {
     before: 'I copy & pasted my style prompts into every new chat window.',
     highlight: 'copy & pasted',
     after: 'It remembered my preferences. Applied them without mentioning.',
@@ -54,11 +48,6 @@ const PAIRS: ReadonlyArray<Pair> = [
     before: "Critical alerts buried in an inbox I'd check tomorrow.",
     highlight: 'Critical alerts',
     after: 'Homer calls my phone and we talk it through.',
-  },
-  {
-    before: 'Every new assistant needed me to re-teach how I work.',
-    highlight: 're-teach how I work',
-    after: 'Homer learned once. Every CLI I use now knows the way.',
   },
 ];
 

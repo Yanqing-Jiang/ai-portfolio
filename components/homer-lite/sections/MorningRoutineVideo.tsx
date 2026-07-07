@@ -39,7 +39,7 @@ export const MorningRoutineVideo: React.FC = () => {
       id="morning-routine"
       eyebrow="60-second routine"
       title="What an autonomous morning looks like."
-      subtitle="No audio. Captions only. One Mac Mini, eight agents, twelve scheduled jobs. Recorded straight from the production daemon."
+      subtitle="A replayed capture of the production daemon's morning routine, sanitized for the portfolio view."
     >
       <div
         className="relative aspect-video rounded-lg overflow-hidden border"

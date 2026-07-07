@@ -234,7 +234,7 @@ const SUBSYSTEMS = [
     // — restored to ground-truth phase mapping.
     me: ['3 AM memory consolidate.', 'Survives sleep / wake.', 'Loud failure → page me.'],
     team: ["Run nightly jobs without DevOps.", "Succeed or escalate to a human.", "Kill fragile single-process loops."],
-    receipts: ['47 active jobs', '46K+ traced executions']
+    receipts: ['48 daily tasks', '46K+ traced executions']
   },
   {
     id: 'executors',
@@ -246,7 +246,7 @@ const SUBSYSTEMS = [
     // (cycle keys / cheap-fast vs deep / reroute on hang).
     me: ['Cycle keys past quotas.', 'Cheap fast vs deep slow.', 'Reroute on provider hang.'],
     team: ["Cheapest capable model, automatic.", "No vendor lock-in.", "Survive provider outages."],
-    receipts: ['6 supported engines', '99.4% success rate']
+    receipts: ['5 executors', '99.4% success rate']
   },
   {
     id: 'mcp',

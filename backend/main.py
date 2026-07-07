@@ -239,6 +239,14 @@ try:
 except ImportError as e:
     logger.warning("[STARTUP] Ming Engine not available: %s", e)
 
+# Homer memory search demo (static public-safe corpus, no private DB reads)
+try:
+    from homer_memory import router as homer_memory_router
+    app.include_router(homer_memory_router)
+    logger.info("[STARTUP] Mounted Homer memory search router at /api/homer/memory-search")
+except ImportError as e:
+    logger.warning("[STARTUP] Homer memory search not available: %s", e)
+
 
 @app.get("/health")
 async def health():
@@ -2123,7 +2131,6 @@ async def reschedule_booking(booking_id: str, req: RescheduleBookingRequest, aut
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
-
 
 
 

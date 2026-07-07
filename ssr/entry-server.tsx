@@ -14,6 +14,7 @@ export interface RenderResult {
 export const getRoutes = (): string[] => [
   '/',
   '/consult',
+  '/homer',
   ...PROJECT_DATA.flatMap((year) => year.projects.map((project) => `/project/${project.id}`)),
   '/blog',
   ...allPosts.map((post) => `/blog/${post.slug}`),
@@ -55,6 +56,12 @@ export const getSitemapEntries = (): { pages: SitemapUrl[]; projects: SitemapUrl
       loc: `${SITE_BASE_URL}/consult`,
       changefreq: 'monthly',
       priority: 0.9,
+    },
+    {
+      loc: `${SITE_BASE_URL}/homer`,
+      lastModified: toIsoDate('2026-07-06T00:00:00Z'),
+      changefreq: 'monthly',
+      priority: 0.92,
     },
     {
       loc: `${SITE_BASE_URL}/blog`,
