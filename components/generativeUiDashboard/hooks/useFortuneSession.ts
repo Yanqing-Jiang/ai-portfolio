@@ -87,8 +87,18 @@ function buildCreateRequest(functionId: FortuneFunctionId, payload: Record<strin
       };
       return fortuneClient.createCompatibility({
         relationship: p.relationship,
-        personA: { birth_iso: toBirthIso(p.personA), timezone: tz, gender: p.personA?.gender },
-        personB: { birth_iso: toBirthIso(p.personB), timezone: tz, gender: p.personB?.gender },
+        personA: {
+          birth_iso: toBirthIso(p.personA),
+          timezone: tz,
+          gender: p.personA?.gender,
+          birth_time_unknown: p.personA?.timeUnknown,
+        },
+        personB: {
+          birth_iso: toBirthIso(p.personB),
+          timezone: tz,
+          gender: p.personB?.gender,
+          birth_time_unknown: p.personB?.timeUnknown,
+        },
         question: p.question,
       });
     }
@@ -100,7 +110,12 @@ function buildCreateRequest(functionId: FortuneFunctionId, payload: Record<strin
         windowEnd: string;
       };
       return fortuneClient.createLuckyDay({
-        profile: { birth_iso: toBirthIso(p.profile), timezone: tz, gender: p.profile?.gender },
+        profile: {
+          birth_iso: toBirthIso(p.profile),
+          timezone: tz,
+          gender: p.profile?.gender,
+          birth_time_unknown: p.profile?.timeUnknown,
+        },
         occasion: p.occasion,
         windowStartISO: p.windowStart,
         windowEndISO: p.windowEnd,
@@ -139,6 +154,16 @@ function buildCreateRequest(functionId: FortuneFunctionId, payload: Record<strin
       });
     }
   }
+}
+
+
+function extractBirthTimeUnknown(functionId: FortuneFunctionId, payload: Record<string, unknown>): boolean {
+  if (functionId === 'compatibility') {
+    const p = payload as { personA?: InputProfile };
+    return !!p.personA?.timeUnknown;
+  }
+  const p = payload as { profile?: InputProfile };
+  return !!p.profile?.timeUnknown;
 }
 
 function mapReplayStatus(status: string): 'complete' | 'streaming' | 'error' {
@@ -212,6 +237,7 @@ export function useFortuneSession(options: UseFortuneSessionOptions): UseFortune
       metadata: {
         created_at: snapshot.metadata?.created_at || '',
         persistence_degraded: snapshot.metadata?.persistence_degraded,
+        birth_time_unknown: snapshot.metadata?.birth_time_unknown,
       },
       data_model: model,
       ask_history: [],
@@ -293,6 +319,7 @@ export function useFortuneSession(options: UseFortuneSessionOptions): UseFortune
       setFortune(resp.fortune_id, resp.run_id, {
         persistenceDegraded: resp.persistenceDegraded,
         functionId,
+        birthTimeUnknown: extractBirthTimeUnknown(functionId, payload),
       });
 
       await startStreamForFortune(resp.fortune_id);

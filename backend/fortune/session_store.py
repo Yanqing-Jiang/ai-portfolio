@@ -194,3 +194,168 @@ async def close_ask_engine() -> None:
         # Reset so a subsequent get_ask_engine() in the same process (test
         # harnesses, reload) re-ensures tables against the new engine.
         _tables_ready = False
+
+
+_SKIP_ITEM_TYPES = frozenset(
+    {
+        "function_call",
+        "function_call_output",
+        "reasoning",
+        "tool_call",
+        "tool_result",
+        "hosted_tool_call",
+        "computer_call",
+        "computer_call_output",
+        "file_search_call",
+        "web_search_call",
+        "code_interpreter_call",
+        "image_generation_call",
+        "mcp_call",
+        "mcp_list_tools",
+        "mcp_approval_request",
+    }
+)
+
+
+def _extract_message_text(item: dict) -> str | None:
+    """Return plain text for a user/assistant MESSAGE item, else None."""
+    if not isinstance(item, dict):
+        return None
+    item_type = item.get("type")
+    if isinstance(item_type, str) and item_type in _SKIP_ITEM_TYPES:
+        return None
+    role = item.get("role")
+    if role not in ("user", "assistant"):
+        return None
+    # Explicit non-message typed items with a role should still be skipped.
+    if isinstance(item_type, str) and item_type not in ("message",):
+        return None
+
+    content = item.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for part in content:
+            if isinstance(part, str):
+                parts.append(part)
+                continue
+            if not isinstance(part, dict):
+                continue
+            part_type = part.get("type")
+            if part_type in ("input_text", "output_text", "text") and "text" in part:
+                parts.append(str(part.get("text") or ""))
+            elif "text" in part and part_type not in ("input_image", "refusal"):
+                parts.append(str(part.get("text") or ""))
+        text = "\n".join(p for p in parts if p)
+        return text or None
+    return None
+
+
+def filter_conversation_turns(
+    rows: list[tuple[object, object]],
+) -> list[dict[str, str]]:
+    """Filter deserialized session rows into MemoryPanel turns.
+
+    ``rows`` is a list of ``(message_data, created_at)`` pairs. Only
+    user/assistant MESSAGE items are kept; tool/reasoning items are skipped.
+    Text is truncated to 2000 chars.
+    """
+    import json
+
+    turns: list[dict[str, str]] = []
+    for raw, created_at in rows:
+        try:
+            if isinstance(raw, str):
+                item = json.loads(raw)
+            elif isinstance(raw, dict):
+                item = raw
+            else:
+                continue
+        except Exception:
+            continue
+        text = _extract_message_text(item)
+        if text is None:
+            continue
+        role = item.get("role")
+        if role not in ("user", "assistant"):
+            continue
+        text = _display_turn_text(role, text)
+        if text is None:
+            continue
+        at = ""
+        if created_at is not None:
+            try:
+                at = created_at.isoformat()  # type: ignore[union-attr]
+            except Exception:
+                at = str(created_at)
+        turns.append({"role": role, "text": text[:2000], "at": at})
+    return turns
+
+
+def _display_turn_text(role: str, text: str) -> str | None:
+    """Reduce a session message to its human-readable surface.
+
+    Session rows carry the raw run inputs/outputs: user turns can be the
+    structured context payload (foundation JSON) and assistant turns the
+    structured narrative. MemoryPanel must show conversational text only —
+    never internal prompt payloads.
+    """
+    import json
+
+    stripped = text.strip()
+    if not stripped.startswith("{"):
+        return stripped
+    try:
+        obj = json.loads(stripped)
+    except ValueError:
+        return stripped
+    if not isinstance(obj, dict):
+        return stripped
+    if role == "user":
+        intent = obj.get("intent")
+        question = obj.get("question") or (
+            intent.get("question") if isinstance(intent, dict) else None
+        )
+        if isinstance(question, str) and question.strip():
+            return question.strip()
+        return None
+    tldr = obj.get("tldr")
+    if isinstance(tldr, str) and tldr.strip():
+        return tldr.strip()
+    return None
+
+
+async def list_conversation_turns(fortune_id: str) -> list[dict[str, str]]:
+    """Return MemoryPanel turns from SQLAlchemySession for one fortune.
+
+    Only user/assistant MESSAGE items are included; tool/reasoning items are
+    skipped. Text is truncated to 2000 chars. Empty list when no session.
+    """
+    session = await get_ask_session(fortune_id)
+    if session is None:
+        return []
+
+    try:
+        from sqlalchemy import select
+    except Exception as exc:  # pragma: no cover
+        logger.warning("[FORTUNE] conversation list import failed: %s", exc)
+        return []
+
+    try:
+        # Prefer a direct read so we can include created_at for ``at``.
+        await session._ensure_tables()  # type: ignore[attr-defined]
+        async with session._session_factory() as sess:  # type: ignore[attr-defined]
+            messages = session._messages  # type: ignore[attr-defined]
+            stmt = (
+                select(messages.c.message_data, messages.c.created_at)
+                .where(messages.c.session_id == session.session_id)
+                .order_by(messages.c.created_at.asc(), messages.c.id.asc())
+            )
+            result = await sess.execute(stmt)
+            rows = list(result.all())
+    except Exception as exc:
+        logger.warning("[FORTUNE] conversation list failed for %s: %s", fortune_id, exc)
+        return []
+
+    return filter_conversation_turns(rows)

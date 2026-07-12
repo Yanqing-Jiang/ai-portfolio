@@ -36,6 +36,25 @@ export interface TraceEvent {
     receivedAt: string;
 }
 
+/** Allowlisted Glass Box projection — matches live payload.trace / GET /trace. */
+export interface TraceProjection {
+    eventId: string;
+    runId?: string;
+    spanId?: string;
+    phase?: string;
+    parentSpanId?: string | null;
+    spanType?: string | null;
+    agentName?: string | null;
+    toolName?: string | null;
+    model?: string | null;
+    durationMs?: number | null;
+    status?: string | null;
+    argSummary?: string | null;
+    resultSummary?: string | null;
+    startedAt?: string | null;
+    endedAt?: string | null;
+}
+
 export interface AskTurn {
     id: string;
     role: 'user' | 'agent';
@@ -77,9 +96,14 @@ interface FortuneStateShape {
 
     /** Live Glass Box trace envelopes (payload.kind==='trace'); Phase 4 renders. */
     traceEvents: TraceEvent[];
+    /** True when the reading was created without a known birth hour. */
+    birthTimeUnknown: boolean;
 
     // Actions
-    setFortune: (fortuneId: string, runId: string, opts?: { persistenceDegraded?: boolean; functionId?: FortuneFunctionId }) => void;
+    setFortune: (fortuneId: string, runId: string, opts?: { persistenceDegraded?: boolean; functionId?: FortuneFunctionId; birthTimeUnknown?: boolean }) => void;
+    setBirthTimeUnknown: (value: boolean) => void;
+    /** Replace traceEvents from GET /trace replay projections. */
+    hydrateTraceProjections: (projections: TraceProjection[]) => void;
     setRunId: (runId: string) => void;
     setStatus: (status: FortuneStatus) => void;
     /** Mark the narrative as renderable (guardrail still in flight).
@@ -99,7 +123,7 @@ interface FortuneStateShape {
     reset: () => void;
 }
 
-type ActionKeys = 'setFortune' | 'setRunId' | 'setStatus' | 'setNarrativeReady' | 'applyPatch' | 'hydrateFromReplay' | 'appendTraceEvent' | 'setAskInput' | 'beginAsk' | 'finishAsk' | 'failAsk' | 'clearAskHistory' | 'reset';
+type ActionKeys = 'setFortune' | 'setRunId' | 'setStatus' | 'setNarrativeReady' | 'applyPatch' | 'hydrateFromReplay' | 'appendTraceEvent' | 'hydrateTraceProjections' | 'setBirthTimeUnknown' | 'setAskInput' | 'beginAsk' | 'finishAsk' | 'failAsk' | 'clearAskHistory' | 'reset';
 
 const INITIAL: Omit<FortuneStateShape, ActionKeys> = {
     fortuneId: null,
@@ -115,6 +139,7 @@ const INITIAL: Omit<FortuneStateShape, ActionKeys> = {
     askHistory: [],
     askMemoryEverDegraded: false,
     traceEvents: [],
+    birthTimeUnknown: false,
 };
 
 export const useFortuneStore = create<FortuneStateShape>()(
@@ -133,11 +158,15 @@ export const useFortuneStore = create<FortuneStateShape>()(
                     // sessions during a same-tab create→create flow.
                     s.narrativeReady = false;
                     s.traceEvents = [];
+                    s.birthTimeUnknown = false;
                 }
                 s.fortuneId = fortuneId;
                 s.runId = runId;
                 s.persistenceDegraded = !!opts?.persistenceDegraded;
                 if (opts?.functionId) s.functionId = opts.functionId;
+                if (typeof opts?.birthTimeUnknown === 'boolean') {
+                    s.birthTimeUnknown = opts.birthTimeUnknown;
+                }
             }),
 
         setRunId: (runId) =>
@@ -196,6 +225,7 @@ export const useFortuneStore = create<FortuneStateShape>()(
                 s.lastSeq = replay.last_seq;
                 s.status = replay.status === 'complete' ? 'complete' : replay.status === 'error' ? 'error' : 'loading';
                 s.persistenceDegraded = !!replay.metadata?.persistence_degraded;
+                s.birthTimeUnknown = !!replay.metadata?.birth_time_unknown;
                 s.dataModel = replay.data_model;
                 s.askHistory = replay.ask_history || [];
                 // A replay snapshot whose narrative already streamed has
@@ -212,6 +242,22 @@ export const useFortuneStore = create<FortuneStateShape>()(
                 if (s.traceEvents.length > 500) {
                     s.traceEvents.splice(0, s.traceEvents.length - 500);
                 }
+            }),
+
+        hydrateTraceProjections: (projections) =>
+            set((s) => {
+                const now = new Date().toISOString();
+                s.traceEvents = projections.map((trace) => ({
+                    id: trace.eventId,
+                    run_id: trace.runId,
+                    payload: { kind: 'trace', trace },
+                    receivedAt: now,
+                }));
+            }),
+
+        setBirthTimeUnknown: (value) =>
+            set((s) => {
+                s.birthTimeUnknown = value;
             }),
 
         setAskInput: (v) =>

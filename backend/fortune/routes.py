@@ -1,9 +1,11 @@
 """Ming Engine fortune API routes.
 
-POST /api/fortune/create      — create a fortune session
-GET  /api/fortune/{id}        — replay completed snapshot (CF-cacheable)
-GET  /api/fortune/{id}/stream — SSE stream of A2UI messages
-POST /api/fortune/{id}/action — follow-up action (re-runs from subset agent)
+POST /api/fortune/create               — create a fortune session
+GET  /api/fortune/{id}                 — replay completed snapshot (CF-cacheable)
+GET  /api/fortune/{id}/stream          — SSE stream of A2UI messages
+GET  /api/fortune/{id}/trace           — redacted Glass Box projection (latest run)
+GET  /api/fortune/{id}/conversation    — Ask session memory turns
+POST /api/fortune/{id}/action          — follow-up action (re-runs from subset agent)
 """
 
 from __future__ import annotations
@@ -68,7 +70,7 @@ try:
     from .stream_bridge import FortuneStreamBridge
     from .store import get_repository, FortuneRepository
     from .triage import ALLOWED_ACTION_IDS, normalize_action_focus, run_triage
-    from .session_store import get_ask_session
+    from .session_store import get_ask_session, list_conversation_turns
     from .simulator import simulate_birth_time
     from .naming import canonical_function
     from ._thinking_heartbeat import HeartbeatTick, iter_with_heartbeats
@@ -102,7 +104,7 @@ except ImportError:
     from stream_bridge import FortuneStreamBridge  # type: ignore[no-redef]
     from store import get_repository, FortuneRepository  # type: ignore[no-redef]
     from triage import ALLOWED_ACTION_IDS, normalize_action_focus, run_triage  # type: ignore[no-redef]
-    from session_store import get_ask_session  # type: ignore[no-redef]
+    from session_store import get_ask_session, list_conversation_turns  # type: ignore[no-redef]
     from simulator import simulate_birth_time  # type: ignore[no-redef]
     from naming import canonical_function  # type: ignore[no-redef]
     from _thinking_heartbeat import HeartbeatTick, iter_with_heartbeats  # type: ignore[no-redef]
@@ -556,6 +558,8 @@ def _replay_metadata(row: dict[str, Any]) -> dict[str, Any]:
         "tone": row["tone"],
         "locale": row["locale"],
         "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+        # Boolean flag only — used by Reading Stability UI; not birth data.
+        "birth_time_unknown": bool(row.get("birth_time_unknown")),
     }
 
 
@@ -1031,6 +1035,57 @@ async def cancel_fortune(fortune_id: str, request: Request):
     return {"fortune_id": fortune_id, "cancelled": True}
 
 
+@router.get("/{fortune_id}/trace")
+async def get_fortune_trace(fortune_id: str, request: Request):
+    """Return redacted Glass Box projections for the fortune's latest run.
+
+    Shape matches live SSE ``payload.trace`` so the frontend renders one list.
+    DB rows are already redacted; columns are allowlisted explicitly.
+    """
+    await smart_rate_limit(request, scope=RateLimitScope.FORTUNE_REPLAY, weight=1)
+
+    try:
+        fid = uuid.UUID(fortune_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid fortune_id")
+
+    repo = await get_repository()
+    if not repo.available:
+        raise HTTPException(status_code=503, detail="Fortune store unavailable")
+
+    record = await repo.get_fortune(fid)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Fortune not found")
+
+    run_id, events = await repo.list_trace_projections(fid)
+    return {
+        "fortune_id": fortune_id,
+        "run_id": str(run_id) if run_id else None,
+        "events": events,
+    }
+
+
+@router.get("/{fortune_id}/conversation")
+async def get_fortune_conversation(fortune_id: str, request: Request):
+    """Return Ask conversation turns from SQLAlchemySession for MemoryPanel.
+
+    Only user/assistant MESSAGE items; tool/reasoning items excluded.
+    Text truncated to 2000 chars. Empty list when no session exists.
+    """
+    await smart_rate_limit(request, scope=RateLimitScope.FORTUNE_REPLAY, weight=1)
+
+    try:
+        uuid.UUID(fortune_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid fortune_id")
+
+    turns = await list_conversation_turns(fortune_id)
+    return {
+        "fortune_id": fortune_id,
+        "turns": turns,
+    }
+
+
 @router.post("/{fortune_id}/simulate")
 async def simulate_fortune(fortune_id: str, request: Request):
     """Birth-Time Uncertainty Simulator — enumerate all 12 Earthly Branch
@@ -1039,19 +1094,34 @@ async def simulate_fortune(fortune_id: str, request: Request):
     Deterministic (no LLM) but ~12× the compute of a single foundation run,
     so it gets its own rate-limit bucket at weight 4 — lower than /create's
     full-pipeline cost but higher than /action's single-LLM triage.
+
+    When the hot Redis session is gone, hydrate birth_iso/timezone from the
+    durable fortune row instead of 404ing.
     """
     await smart_rate_limit(request, scope=RateLimitScope.FORTUNE_SIMULATE, weight=4)
 
     store = get_run_state()
     session = await store.get(fortune_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="Fortune session not found")
+
+    birth_iso: str | None = None
+    timezone_name: str | None = None
+    if session is not None:
+        birth_iso = session.request.birth_iso
+        timezone_name = session.request.timezone or get_settings().default_timezone
+    else:
+        try:
+            fid = uuid.UUID(fortune_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid fortune_id")
+        repo = await get_repository()
+        record = await repo.get_fortune(fid) if repo.available else None
+        if record is None:
+            raise HTTPException(status_code=404, detail="Fortune not found")
+        birth_iso = record.birth_iso
+        timezone_name = record.timezone or get_settings().default_timezone
 
     try:
-        payload = simulate_birth_time(
-            session.request.birth_iso,
-            session.request.timezone or get_settings().default_timezone,
-        )
+        payload = simulate_birth_time(birth_iso, timezone_name)
     except Exception as exc:
         logger.exception("[FORTUNE] simulate failed: %s", exc)
         raise HTTPException(status_code=500, detail="Simulation failed.")

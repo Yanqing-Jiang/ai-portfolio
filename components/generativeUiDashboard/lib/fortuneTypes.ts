@@ -109,6 +109,7 @@ export interface FortuneReplayResponse {
   metadata: {
     created_at: string;
     persistence_degraded?: boolean;
+    birth_time_unknown?: boolean;
   };
   data_model: FortuneDataModel;
   ask_history: AskTurn[];

@@ -9,6 +9,7 @@ import { BookOpen, Filter, Layers, ShieldAlert, Zap } from 'lucide-react';
 import { useFortuneStore } from '../../stores/fortuneStore';
 import { MechanismCard, CitationBlock, ChineseToggle, StreamingText } from './index';
 import { FLOW_ACCENTS, GLASS, CITATION_GOLD, ELEMENT_COLORS } from '../designTokens';
+import { ReadingStabilityCard } from './ReadingStabilityCard';
 import {
   staggerContainer,
   tabContentVariants,
@@ -50,9 +51,18 @@ export const WhyTab: React.FC<WhyTabProps> = ({
     functionId === 'compatibility' ? 'all' : 'All',
   );
 
-  const { dataModel, status } = useFortuneStore(
-    useShallow((s) => ({ dataModel: s.dataModel, status: s.status })),
+  const { dataModel, status, birthTimeUnknown, fortuneId } = useFortuneStore(
+    useShallow((s) => ({
+      dataModel: s.dataModel,
+      status: s.status,
+      birthTimeUnknown: s.birthTimeUnknown,
+      fortuneId: s.fortuneId,
+    })),
   );
+
+  const stabilityCard = birthTimeUnknown ? (
+    <ReadingStabilityCard fortuneId={fortuneId} accent={accent.primary} />
+  ) : null;
 
   const citations = (dataModel?.classics?.references || []) as Citation[];
   const wish = dataModel?.wish as WishModel | undefined;
@@ -133,6 +143,7 @@ export const WhyTab: React.FC<WhyTabProps> = ({
         exit="exit"
         className="space-y-6 pb-8"
       >
+        {stabilityCard}
         <div className="flex justify-end px-1">
           <ChineseToggle
             showChinese={showChinese}
@@ -211,6 +222,7 @@ export const WhyTab: React.FC<WhyTabProps> = ({
         exit="exit"
         className="space-y-6 pb-20"
       >
+        {stabilityCard}
         <div className="flex items-center justify-between px-1">
           <div className="max-w-[70%]">
             <h3 className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-400">
@@ -278,6 +290,7 @@ export const WhyTab: React.FC<WhyTabProps> = ({
   if (functionId === 'occasion') {
     return (
       <div className="flex flex-col gap-6 pb-24">
+        {stabilityCard}
         <motion.div
           variants={pickVariants(isReplay, fadeInUp)}
           initial="hidden"
@@ -395,6 +408,7 @@ export const WhyTab: React.FC<WhyTabProps> = ({
       exit="exit"
       className="space-y-6 pb-12"
     >
+      {stabilityCard}
       <div className="sticky top-0 z-20 -mx-1 border-b border-white/5 bg-[#0B1120]/80 px-1 py-2 backdrop-blur-md">
         <div className="no-scrollbar flex items-center gap-2 overflow-x-auto pb-1">
           <div className="flex-none rounded-lg bg-white/5 p-1.5 text-slate-500">

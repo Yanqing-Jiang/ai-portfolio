@@ -176,6 +176,7 @@ interface BackendReplaySnapshot {
         created_at: string;
         persistence_degraded?: boolean;
         function_id?: string;
+        birth_time_unknown?: boolean;
     };
     data: {
         overview?: Record<string, unknown>;
@@ -293,7 +294,7 @@ export const fortuneClient = {
     },
 
     async createLuckyDay(req: {
-        profile: { birth_iso: string; timezone?: string; gender?: string };
+        profile: { birth_iso: string; timezone?: string; gender?: string; birth_time_unknown?: boolean };
         occasion: string;
         windowStartISO: string;
         windowEndISO: string;
@@ -302,6 +303,7 @@ export const fortuneClient = {
             birth_iso: req.profile.birth_iso,
             timezone: req.profile.timezone,
             gender: req.profile.gender,
+            birth_time_unknown: req.profile.birth_time_unknown,
             focus: `occasion:${req.occasion}:${req.windowStartISO}:${req.windowEndISO}`,
         });
     },
@@ -341,6 +343,38 @@ export const fortuneClient = {
      * and closes the stream with a ``Reading paused by user`` progress event.
      * Idempotent — safe to call if the reading already completed.
      */
+    async getTrace(fortuneId: string): Promise<{
+        fortune_id: string;
+        run_id: string | null;
+        events: Array<Record<string, unknown>>;
+    }> {
+        const { data } = await jsonFetch<{
+            fortune_id: string;
+            run_id: string | null;
+            events: Array<Record<string, unknown>>;
+        }>(`/api/fortune/${fortuneId}/trace`);
+        return data;
+    },
+
+    async getConversation(fortuneId: string): Promise<{
+        fortune_id: string;
+        turns: Array<{ role: 'user' | 'assistant'; text: string; at: string }>;
+    }> {
+        const { data } = await jsonFetch<{
+            fortune_id: string;
+            turns: Array<{ role: 'user' | 'assistant'; text: string; at: string }>;
+        }>(`/api/fortune/${fortuneId}/conversation`);
+        return data;
+    },
+
+    async simulateBirthTime(fortuneId: string): Promise<Record<string, unknown>> {
+        const { data } = await jsonFetch<Record<string, unknown>>(
+            `/api/fortune/${fortuneId}/simulate`,
+            { method: 'POST', body: JSON.stringify({}) },
+        );
+        return data;
+    },
+
     async cancelFortune(fortuneId: string): Promise<void> {
         const base = _apiBase();
         const authHeaders = await authService.getAuthHeaders();

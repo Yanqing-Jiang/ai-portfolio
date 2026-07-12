@@ -9,7 +9,7 @@ import type { FortuneTab } from '../../FortuneAgentResultShell';
 
 export interface FortuneResultConfig {
   canonicalId: CanonicalFortuneFunction;
-  /** Theme / ThinkingPanel purpose id (legacy slug-shaped). */
+  /** Theme purpose id (legacy slug-shaped). */
   purpose: FortunePurposeId;
   /** Session / create API function id (legacy). */
   sessionFunctionId: FortuneFunctionId;

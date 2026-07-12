@@ -7,6 +7,7 @@ import { motion } from 'framer-motion';
 import { useShallow } from 'zustand/react/shallow';
 import { Brain, MessageSquareQuote, TrendingUp } from 'lucide-react';
 import { useFortuneAsk } from '../../hooks/useFortuneAsk';
+import { MemoryPanel } from './MemoryPanel';
 import { useFortuneStore } from '../../stores/fortuneStore';
 import { OracleChat, type OracleChatMessage } from './OracleChat';
 import { FLOW_ACCENTS, GLASS } from '../designTokens';
@@ -161,18 +162,21 @@ export const AskTab: React.FC<AskTabProps> = ({ functionId, question }) => {
   }));
 
   const chat = (
-    <OracleChat
-      messages={messages}
-      input={input}
-      onInputChange={setInput}
-      onSend={send}
-      suggestions={suggestions}
-      accentColor={accent.primary}
-      isLoading={loading}
-      memoryDegraded={memoryDegraded}
-      disabled={!fortuneId}
-      flowFocus={FLOW_FOCUS[functionId]}
-    />
+    <div className="flex flex-col gap-3">
+      <MemoryPanel />
+      <OracleChat
+        messages={messages}
+        input={input}
+        onInputChange={setInput}
+        onSend={send}
+        suggestions={suggestions}
+        accentColor={accent.primary}
+        isLoading={loading}
+        memoryDegraded={memoryDegraded}
+        disabled={!fortuneId}
+        flowFocus={FLOW_FOCUS[functionId]}
+      />
+    </div>
   );
 
   if (functionId === 'occasion') {

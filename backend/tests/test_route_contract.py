@@ -18,6 +18,8 @@ def test_active_route_families_are_mounted():
     assert "/api/conv-analytics/chat" in paths
     assert "/api/dash/create" in paths
     assert "/api/fortune/create" in paths
+    assert "/api/fortune/{fortune_id}/trace" in paths
+    assert "/api/fortune/{fortune_id}/conversation" in paths
 
 
 def test_retired_routes_are_absent():

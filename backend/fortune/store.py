@@ -505,6 +505,129 @@ class FortuneRepository:
         )
         return row["id"] if row else None
 
+    # -- fortune_trace ------------------------------------------------------
+
+    async def get_latest_run_id(self, fortune_id: UUID) -> UUID | None:
+        """Return the most recent fortune_run id for a fortune, if any."""
+        if self.pool is None:
+            return None
+        row = await self.pool.fetchrow(
+            """
+            SELECT id FROM fortune_run
+            WHERE fortune_id = $1
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            fortune_id,
+        )
+        return row["id"] if row else None
+
+    async def list_trace_projections(
+        self,
+        fortune_id: UUID,
+        *,
+        run_id: UUID | None = None,
+    ) -> tuple[UUID | None, list[dict[str, Any]]]:
+        """Return redacted Glass Box projections for the fortune's latest run.
+
+        Rows in ``fortune_trace`` are already allowlisted/redacted at write
+        time. This read path re-shapes them into the live ``payload.trace``
+        projection so the frontend renders one shape for live + replay.
+        """
+        if self.pool is None:
+            return None, []
+
+        target_run_id = run_id or await self.get_latest_run_id(fortune_id)
+        if target_run_id is None:
+            return None, []
+
+        rows = await self.pool.fetch(
+            """
+            SELECT
+                run_id,
+                span_id,
+                phase,
+                parent_span_id,
+                span_type,
+                agent_name,
+                tool_name,
+                model,
+                input_json,
+                output_json,
+                error,
+                started_at,
+                ended_at,
+                duration_ms
+            FROM fortune_trace
+            WHERE run_id = $1
+            ORDER BY started_at ASC NULLS LAST, span_id ASC, phase ASC
+            """,
+            target_run_id,
+        )
+
+        events: list[dict[str, Any]] = []
+        for row in rows:
+            events.append(_trace_row_to_projection(dict(row)))
+        return target_run_id, events
+
+
+def _jsonb_summary(value: Any, key: str = "summary") -> str:
+    if isinstance(value, str):
+        try:
+            value = _json_loads(value)
+        except Exception:
+            return value[:240]
+    if isinstance(value, dict):
+        raw = value.get(key, "")
+        return "" if raw is None else str(raw)
+    return ""
+
+
+def _jsonb_status(value: Any, error: Any) -> str:
+    if error:
+        return "error"
+    if isinstance(value, str):
+        try:
+            value = _json_loads(value)
+        except Exception:
+            return "success"
+    if isinstance(value, dict):
+        status = value.get("status")
+        if isinstance(status, str) and status:
+            return status
+    return "success"
+
+
+def _json_loads(raw: str) -> Any:
+    import json
+    return json.loads(raw)
+
+
+def _trace_row_to_projection(row: dict[str, Any]) -> dict[str, Any]:
+    """Map a durable fortune_trace row onto the live payload.trace shape."""
+    run_id = str(row["run_id"])
+    span_id = str(row["span_id"])
+    phase = str(row.get("phase") or "complete")
+    started = row.get("started_at")
+    ended = row.get("ended_at")
+    return {
+        "eventId": f"{run_id}:{span_id}:{phase}",
+        "runId": run_id,
+        "spanId": span_id,
+        "phase": phase,
+        "parentSpanId": row.get("parent_span_id"),
+        "spanType": row.get("span_type"),
+        "agentName": row.get("agent_name"),
+        "toolName": row.get("tool_name"),
+        "model": row.get("model"),
+        "durationMs": row.get("duration_ms"),
+        "status": _jsonb_status(row.get("output_json"), row.get("error")),
+        "argSummary": _jsonb_summary(row.get("input_json")),
+        "resultSummary": _jsonb_summary(row.get("output_json")),
+        "startedAt": started.isoformat() if started is not None else None,
+        "endedAt": ended.isoformat() if ended is not None else None,
+    }
+
 
 # ---------------------------------------------------------------------------
 # Module-level convenience

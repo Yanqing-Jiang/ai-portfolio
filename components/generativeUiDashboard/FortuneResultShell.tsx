@@ -9,9 +9,10 @@ import {
   FortuneAgentResultShell,
 } from './FortuneAgentResultShell';
 import { useFortuneSession } from './hooks/useFortuneSession';
-import { ThinkingPanel } from './fortune/ThinkingPanel';
+import { GlassBoxPanel } from './fortune/shared/GlassBoxPanel';
 import { AskTab } from './fortune/shared/AskTab';
 import { WhyTab } from './fortune/shared/WhyTab';
+import { FLOW_ACCENTS } from './fortune/designTokens';
 import { FORTUNE_RESULT_CONFIG } from './fortune/shell/resultConfig';
 import type { CanonicalFortuneFunction } from '../../lib/fortuneRoutes';
 
@@ -76,9 +77,7 @@ export const FortuneResultShell: React.FC<FortuneResultShellProps> = ({
     baseRoute: config.baseRoute,
   });
 
-  const { isReplay, status, error, dataModel, cancel, pausing } = session;
-  const thinkingStatus: 'streaming' | 'complete' =
-    status === 'complete' ? 'complete' : 'streaming';
+  const { isReplay, status, error, cancel, pausing } = session;
 
   const subtitle =
     functionId === 'wish' ? question : config.subtitle;
@@ -94,14 +93,22 @@ export const FortuneResultShell: React.FC<FortuneResultShellProps> = ({
       onBack={onBack}
     >
       {!error && (
-        <ThinkingPanel
-          purpose={config.purpose}
-          dataModel={dataModel as Record<string, unknown> | null}
-          status={thinkingStatus}
-          onPause={cancel}
-          paused={pausing}
-          showCompletedDock={true}
-        />
+        <div className="mb-4 space-y-3">
+          <GlassBoxPanel accent={FLOW_ACCENTS[config.sessionFunctionId].primary} />
+          {status === 'streaming' && (
+            <div className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2">
+              <span className="text-[11px] text-slate-400">Reading in progress…</span>
+              <button
+                type="button"
+                onClick={cancel}
+                disabled={pausing}
+                className="text-[11px] font-semibold text-slate-300 hover:text-white disabled:opacity-50"
+              >
+                {pausing ? 'Pausing…' : 'Pause'}
+              </button>
+            </div>
+          )}
+        </div>
       )}
 
       {error && (
