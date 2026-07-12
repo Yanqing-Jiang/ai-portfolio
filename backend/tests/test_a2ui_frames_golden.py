@@ -11,6 +11,7 @@ Both FORTUNE_PIPELINE=v1 and the shared pipeline producer must match.
 from __future__ import annotations
 
 import json
+import re
 import sys
 import uuid
 from pathlib import Path
@@ -107,6 +108,8 @@ def _parse_sse_data_frames(chunks: list[str]) -> list[dict[str, Any]]:
     return frames
 
 
+_MS_RE = re.compile(r'\b\d+ms\b')
+
 _VOLATILE_KEYS = {
     "timestamp",
     "durationMs",
@@ -161,6 +164,10 @@ def _scrub_volatile(node: Any) -> None:
         # Trace step ids embed a content hash that includes timestamps.
         if key in {"stepId", "step_id"} and isinstance(value, str) and value.startswith("ts_"):
             node[key] = "ts_<HASH>"
+            continue
+        # Trace summaries embed wall-clock durations ("2 insights, 1ms").
+        if key in {"outputSummary", "inputSummary"} and isinstance(value, str):
+            node[key] = _MS_RE.sub("<N>ms", value)
             continue
         # DataEntry form: {key: "timestamp", valueString: "..."}
         if key == "key" and value in _VOLATILE_KEYS:

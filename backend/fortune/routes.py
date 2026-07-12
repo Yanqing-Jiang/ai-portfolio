@@ -70,10 +70,6 @@ try:
     from .store import get_repository, FortuneRepository
     from .triage import ALLOWED_ACTION_IDS, normalize_action_focus, run_triage
     from .session_store import get_ask_session
-    from .chain_store import (
-        get_response_chain,
-        set_response_chain,
-    )
     from .simulator import simulate_birth_time
     from .naming import canonical_function
     from ._thinking_heartbeat import HeartbeatTick, iter_with_heartbeats
@@ -111,10 +107,6 @@ except ImportError:
     from store import get_repository, FortuneRepository  # type: ignore[no-redef]
     from triage import ALLOWED_ACTION_IDS, normalize_action_focus, run_triage  # type: ignore[no-redef]
     from session_store import get_ask_session  # type: ignore[no-redef]
-    from chain_store import (  # type: ignore[no-redef]
-        get_response_chain,
-        set_response_chain,
-    )
     from simulator import simulate_birth_time  # type: ignore[no-redef]
     from naming import canonical_function  # type: ignore[no-redef]
     from _thinking_heartbeat import HeartbeatTick, iter_with_heartbeats  # type: ignore[no-redef]
@@ -484,9 +476,20 @@ async def create_fortune(request_body: CreateFortuneRequest, request: Request):
         await fortune_events.set_run_record(
             run_id_str, fortune_id=fortune_id_str, status="queued",
         )
+        lock_token = await store.acquire_lock(fortune_id_str)
+        if lock_token is None:  # pragma: no cover - new UUID cannot be contended
+            raise HTTPException(
+                status_code=409,
+                detail="This fortune is busy; retry the reading.",
+                headers={"Retry-After": "3"},
+            )
         # DEBT: run task dies with its owning worker; no runner service/lease.
         # Upgrade when workers > 1 or deploys must not kill active runs.
-        asyncio.create_task(fortune_pipeline.run_and_publish_safe(session))
+        asyncio.create_task(
+            fortune_pipeline.run_and_publish_safe(
+                session, store=store, lock_token=lock_token,
+            )
+        )
     else:
         await store.put(session)
 
@@ -848,61 +851,61 @@ async def handle_fortune_action(
     if session is None:
         raise HTTPException(status_code=404, detail="Fortune session not found")
 
-    # Refuse to rotate run_id under an active stream — otherwise the in-flight
-    # generator consumes `pending_action_id` set by the NEXT click and
-    # dispatches it as if it belonged to the current run.
-    if await store.lock_is_held_async(fortune_id):
+    lock_token = await store.acquire_lock(fortune_id)
+    if lock_token is None:
         raise HTTPException(
             status_code=409,
-            detail="A stream is active; wait for it to finish before choosing a new action.",
+            detail="This fortune is busy; wait for the current run to finish.",
             headers={"Retry-After": "3"},
         )
-
-    # Update focus based on action
-    normalized_focus = normalize_action_focus(request_body.action_id)
-    if normalized_focus in {"career", "relationship", "year"}:
-        session.request = session.request.model_copy(update={"focus": normalized_focus})
-
-    # Persist a new run row for this follow-up action. Always rotate to a
-    # fresh run id — even on persistence failure — so action-stream
-    # attribution stays distinct from the previous run.
-    new_run_id = str(uuid.uuid4())
     try:
-        repo = await get_repository()
-        run_rec = await repo.create_run(
-            fortune_id=uuid.UUID(fortune_id),
-            run_kind="action",
-            action_type=request_body.action_id,
+        normalized_focus = normalize_action_focus(request_body.action_id)
+        if normalized_focus in {"career", "relationship", "year"}:
+            session.request = session.request.model_copy(update={"focus": normalized_focus})
+
+        new_run_id = str(uuid.uuid4())
+        try:
+            repo = await get_repository()
+            run_rec = await repo.create_run(
+                fortune_id=uuid.UUID(fortune_id),
+                run_kind="action",
+                action_type=request_body.action_id,
+            )
+            if run_rec:
+                new_run_id = str(run_rec.id)
+        except Exception as exc:
+            logger.warning("[FORTUNE] action run persistence failed: %s", exc)
+
+        session.run_id = new_run_id
+        session.pending_action_id = request_body.action_id
+        session.pending_action_question = (
+            request_body.payload.get("question")
+            if isinstance(request_body.payload, dict) else None
         )
-        if run_rec:
-            new_run_id = str(run_rec.id)
-    except Exception as exc:
-        logger.warning("[FORTUNE] action run persistence failed: %s", exc)
+        session.touch(RuntimeStatus.initialized)
+        await store.put(session)
 
-    session.run_id = new_run_id
-    session.pending_action_id = request_body.action_id
-    session.pending_action_question = (
-        request_body.payload.get("question") if isinstance(request_body.payload, dict) else None
-    )
-    session.touch(RuntimeStatus.initialized)
-    await store.put(session)
+        if is_v2_pipeline():
+            await fortune_events.set_run_record(
+                new_run_id, fortune_id=fortune_id, status="queued",
+            )
+            asyncio.create_task(
+                fortune_pipeline.run_and_publish_safe(
+                    session, store=store, lock_token=lock_token,
+                )
+            )
+            lock_token = None  # background task now owns the writer lock
 
-    if is_v2_pipeline():
-        await fortune_events.set_run_record(
-            new_run_id, fortune_id=fortune_id, status="queued",
-        )
-        # DEBT: run task dies with its owning worker; no runner service/lease.
-        # Upgrade when workers > 1 or deploys must not kill active runs.
-        asyncio.create_task(fortune_pipeline.run_and_publish_safe(session))
-
-    return {
-        "fortune_id": fortune_id,
-        "run_id": new_run_id,
-        "action_id": request_body.action_id,
-        "focus": session.request.focus,
-        "status": session.status.value,
-        "stream_url": f"/api/fortune/{fortune_id}/stream",
-    }
+        return {
+            "fortune_id": fortune_id,
+            "run_id": new_run_id,
+            "action_id": request_body.action_id,
+            "focus": session.request.focus,
+            "status": session.status.value,
+            "stream_url": f"/api/fortune/{fortune_id}/stream",
+        }
+    finally:
+        await store.release_lock(fortune_id, lock_token)
 
 
 @router.post("/{fortune_id}/ask", response_model=AskResponse)
@@ -921,6 +924,28 @@ async def ask_fortune(
     await smart_rate_limit(request, scope=RateLimitScope.FORTUNE_ASK, weight=1)
 
     store = get_run_state()
+    lock_token = await store.acquire_lock(fortune_id)
+    if lock_token is None:
+        raise HTTPException(
+            status_code=409,
+            detail="This fortune is busy; wait for the current response to finish.",
+            headers={"Retry-After": "3"},
+        )
+    try:
+        return await _ask_fortune_locked(
+            fortune_id, request_body, store=store,
+        )
+    finally:
+        await store.release_lock(fortune_id, lock_token)
+
+
+async def _ask_fortune_locked(
+    fortune_id: str,
+    request_body: AskRequest,
+    *,
+    store,
+) -> AskResponse:
+    """Execute one serialized Ask turn."""
     fortune_session = await store.get(fortune_id)
     repo = await get_repository()
 
@@ -1010,9 +1035,6 @@ async def ask_fortune(
         logger.warning("[FORTUNE] ask-session acquisition failed: %s", exc)
         degraded_memory = True
 
-    previous_response_id = await get_response_chain(fortune_id)
-    response_id_sink: list[str] = []
-
     try:
         narrative = await run_triage(
             ctx,
@@ -1022,8 +1044,6 @@ async def ask_fortune(
             original_input=_build_ask_original_input(req_src),
             latest_narrative=latest_narrative,
             ask_mode=True,
-            previous_response_id=previous_response_id,
-            response_id_sink=response_id_sink,
         )
     except Exception as exc:
         logger.exception("[FORTUNE] /ask triage failed: %s", exc)
@@ -1042,20 +1062,12 @@ async def ask_fortune(
     except Exception as exc:
         logger.warning("[FORTUNE] ask run status update failed: %s", exc)
 
-    chain_status = "disabled"
-    if previous_response_id:
-        chain_status = "active"
-    if response_id_sink:
-        wrote = await set_response_chain(fortune_id, response_id_sink[-1])
-        if wrote and chain_status == "disabled":
-            chain_status = "seeded"
-
     return AskResponse(
         fortune_id=fortune_id,
         run_id=new_run_id,
         narrative=narrative.model_dump(),
         degraded_memory=degraded_memory,
-        chain_status=chain_status,
+        chain_status="disabled",
     )
 
 

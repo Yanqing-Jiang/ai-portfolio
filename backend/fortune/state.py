@@ -14,6 +14,7 @@ Keys:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -104,7 +105,7 @@ class RedisUnavailable(RuntimeError):
 
 
 # ---------------------------------------------------------------------------
-# Redis client (separate from chain_store / events so lifecycles stay clear)
+# Redis client (separate from events so lifecycles stay clear)
 # ---------------------------------------------------------------------------
 
 _redis_singleton: Any = None
@@ -354,6 +355,22 @@ class RunStateStore:
     async def release_lock(self, fortune_id: str, token: str | None) -> None:
         if not token:
             return
+        # Callers release from `finally` blocks that run while their request
+        # task is being cancelled (client disconnect). Run the actual release
+        # in a shielded task so cancellation can't leak the lock for its
+        # full TTL.
+        release = asyncio.ensure_future(self._release_lock_inner(fortune_id, token))
+        try:
+            await asyncio.shield(release)
+        except asyncio.CancelledError:
+            if not release.done():
+                # Give the shielded release one more chance to finish before
+                # propagating the caller's cancellation.
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(asyncio.shield(release), timeout=2)
+            raise
+
+    async def _release_lock_inner(self, fortune_id: str, token: str) -> None:
         redis = await self._redis(required=False)
         if redis is None:
             if self._lock_tokens.get(fortune_id) == token:

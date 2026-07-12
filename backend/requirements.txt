@@ -7,7 +7,7 @@ requests
 pyyaml
 pydantic==2.12.4
 openai>=1.107.3
-openai-agents==0.15.1
+openai-agents==0.18.2
 cnlunar>=0.2.4
 google-genai
 anthropic==0.75.0

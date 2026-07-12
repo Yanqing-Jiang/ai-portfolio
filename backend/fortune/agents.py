@@ -649,7 +649,6 @@ def _model_settings(
     max_tokens_key: str | None = None,
     *,
     service_tier_key: str | None = None,
-    store_key: str | None = None,
 ) -> ModelSettings:
     """Build per-stage ``ModelSettings`` from the FortuneSettings singleton.
 
@@ -661,6 +660,11 @@ def _model_settings(
     kwargs: dict[str, Any] = {
         "reasoning": Reasoning(effort=effort, summary=None),
         "verbosity": "low",
+        "store": False,
+        # store=False means reasoning items are never persisted server-side;
+        # session replay must carry them as encrypted content or follow-up
+        # turns 404 on the dangling rs_* references.
+        "response_include": ["reasoning.encrypted_content"],
     }
     if max_tokens_key is not None:
         cap = getattr(settings, max_tokens_key, None)
@@ -671,10 +675,6 @@ def _model_settings(
         tier = getattr(settings, service_tier_key, None)
         if tier:
             extra_args["service_tier"] = tier
-    if store_key is not None:
-        store = bool(getattr(settings, store_key, False))
-        if store:
-            kwargs["store"] = True
     if extra_args:
         kwargs["extra_args"] = extra_args
     return ModelSettings(**kwargs)
@@ -756,7 +756,6 @@ def _build_narrative_agent(
     *,
     max_tokens_setting_key: str | None = None,
     service_tier_setting_key: str | None = None,
-    store_setting_key: str | None = None,
 ) -> Agent[FortuneRunContext]:
     """Construct a narrative agent bound to a per-mode output schema.
 
@@ -772,7 +771,6 @@ def _build_narrative_agent(
             reasoning_setting_key,
             max_tokens_setting_key,
             service_tier_key=service_tier_setting_key,
-            store_key=store_setting_key,
         ),
         instructions=NARRATIVE_INSTRUCTIONS,
         output_type=output_type,
@@ -795,7 +793,6 @@ NARRATIVE_AGENTS: dict[str, Agent[FortuneRunContext]] = {
         CompatibilityNarrativeOutput,
         max_tokens_setting_key="narrative_max_tokens_compatibility",
         service_tier_setting_key="narrative_service_tier_compatibility",
-        store_setting_key="narrative_store_compatibility",
     ),
     "occasion": _build_narrative_agent(
         "fortune_narrative_occasion",
@@ -1367,6 +1364,7 @@ async def run_narrative(
     ctx: FortuneRunContext,
     *,
     foundation: dict[str, Any],
+    session: Any | None = None,
 ) -> EnrichedNarrativeOutput:
     """Run the narrative agent (non-streaming) and return structured output.
 
@@ -1391,12 +1389,14 @@ async def run_narrative(
         agent=agent.name,
         extra={"streamed": "false", "person_b": str("person_b" in foundation).lower()},
     ) as sh:
-        result = await Runner.run(
-            agent,
-            input=prompt,
-            context=ctx,
-            run_config=_run_config(ctx),
-        )
+        kwargs: dict[str, Any] = {
+            "input": prompt,
+            "context": ctx,
+            "run_config": _run_config(ctx),
+        }
+        if session is not None:
+            kwargs["session"] = session
+        result = await Runner.run(agent, **kwargs)
         sh.attach_result(result)
     return _promote_narrative_to_enriched(result.final_output)
 
@@ -1405,6 +1405,7 @@ async def run_narrative_streamed(
     ctx: FortuneRunContext,
     *,
     foundation: dict[str, Any],
+    session: Any | None = None,
 ):
     """Run the narrative agent with streaming. Returns the streamed run result.
 
@@ -1421,12 +1422,14 @@ async def run_narrative_streamed(
     """
     prompt = _build_narrative_prompt(ctx, foundation)
     agent = NARRATIVE_AGENTS[_narrative_mode(ctx)]
-    return Runner.run_streamed(
-        agent,
-        input=prompt,
-        context=ctx,
-        run_config=_run_config(ctx),
-    )
+    kwargs: dict[str, Any] = {
+        "input": prompt,
+        "context": ctx,
+        "run_config": _run_config(ctx),
+    }
+    if session is not None:
+        kwargs["session"] = session
+    return Runner.run_streamed(agent, **kwargs)
 
 
 async def run_guardrail(

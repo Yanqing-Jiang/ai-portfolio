@@ -1,9 +1,8 @@
-"""SQLAlchemySession factory for Ask-tab follow-up memory.
+"""SQLAlchemySession factory for each fortune's agent conversation.
 
-The action-button follow-ups (Career Deep Dive, etc.) are stateless — each
-click triages afresh on the already-computed foundation. The free-form **Ask
-tab** is different: users type "why did you say my metal is weak?" and expect
-the answer to build on prior turns. That needs durable conversation memory.
+The initial narrative, action follow-ups, and free-form Ask turns share one
+durable session. This lets a user ask "why did you say my metal is weak?" and
+have the answer build on the reading and prior turns without response-id chains.
 
 We use the Agents SDK's ``SQLAlchemySession`` pointed at Supabase so:
 
@@ -11,10 +10,10 @@ We use the Agents SDK's ``SQLAlchemySession`` pointed at Supabase so:
 2. Conversation history remains available across process restarts.
 3. The SDK handles compaction via ``SessionSettings(limit=…)`` — oldest
    messages beyond the limit are dropped on read. Good enough for a 20-turn
-   thread per fortune.
+   conversation per fortune.
 
 The session id is ``fortune_{fortune_id}``, so each fortune owns its own
-ask-thread. Sharing across fortunes would require separate session ids
+conversation. Sharing across fortunes would require separate session ids
 (not needed now).
 
 Why a separate asyncpg engine rather than reusing ``store.get_fortune_pool()``:
@@ -151,7 +150,7 @@ async def _ensure_tables_ready(engine) -> bool:
 
 
 async def get_ask_session(fortune_id: str):
-    """Return a configured ``SQLAlchemySession`` scoped to one fortune's ask thread.
+    """Return a configured ``SQLAlchemySession`` scoped to one fortune.
 
     Returns ``None`` when persistence is disabled so callers can fall back to
     stateless triage without crashing.

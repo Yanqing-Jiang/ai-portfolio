@@ -175,14 +175,26 @@ async def iter_fortune_sse_frames(session, *, request=None, store=None):
         yield frame
 
 
-async def run_and_publish(session, *, store=None) -> None:
+async def run_and_publish(session, *, store=None, lock_token: str | None = None) -> None:
     """v2 background runner: publish each frame envelope to Redis Streams."""
     if store is None:
         store = get_run_state()
     run_id = session.run_id or ""
     fortune_id = session.fortune_id
-    await fortune_events.set_run_record(run_id, fortune_id=fortune_id, status="streaming")
+    owns_lock = lock_token is not None
+    if lock_token is None:
+        lock_token = await store.acquire_lock(fortune_id)
+        owns_lock = lock_token is not None
+    if lock_token is None:
+        await fortune_events.set_run_record(
+            run_id,
+            fortune_id=fortune_id,
+            status="failed",
+            error_message="fortune_busy",
+        )
+        return
     try:
+        await fortune_events.set_run_record(run_id, fortune_id=fortune_id, status="streaming")
         async for sse_chunk in iter_fortune_sse_frames(session, request=None, store=store):
             for line in sse_chunk.splitlines():
                 if not line.startswith("data: "):
@@ -213,10 +225,13 @@ async def run_and_publish(session, *, store=None) -> None:
             run_id, fortune_id=fortune_id, status="failed", error_message=str(exc)[:500],
         )
         raise
+    finally:
+        if owns_lock:
+            await store.release_lock(fortune_id, lock_token)
 
 
-async def run_and_publish_safe(session) -> None:
+async def run_and_publish_safe(session, *, store=None, lock_token: str | None = None) -> None:
     try:
-        await run_and_publish(session)
+        await run_and_publish(session, store=store, lock_token=lock_token)
     except Exception:
         pass

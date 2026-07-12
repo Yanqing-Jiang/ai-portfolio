@@ -216,3 +216,43 @@ async def test_live_redis_publish_if_available():
     )
     assert entry and "-" in entry
     await client.delete(fortune_events.stream_key(run_id))
+
+
+@pytest.mark.asyncio
+async def test_release_lock_survives_caller_cancellation(monkeypatch):
+    """Client disconnect cancels the request task mid-``finally``; the lock
+    release must still reach Redis or the fortune stays busy for the TTL."""
+    import asyncio
+
+    reset_run_state_for_tests()
+    client = _FakeRedis()
+    orig_get = client.get
+
+    async def slow_get(key):
+        await asyncio.sleep(0.05)
+        return await orig_get(key)
+
+    client.get = slow_get
+
+    async def _redis(*, required=False):
+        await asyncio.sleep(0)
+        return client
+
+    monkeypatch.setattr("fortune.state.get_state_redis", _redis)
+    store = get_run_state()
+    token = await store.acquire_lock("f-cancel")
+    assert token
+    assert client.kv
+
+    task = asyncio.create_task(store.release_lock("f-cancel", token))
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    for _ in range(100):
+        if not client.kv:
+            break
+        await asyncio.sleep(0.01)
+    assert not client.kv, "lock key leaked after caller cancellation"
+    assert await store.acquire_lock("f-cancel")

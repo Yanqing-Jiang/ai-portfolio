@@ -631,7 +631,7 @@
                 "agentName": "Narrative",
                 "status": "queued",
                 "statusReason": "ok",
-                "modelId": "gpt-5.4-mini",
+                "modelId": "gpt-5.6-luna",
                 "sequence": 4,
                 "stage": 1,
                 "elapsedMs": 0,
@@ -645,7 +645,7 @@
                 "agentName": "Guardrail",
                 "status": "queued",
                 "statusReason": "ok",
-                "modelId": "gpt-5.4-mini",
+                "modelId": "gpt-5.6-luna",
                 "sequence": 5,
                 "stage": 1,
                 "elapsedMs": 0,
@@ -2916,7 +2916,7 @@
               },
               {
                 "key": "modelId",
-                "valueString": "gpt-5.4-mini"
+                "valueString": "gpt-5.6-luna"
               },
               {
                 "key": "sequence",
@@ -2974,7 +2974,7 @@
               },
               {
                 "key": "modelId",
-                "valueString": "gpt-5.4-mini"
+                "valueString": "gpt-5.6-luna"
               },
               {
                 "key": "sequence",
@@ -3121,7 +3121,7 @@
               },
               {
                 "key": "modelId",
-                "valueString": "gpt-5.4-mini"
+                "valueString": "gpt-5.6-luna"
               },
               {
                 "key": "sequence",
@@ -3179,7 +3179,7 @@
               },
               {
                 "key": "modelId",
-                "valueString": "gpt-5.4-mini"
+                "valueString": "gpt-5.6-luna"
               },
               {
                 "key": "sequence",
@@ -3412,7 +3412,7 @@
                 "toolName": null,
                 "label": "Narrative Complete",
                 "inputSummary": "",
-                "outputSummary": "2 insights, 0ms",
+                "outputSummary": "2 insights, <N>ms",
                 "timestamp": "<TIMESTAMP>",
                 "durationMs": 0,
                 "status": "success"
@@ -3438,7 +3438,7 @@
                 "toolName": null,
                 "label": "Safety Check Complete",
                 "inputSummary": "",
-                "outputSummary": "level=info, 0ms",
+                "outputSummary": "level=info, <N>ms",
                 "timestamp": "<TIMESTAMP>",
                 "durationMs": 0,
                 "status": "success"

@@ -12,6 +12,12 @@ import time as _time
 import uuid
 from typing import Any
 
+from agents.stream_events import (
+    AgentUpdatedStreamEvent,
+    RawResponsesStreamEvent,
+    RunItemStreamEvent,
+)
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -36,6 +42,7 @@ try:
     from .naming import canonical_function
     from ._thinking_heartbeat import HeartbeatTick, iter_with_heartbeats
     from .state import RuntimeStatus
+    from .session_store import get_ask_session
     from .pipeline import (
         _build_ask_original_input,
         _local_seq_allocator,
@@ -66,6 +73,7 @@ except ImportError:  # pragma: no cover
     from naming import canonical_function  # type: ignore[no-redef]
     from _thinking_heartbeat import HeartbeatTick, iter_with_heartbeats  # type: ignore[no-redef]
     from state import RuntimeStatus  # type: ignore[no-redef]
+    from session_store import get_ask_session  # type: ignore[no-redef]
     from pipeline import (  # type: ignore[no-redef]
         _build_ask_original_input,
         _local_seq_allocator,
@@ -86,23 +94,18 @@ def _extract_stream_event_meta(event: Any) -> dict[str, Any] | None:
         message outputs. These are the semantic breadcrumbs worth surfacing.
       * ``AgentUpdatedStreamEvent`` — fires on each handoff / specialist switch.
 
-    Returns a small dict describing the event in portable terms, or ``None``
-    if the event should be skipped. Kept defensive against minor SDK shape
-    drift: attribute lookups use ``getattr`` with fallbacks.
+    Uses the documented 0.18.2 stream-event classes and semantic ``name``
+    field; item-shape lookups remain defensive because tool payload types vary.
     """
-    cls_name = type(event).__name__
-    if cls_name == "RawResponsesStreamEvent":
+    if isinstance(event, RawResponsesStreamEvent):
         return None
-    if cls_name == "AgentUpdatedStreamEvent":
-        new_agent = getattr(event, "new_agent", None)
+    if isinstance(event, AgentUpdatedStreamEvent):
         return {
             "kind": "handoff",
-            "agent": getattr(new_agent, "name", None) or "unknown",
+            "agent": getattr(event.new_agent, "name", None) or "unknown",
         }
-    if cls_name == "RunItemStreamEvent":
-        item = getattr(event, "item", None)
-        if item is None:
-            return None
+    if isinstance(event, RunItemStreamEvent):
+        item = event.item
         raw_item = getattr(item, "raw_item", None)
         tool_name = (
             getattr(raw_item, "name", None)
@@ -110,24 +113,17 @@ def _extract_stream_event_meta(event: Any) -> dict[str, Any] | None:
             or (raw_item.get("name") if isinstance(raw_item, dict) else None)
             or (raw_item.get("tool_name") if isinstance(raw_item, dict) else None)
         )
-        type_field = getattr(item, "type", None) or ""
-        class_token = type(item).__name__ or ""
-        tokens = {
-            s.replace("_", "").lower() for s in (type_field, class_token) if s
-        }
-        if not tokens:
-            return None
-        if "toolcalloutputitem" in tokens or "tooloutputitem" in tokens:
+        if event.name == "tool_output":
             return {"kind": "tool_output", "tool": tool_name or "tool"}
-        if "toolcallitem" in tokens:
+        if event.name in {"tool_called", "tool_search_called"}:
             return {"kind": "tool_call", "tool": tool_name or "tool"}
-        if "handoffcallitem" in tokens or "handoffoutputitem" in tokens:
+        if event.name in {"handoff_requested", "handoff_occured"}:
             target = (
                 getattr(raw_item, "target", None)
                 or getattr(raw_item, "handoff_target", None)
             )
             return {"kind": "handoff_call", "target": target}
-        if "reasoningitem" in tokens:
+        if event.name == "reasoning_item_created":
             raw_summary = (
                 getattr(item, "summary", None)
                 or getattr(raw_item, "summary", None)
@@ -148,7 +144,7 @@ def _extract_stream_event_meta(event: Any) -> dict[str, Any] | None:
             else:
                 summary_text = _text_of(raw_summary)
             return {"kind": "reasoning", "summary": summary_text or None}
-        if "messageoutputitem" in tokens:
+        if event.name == "message_output_created":
             return {"kind": "message", "tool": None}
         return None
     return None
@@ -546,6 +542,7 @@ async def _event_generator_impl(session, *, request=None, store=None):
                     input_summary=f"action={pending_action}",
                 )
                 yield await _emit(bridge.emit_trace_steps_batch(trace.steps))
+            sdk_session = await get_ask_session(session.fortune_id)
             _t_narrative = _time.monotonic()
             logger.info(
                 "[FORTUNE] %s triage start — action=%s",
@@ -571,6 +568,7 @@ async def _event_generator_impl(session, *, request=None, store=None):
                 question=pending_question,
                 original_input=_build_ask_original_input(session.request),
                 latest_narrative=session.latest_narrative,
+                session=sdk_session,
             )
             cancel_msg = await _cancel_event("narrative", trace)
             if cancel_msg:
@@ -615,6 +613,7 @@ async def _event_generator_impl(session, *, request=None, store=None):
                 )
             )
 
+            sdk_session = await get_ask_session(session.fortune_id)
             _t_narrative = _time.monotonic()
             logger.info(
                 "[FORTUNE] %s narrative start — model=%s",
@@ -622,7 +621,11 @@ async def _event_generator_impl(session, *, request=None, store=None):
                 get_settings().narrative_model,
             )
 
-            stream_result = await run_narrative_streamed(ctx, foundation=foundation)
+            stream_result = await run_narrative_streamed(
+                ctx,
+                foundation=foundation,
+                session=sdk_session,
+            )
             seen_tools: set[str] = set()
             async for event in iter_with_heartbeats(
                 stream_result.stream_events(), interval=8.0
@@ -1002,4 +1005,3 @@ async def _event_generator_impl(session, *, request=None, store=None):
         await _maybe_clear_pending()
         for msg in bridge.emit_error(str(exc)):
             yield await _emit(msg)
-
