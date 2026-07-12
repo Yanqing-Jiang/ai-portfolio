@@ -1,16 +1,14 @@
 /**
  * FortuneAgentCustomWishResult — 問 Custom Wish reading.
  *
- * Now connected to the backend via useFortuneSession.
- * Falls back to the old mock UI when no fortuneId is in the URL
- * (legacy /result?q= route).
+ * Connected to the backend via useFortuneSession.
  *
  * Tabs: Verdict · Anchor · Why · Ask
  */
 
 import React, { useState } from 'react';
 import { AnimatePresence } from 'framer-motion';
-import { useSearchParams } from 'react-router-dom';
+import { useLocation } from 'react-router-dom';
 import {
     FortuneAgentResultShell,
     type FortuneTab,
@@ -24,7 +22,6 @@ import { ThinkingPanel } from './fortune/ThinkingPanel';
 
 interface FortuneAgentCustomWishResultProps {
     onBack?: () => void;
-    initialQuestion?: string;
 }
 
 const TABS: FortuneTab[] = [
@@ -36,13 +33,10 @@ const TABS: FortuneTab[] = [
 
 export const FortuneAgentCustomWishResult: React.FC<FortuneAgentCustomWishResultProps> = ({
     onBack,
-    initialQuestion,
 }) => {
     const [activeTab, setActiveTab] = useState('Verdict');
-    const [searchParams] = useSearchParams();
-
-    // Support both new /:fortuneId routes and legacy /result?q= routes
-    const question = initialQuestion || searchParams.get('q') || undefined;
+    const { state } = useLocation();
+    const question = (state as { question?: string } | null)?.question;
 
     const session = useFortuneSession({
         functionId: 'wish',
@@ -70,7 +64,6 @@ export const FortuneAgentCustomWishResult: React.FC<FortuneAgentCustomWishResult
                     status={thinkingStatus}
                     onPause={cancel}
                     paused={pausing}
-                    // PR-Panel: always-visible thinking panel.
                     showCompletedDock={true}
                 />
             )}

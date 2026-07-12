@@ -23,7 +23,6 @@ import { fortuneClient, FortuneApiError } from './lib/fortuneClient';
 import { useFortuneStore } from './stores/fortuneStore';
 import { ActivityRail, type ActivityRailStep, type ActivityRailSummary } from './ActivityRail';
 import { GlassBoxDrawer } from './GlassBoxDrawer';
-import { BirthTimeSimulator } from './BirthTimeSimulator';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -497,8 +496,6 @@ function StreamingPhase({ fortuneId, inspectorMode = false }: StreamingPhaseProp
     const storeRunId = useFortuneStore((s) => s.runId);
     const glassContext = storeRunId ? `Run ${storeRunId.slice(0, 8)}` : undefined;
 
-    const [simulatorOpen, setSimulatorOpen] = useState(false);
-
     return (
         <div ref={contentRef} className="mx-auto w-full max-w-6xl px-4 py-6">
             {/* Tab-based results view — routes widgets to tabs */}
@@ -559,24 +556,6 @@ function StreamingPhase({ fortuneId, inspectorMode = false }: StreamingPhaseProp
                 isStreaming={!streamState.isDone}
                 isOpen={glassOpen}
                 onToggle={() => setGlassOpen((v) => !v)}
-            />
-
-            {/* Birth-time uncertainty simulator — opens a modal that runs
-                the deterministic foundation across all 12 branches. */}
-            <button
-                type="button"
-                onClick={() => setSimulatorOpen(true)}
-                className="fixed bottom-16 left-4 z-40 flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-slate-900/80 px-3 py-1.5 text-[11px] uppercase tracking-wide text-amber-300 shadow-lg backdrop-blur hover:bg-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/40"
-                aria-haspopup="dialog"
-                aria-expanded={simulatorOpen}
-            >
-                <span aria-hidden="true">⧖</span>
-                <span>Time Uncertainty</span>
-            </button>
-            <BirthTimeSimulator
-                open={simulatorOpen}
-                fortuneId={fortuneId}
-                onClose={() => setSimulatorOpen(false)}
             />
 
             {/* Clarification overlay */}

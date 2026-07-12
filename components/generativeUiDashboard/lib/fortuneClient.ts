@@ -72,39 +72,6 @@ export interface ActionResponse {
     stream_url: string;
 }
 
-export interface SimulatorBranch {
-    branch: string;
-    repHour: string;
-    window: string;
-    hourPillarStem: string | null;
-    hourPillarBranch: string | null;
-    dominantElement: string;
-    weakestElement: string;
-    enhancedElementCounts: Record<string, number>;
-    seasonalStrength: string;
-    seasonalScore: number;
-    harmonyScore: number;
-}
-
-export interface SimulatorStability {
-    dayMaster: { value: string; count: number; total: number; distribution: Record<string, number> };
-    dominantElement: { value: string; count: number; total: number; distribution: Record<string, number> };
-    seasonalStrength: { value: string; count: number; total: number; distribution: Record<string, number> };
-    hourBranchDiversity: number;
-}
-
-export interface SimulatorResponse {
-    fortune_id: string;
-    branches: SimulatorBranch[];
-    stability: SimulatorStability | null;
-    repDate: string;
-    expectedBranches: number;
-    completedBranches: number;
-    failedBranches: string[];
-    partial: boolean;
-    error?: string;
-}
-
 export interface AskResponse {
     fortune_id: string;
     run_id: string;
@@ -248,17 +215,6 @@ export const fortuneClient = {
         const { data } = await jsonFetch<AskResponse>(
             `/api/fortune/${fortuneId}/ask`,
             { method: 'POST', body: JSON.stringify({ question }) },
-        );
-        return data;
-    },
-
-    async simulateBirthTime(
-        fortuneId: string,
-        opts: { signal?: AbortSignal } = {},
-    ): Promise<SimulatorResponse> {
-        const { data } = await jsonFetch<SimulatorResponse>(
-            `/api/fortune/${fortuneId}/simulate`,
-            { method: 'POST', signal: opts.signal },
         );
         return data;
     },

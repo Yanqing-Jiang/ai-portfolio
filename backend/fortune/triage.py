@@ -19,7 +19,7 @@ Why this shape:
   as the initial narrative, so the frontend renders follow-up answers with
   the same insight-card UI — no second renderer.
 
-Routing precedence inside ``run_triage`` (PR4 of the latency refactor):
+Routing precedence inside ``run_triage``:
 
 1. Explicit ``action_id`` from the FE → ``SPECIALISTS[action_id]``.
 2. Deterministic ``infer_specialist_action`` heuristic on the free-form
@@ -34,6 +34,11 @@ import json
 from typing import Any
 
 from agents import Agent, Runner
+
+try:
+    from .naming import canonical_function
+except ImportError:
+    from naming import canonical_function  # type: ignore[no-redef]
 
 try:
     from .agents import (
@@ -139,8 +144,7 @@ def infer_specialist_action(
 ) -> str | None:
     """Pick a specialist action_id deterministically from question + focus.
 
-    Returns ``None`` when no rule fires confidently. Per PR4 of the latency
-    refactor, the caller (``run_triage``) defaults a None return to
+    Returns ``None`` when no rule fires confidently. The caller defaults a None return to
     ``expand_classics`` rather than calling an LLM router — see the
     ask-default branch in ``run_triage`` for the rationale.
     """
@@ -150,6 +154,7 @@ def infer_specialist_action(
     # carries strong intent (e.g. "compatibility:" → relationship_focus).
     raw_focus = focus or (original_input or {}).get("focus")
     f = (raw_focus or "").lower().strip()
+    function_id = canonical_function(f)
 
     # --- Strongest signal: keyword in the question itself ---
     if q:
@@ -162,7 +167,7 @@ def infer_specialist_action(
 
         # Occasion-specific energetic-fit intent only applies under an
         # occasion focus; otherwise these phrases are generic.
-        if f.startswith("occasion:") and (
+        if function_id == "occasion" and (
             _has_phrase(q, _OCCASION_FIT_PHRASES) or _has_word(q, _OCCASION_FIT_WORDS)
         ):
             return "deep_dive_element"
@@ -179,18 +184,17 @@ def infer_specialist_action(
         # Wish / general "why … this … mean?" → expand classics. "Why"
         # questions on wish or general focus get a denser explanation from
         # the classics-expansion specialist than from the year forecaster.
-        if (not f or f.startswith("wish")) and _has_phrase(q, _WHY_PHRASES):
+        if function_id in (None, "wish") and _has_phrase(q, _WHY_PHRASES):
             return "expand_classics"
 
     # --- Fall back to focus prefix → reasonable specialist default ---
-    if f.startswith("compatibility:"):
+    if function_id == "compatibility":
         return "relationship_focus"
-    if f.startswith("luck_cycle:"):
+    if function_id == "cycle":
         return "year_forecast"
-    if f.startswith("occasion:"):
+    if function_id == "occasion":
         return "year_forecast"
-    if f.startswith("wish") or f.startswith("compatibility") or f.startswith("luck") or f.startswith("occasion"):
-        # tagged but no colon — still better than triage round trip.
+    if function_id == "wish":
         return "expand_classics"
 
     # No confident rule → caller defaults to expand_classics (ask_default).
@@ -307,7 +311,7 @@ EXPAND_CLASSICS_INSTRUCTIONS = (
     "\n"
     "EMPTY REFERENCES — IMPORTANT: ``expand_classics`` is also the deterministic "
     "default for ambiguous Ask questions when the heuristic router can't infer "
-    "a specialist (PR4's ``ask_default`` route). If ``foundation.references`` "
+    "a specialist. If ``foundation.references`` "
     "is empty or missing, DO NOT fabricate a classical citation. Instead, ground "
     "the expansion in the chart's structural signals — the day master + element, "
     "ten gods on each pillar, dominant/deficient elements, branch interactions — "
@@ -415,15 +419,6 @@ def normalize_action_focus(action_id: str) -> str | None:
 # ---------------------------------------------------------------------------
 # Triage routing
 # ---------------------------------------------------------------------------
-#
-# Historical note: a `TRIAGE_AGENT` LLM router used to live here, with all six
-# specialists registered as tools via `Agent.as_tool()`. PR4 of the latency
-# refactor (2026-05-09) removed it: the deterministic `infer_specialist_action`
-# heuristic + a hard `expand_classics` default for the miss path eliminate the
-# 30-50s LLM round trip whose only job was specialist selection. If a future
-# change demands an LLM router again (e.g. multi-tool delegation), restore the
-# agent here and gate it behind an env var rather than putting it back on the
-# default path.
 
 
 # ---------------------------------------------------------------------------
@@ -540,11 +535,8 @@ def _build_triage_prompt(
 
     The previous order (``intent → original_input → latest_narrative →
     foundation``) put the most volatile bytes first and broke caching on
-    every turn. PR4 of the latency refactor reorders this so multi-turn
-    Ask sessions get the 40-80% TTFB cut from cached input.
+    every turn.
 
-    See PR2's ``_build_narrative_prompt`` in agents.py for the same
-    convention applied to narrative agents.
     """
     analysis = foundation.get("analysis")
     foundation_block: dict[str, Any] = {
@@ -623,18 +615,6 @@ async def run_triage(
     the Ask tab continuity without re-sending prior Q&A. Compaction is
     governed by the session's ``SessionSettings(limit=…)``.
 
-    ``previous_response_id`` (PR-4): when set, threaded to
-    ``Runner.run(previous_response_id=...)`` so OpenAI re-uses cached
-    reasoning/tool state from the prior turn. Cuts Ask follow-up latency
-    by 30-50% on chains 2+ turns deep. Requires the prior turn to have
-    been called with ``store=True`` — handled by
-    ``narrative_store_compatibility`` on the compat narrative agent.
-
-    ``response_id_sink`` (PR-4): pass-by-reference output channel for the
-    fresh ``result.last_response_id`` — when provided, this function
-    appends the new id so the caller can write it back to the chain map.
-    A list (rather than returning a tuple) keeps the function signature
-    backward-compatible with the many existing call sites.
     """
     prompt = _build_triage_prompt(
         ctx,
@@ -651,8 +631,6 @@ async def run_triage(
     }
     if session is not None:
         kwargs["session"] = session
-    # PR-4: thread the chained id when present. ``Runner.run`` accepts
-    # ``previous_response_id`` directly (verified against the SDK).
     if previous_response_id is not None:
         kwargs["previous_response_id"] = previous_response_id
 
@@ -672,14 +650,6 @@ async def run_triage(
     # latency cut on the Ask tab) while preserving the structured output
     # contract the FE expects.
     #
-    # Miss path: if no explicit action_id AND the heuristic returns None,
-    # default to ``expand_classics`` (PR4 of the latency refactor). The old
-    # behaviour was to fall through to the LLM ``TRIAGE_AGENT`` for an
-    # additional 30-50s round trip whose only job was to pick a specialist.
-    # In practice a "did you really mean…?" answer grounded in the chart's
-    # classical references is the most useful default for ambiguous Ask
-    # questions, and avoids the latency tax. Operators wanting the old
-    # behaviour can pass ``action_id`` explicitly from the FE.
     inferred = action_id
     routed_via = "explicit_action_id"
     if inferred is None and (question or ctx.question):
@@ -720,7 +690,6 @@ async def run_triage(
     ) as sh:
         result = await Runner.run(specialist, **kwargs)
         sh.attach_result(result)
-    # PR-4: surface the new response_id so the caller can chain it.
     if response_id_sink is not None:
         new_rid = getattr(result, "last_response_id", None)
         if new_rid:

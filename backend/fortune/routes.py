@@ -75,6 +75,7 @@ try:
         set_response_chain,
     )
     from .simulator import simulate_birth_time
+    from .naming import canonical_function
     from ._thinking_heartbeat import HeartbeatTick, iter_with_heartbeats
 except ImportError:
     from agents import (  # type: ignore[no-redef]
@@ -104,6 +105,7 @@ except ImportError:
         set_response_chain,
     )
     from simulator import simulate_birth_time  # type: ignore[no-redef]
+    from naming import canonical_function  # type: ignore[no-redef]
     from _thinking_heartbeat import HeartbeatTick, iter_with_heartbeats  # type: ignore[no-redef]
 
 
@@ -167,12 +169,6 @@ class AskResponse(BaseModel):
     # Degraded is true when ask-session memory could not be used (e.g. Supabase
     # unreachable) — the answer is still valid but it has no conversation history.
     degraded_memory: bool = False
-    # PR-4: chain status. ``"active"`` = previous_response_id threaded
-    # to OpenAI for cached-state reuse; ``"seeded"`` = first turn in
-    # this fortune's chain (wrote a new id, nothing to read); ``"disabled"``
-    # = master flag off OR Redis unreachable (Ask still works, just no
-    # latency cut). The frontend surfaces this in dev mode to make the
-    # chain visible during demos.
     chain_status: str = "disabled"
 
 
@@ -817,13 +813,6 @@ def _extract_stream_event_meta(event: Any) -> dict[str, Any] | None:
             )
             return {"kind": "handoff_call", "target": target}
         if "reasoningitem" in tokens:
-            # Reasoning summary chunk. PR2 of the latency refactor flipped
-            # the narrative agent to ``summary=None``, so this branch is
-            # now exercised primarily by the guardrail/triage agents and
-            # legacy callers that opt into ``summary="auto"``. The payload
-            # shape is ``list[Summary(text=..., type="summary_text")]``.
-            # We flatten the text(s) to a single string so the thinking
-            # panel can render a real signal when summaries DO arrive.
             raw_summary = (
                 getattr(item, "summary", None)
                 or getattr(raw_item, "summary", None)
@@ -851,7 +840,7 @@ def _extract_stream_event_meta(event: Any) -> dict[str, Any] | None:
 
 
 # ------------------------------------------------------------------
-# PR-Panel — Always-visible Thinking Panel canonical rows
+# Always-visible Thinking Panel canonical rows
 # ------------------------------------------------------------------
 #
 # These five (or six) rows are seeded as ``queued`` placeholders the
@@ -905,7 +894,7 @@ def _panel_canonical_rows(
     The deterministic rows are static; the narrative + guardrail rows
     pick up ``model_id`` and ``reasoning_effort`` from the selected
     agent's ``ModelSettings`` so the panel never lies about which tier
-    was actually used (this was the bug PR-2 inlined a fix for).
+    was actually used.
     """
     narrative_effort = (
         narrative_agent.model_settings.reasoning.effort
@@ -1013,9 +1002,6 @@ async def stream_fortune(fortune_id: str, request: Request):
                 }
                 return f"data: {_json.dumps(env)}\n\n"
 
-            # Track whether we've actually started streaming. ``pending_action_id``
-            # is only cleared after the run transitions to 'streaming' AND we've
-            # emitted the first event — SHOULD-FIX #12 from the audit.
             pending_cleared = False
             pending_action = session.pending_action_id
             pending_question = session.pending_action_question
@@ -1081,10 +1067,6 @@ async def stream_fortune(fortune_id: str, request: Request):
                     from agent_logging import classify_function, log_stream_start  # type: ignore[no-redef]
                 _fn_label = classify_function(ctx.focus, ctx.question)
                 _settings_for_log = get_settings()
-                # PR3 follow-up: log the per-mode reasoning effort the
-                # streamed agent will actually use, not the legacy global
-                # ``narrative_reasoning``. Canary analysis depends on
-                # this field being correct for occasion/luck/wish.
                 _stream_start_mode = _narrative_mode(ctx)
                 _stream_start_agent = NARRATIVE_AGENTS[_stream_start_mode]
                 log_stream_start(
@@ -1107,13 +1089,6 @@ async def stream_fortune(fortune_id: str, request: Request):
                 for msg in bridge.begin_messages(fortune_id=session.fortune_id):
                     yield await _emit(msg)
 
-                # PR-Panel: seed all 5 canonical Thinking Panel rows as
-                # ``queued`` placeholders the moment the stream opens —
-                # the frontend's empty-state ("Queueing pipeline...")
-                # flips to a visible 5-row skeleton within ~50ms of
-                # connect. Each row transitions to ``running`` then
-                # ``done`` as work happens; the reducer is keyed by
-                # ``stepId`` so later events overwrite earlier ones.
                 _panel_rows = _panel_canonical_rows(
                     _stream_start_agent,
                     narrative_model_id=_settings_for_log.narrative_model,
@@ -1177,7 +1152,8 @@ async def stream_fortune(fortune_id: str, request: Request):
                 # Compatibility: compute Person B foundation and emit both
                 # persons under /data/compatibility/{personA,personB} so the
                 # compat UI (PillarsTab, OverviewTab) can render two charts.
-                is_compat = bool(ctx.focus and ctx.focus.startswith("compatibility"))
+                function_id = canonical_function(ctx.focus, session.request.question)
+                is_compat = function_id == "compatibility"
                 person_b_info = session.request.person_b
                 foundation_b: dict[str, Any] | None = None
                 if is_compat:
@@ -1243,13 +1219,6 @@ async def stream_fortune(fortune_id: str, request: Request):
                 if trace:
                     yield await _emit(bridge.emit_trace_steps_batch(trace.steps))
 
-                # PR-Panel: foundation just finished — mark the 3
-                # deterministic rows ``done``. They run inside
-                # ``run_foundation`` (<300ms typical) so we collapse
-                # their queued→running→done into a single done emit.
-                # ``dur_f`` is set above when foundation wasn't cached;
-                # default to 0ms for the cache-hit path (still emits a
-                # terminal state so the rows aren't stuck queued).
                 _panel_found_ms = int(locals().get("dur_f", 0) or 0)
                 for _det_row in _PANEL_DETERMINISTIC_ROWS:
                     yield await _emit(
@@ -1327,7 +1296,6 @@ async def stream_fortune(fortune_id: str, request: Request):
                         "[FORTUNE] %s triage start — action=%s",
                         session.fortune_id, pending_action,
                     )
-                    # PR-Panel: narrative row → ``running`` (triage path).
                     _panel_narr_row = next(
                         r for r in _panel_rows if r["step_id"] == "narrative"
                     )
@@ -1353,7 +1321,6 @@ async def stream_fortune(fortune_id: str, request: Request):
                     if cancel_msg:
                         yield cancel_msg
                         return
-                    # PR-Panel: narrative row → ``done`` after triage.
                     _dur_triage = int((_time.monotonic() - _t_narrative) * 1000)
                     yield await _emit(
                         bridge.emit_agent_step(
@@ -1379,9 +1346,6 @@ async def stream_fortune(fortune_id: str, request: Request):
                         )
                         yield await _emit(bridge.emit_trace_steps_batch(trace.steps))
 
-                    # PR-Panel: flip narrative row to ``running`` before
-                    # the SDK call so the panel reflects the live state
-                    # during the longest reasoning window.
                     _panel_narr_row = next(
                         r for r in _panel_rows if r["step_id"] == "narrative"
                     )
@@ -1403,20 +1367,8 @@ async def stream_fortune(fortune_id: str, request: Request):
                         get_settings().narrative_model,
                     )
 
-                    # BLOCKING #2 fix: translate SDK stream events into SSE
-                    # envelopes. We surface semantic milestones (tool call,
-                    # handoff, message completion) rather than raw text deltas —
-                    # the narrative agent emits structured JSON so mid-stream
-                    # partial text is not useful to render.
                     stream_result = await run_narrative_streamed(ctx, foundation=foundation)
                     seen_tools: set[str] = set()
-                    # PR5: wrap the SDK event iterator with a synthetic heartbeat
-                    # multiplexer. Every ~8s of silence the helper yields a
-                    # ``HeartbeatTick`` so we can paint a "Still reasoning…"
-                    # progress event in the otherwise-silent window between the
-                    # last tool output and ``ResponseCompleted``. Replaces the
-                    # UX role of the dropped ``summary="auto"`` reasoning
-                    # summaries (PR2) without paying their TTFB tax.
                     async for event in iter_with_heartbeats(
                         stream_result.stream_events(), interval=8.0
                     ):
@@ -1564,13 +1516,6 @@ async def stream_fortune(fortune_id: str, request: Request):
                     _selected_mode = _narrative_mode(ctx)
                     _selected_agent_obj = NARRATIVE_AGENTS[_selected_mode]
                     _selected_agent = _selected_agent_obj.name
-                    # PR-2: read the per-mode effort off the selected
-                    # agent's actual ModelSettings. The legacy log read
-                    # ``_settings_now.narrative_reasoning`` (always
-                    # ``medium``) even after the route resolved a per-mode
-                    # agent with a different tier — making latency
-                    # dashboards lie. Fall back to the legacy key only if
-                    # an agent somehow lacks a Reasoning binding.
                     _selected_reasoning = _selected_agent_obj.model_settings.reasoning
                     _selected_effort = (
                         _selected_reasoning.effort
@@ -1602,13 +1547,6 @@ async def stream_fortune(fortune_id: str, request: Request):
                     )
                     trace.steps[-1].duration_ms = dur_n
 
-                # PR-Panel: narrative row → ``done`` with real elapsed
-                # and reasoning_tokens. The audit asserts:
-                #   reasoning_effort == "none" → reasoning_tokens == 0
-                #   reasoning_effort in {low,medium,high,xhigh}
-                #     → reasoning_tokens > 0 (in steady state; not
-                #       gated here because some early API responses
-                #       drop reasoning_tokens metadata).
                 _panel_narr_tokens = int(
                     getattr(_stream_used, "reasoning_tokens", 0) or 0
                 )
@@ -1646,7 +1584,7 @@ async def stream_fortune(fortune_id: str, request: Request):
 
                 # Occasion fan-out
                 occasion_block = session.latest_narrative.get("occasion") if session.latest_narrative else None
-                is_occasion = bool(ctx.focus and ctx.focus.startswith("occasion"))
+                is_occasion = function_id == "occasion"
                 logger.info(
                     "[FORTUNE] %s occasion fan-out: is_occasion=%s block=%s picks=%d mechs=%d",
                     session.fortune_id, is_occasion,
@@ -1670,7 +1608,7 @@ async def stream_fortune(fortune_id: str, request: Request):
 
                 # Luck cycle fan-out
                 luck_block = session.latest_narrative.get("luck_cycle") if session.latest_narrative else None
-                is_luck = bool(ctx.focus and ctx.focus.startswith("luck_cycle"))
+                is_luck = function_id == "cycle"
                 if is_luck:
                     yield await _emit(bridge.emit_luck_cycle_timeline(
                         luck_pillars=analysis.luck_pillars,
@@ -1685,16 +1623,7 @@ async def stream_fortune(fortune_id: str, request: Request):
 
                 # Wish fan-out
                 wish_block = session.latest_narrative.get("wish") if session.latest_narrative else None
-                # Wish is the "everything else with a question" bucket — triggered when a question is present
-                # AND focus is NOT one of the other specialized prefixes.
-                is_wish = bool(
-                    session.request.question
-                    and not (ctx.focus and (
-                        ctx.focus.startswith("compatibility") or
-                        ctx.focus.startswith("occasion") or
-                        ctx.focus.startswith("luck_cycle")
-                    ))
-                )
+                is_wish = function_id == "wish"
                 if is_wish and wish_block:
                     if wish_block.get("verdict"):
                         yield await _emit(bridge.emit_wish_verdict(wish_block["verdict"]))
@@ -1728,7 +1657,6 @@ async def stream_fortune(fortune_id: str, request: Request):
                 if trace:
                     trace.add_instant("llm_start", "guardrail", label="Running Safety Check")
 
-                # PR-Panel: guardrail row → ``running``.
                 _panel_guard_row = next(
                     r for r in _panel_rows if r["step_id"] == "guardrail"
                 )
@@ -1765,11 +1693,6 @@ async def stream_fortune(fortune_id: str, request: Request):
                     )
                     trace.steps[-1].duration_ms = dur_g
 
-                # PR-Panel: guardrail row → ``done``. ``run_guardrail``
-                # doesn't currently surface reasoning_tokens at the route
-                # level — the cap is 1200 tokens (PR3) and effort is
-                # ``low`` so the token contribution is bounded; report
-                # 0 here until the call returns usage explicitly.
                 yield await _emit(
                     bridge.emit_agent_step(
                         step_id="guardrail",
@@ -1957,9 +1880,6 @@ async def ask_fortune(
         foundation = fortune_session.latest_foundation
         latest_narrative = fortune_session.latest_narrative
     else:
-        # Fall back to the durable snapshot so /ask survives restarts and any
-        # cross-worker route. This turns a previously confusing 409 into a
-        # working answer whenever the snapshot is intact — SHOULD-FIX #5.
         hydrated = await _hydrate_foundation_from_snapshot(repo, fortune_id)
         if hydrated is not None:
             foundation = hydrated
@@ -2039,11 +1959,6 @@ async def ask_fortune(
         logger.warning("[FORTUNE] ask-session acquisition failed: %s", exc)
         degraded_memory = True
 
-    # PR-4: read the chained previous_response_id (if any) before
-    # dispatching. ``None`` is the normal first-turn case; the call
-    # below then writes the new id back, which the NEXT Ask turn picks
-    # up. Failures here are non-fatal — chain_store degrades to
-    # ``None`` and the path collapses to legacy stateless behavior.
     previous_response_id = await get_response_chain(fortune_id)
     response_id_sink: list[str] = []
 
@@ -2055,13 +1970,7 @@ async def ask_fortune(
             session=ask_session,
             original_input=_build_ask_original_input(req_src),
             latest_narrative=latest_narrative,
-            # Ask follow-ups use the deterministic code-side router with the
-            # lower ``ask_reasoning`` effort. ~50% latency cut on typical
-            # follow-ups; questions the router can't classify default to
-            # ``expand_classics`` (PR4 of the latency refactor) — no LLM
-            # triage round trip is ever issued on this path.
             ask_mode=True,
-            # PR-4 chain.
             previous_response_id=previous_response_id,
             response_id_sink=response_id_sink,
         )
@@ -2082,12 +1991,6 @@ async def ask_fortune(
     except Exception as exc:
         logger.warning("[FORTUNE] ask run status update failed: %s", exc)
 
-    # PR-4: persist the new chain head. Best-effort; if Redis is down
-    # we just report ``chain_status="disabled"`` and the user loses the
-    # ~30-50% chained-latency cut on the NEXT Ask turn (this turn's
-    # answer is unaffected). The set_response_chain helper also
-    # schedules the deferred OpenAI DELETE call so we honor the
-    # ephemeral-retention privacy promise.
     chain_status = "disabled"
     if previous_response_id:
         chain_status = "active"

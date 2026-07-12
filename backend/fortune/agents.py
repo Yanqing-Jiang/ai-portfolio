@@ -15,6 +15,7 @@ try:
     from .calendar_tool import compute_bazi_chart
     from .classics import retrieve_classical_references
     from .config import get_settings
+    from .naming import canonical_function
     from .bazi_engine import (
         compute_full_analysis, FullBaziAnalysis,
         compute_all_hidden_stems, compute_ten_gods, compute_interactions,
@@ -32,6 +33,7 @@ except ImportError:
     from calendar_tool import compute_bazi_chart  # type: ignore[no-redef]
     from classics import retrieve_classical_references  # type: ignore[no-redef]
     from config import get_settings  # type: ignore[no-redef]
+    from naming import canonical_function  # type: ignore[no-redef]
     from bazi_engine import (  # type: ignore[no-redef]
         compute_full_analysis, FullBaziAnalysis,
         compute_all_hidden_stems, compute_ten_gods, compute_interactions,
@@ -337,7 +339,7 @@ class EnrichedNarrativeOutput(BaseModel):
 # and omits the other three siblings entirely. Compact JSON schema char count
 # drops 54-72% vs ``EnrichedNarrativeOutput``, which is what cuts model
 # reasoning tokens since the schema sits in the system context for every
-# generation. See PR2 of the latency refactor plan.
+# generation.
 
 
 class CompatibilityNarrativeOutput(BaseModel):
@@ -651,33 +653,8 @@ def _model_settings(
 ) -> ModelSettings:
     """Build per-stage ``ModelSettings`` from the FortuneSettings singleton.
 
-    ``reasoning_key`` is the FortuneSettings attribute name (e.g.
-    ``narrative_reasoning_compatibility`` for PR3 per-mode wiring). When
-    ``max_tokens_key`` is provided, the matching attribute (which may be
-    ``None``) is forwarded as ``max_tokens``; ``None`` means uncapped.
-
-    Notes:
-    - ``summary=None`` (PR2): the reasoning summary stream added 3-8 s of
-      TTFB and ~10-15 % to total reasoning tokens. The ThinkingPanel UX
-      role it served is replaced by ``_thinking_heartbeat`` (PR5).
-    - Compatibility historically truncated at every max_tokens cap we
-      tried (1.8k → 6k → 16k) because two charts × overview +
-      pair_interactions + mechanisms is genuinely heavy at medium effort.
-      PR3 leaves compat uncapped (``narrative_max_tokens_compatibility =
-      None``) and bounds the other three modes via per-mode keys in
-      ``FortuneSettings``.
-    - ``service_tier_key`` (kwargs-only, PR-2): optional setting attr for
-      OpenAI's ``service_tier`` request param (e.g. ``"priority"``). When
-      the matching setting is truthy, the tier is threaded through
-      ``extra_args`` (the SDK's escape hatch for Responses-API-only
-      parameters). Default is ``None`` (uses OpenAI's default queue).
-    - ``store_key`` (kwargs-only, PR-2): optional setting attr for the
-      Responses API ``store`` flag. When the matching setting is truthy,
-      ``store=True`` is threaded through ``extra_args`` so the response
-      is addressable via ``previous_response_id`` for the Ask-chain
-      follow-up in PR-4. Defaults to off until PR-4 wires the chain.
-    - Live per-mode latency is asserted in
-      ``tests/fortune/test_agent_browser_e2e.py``.
+    ``reasoning_key`` and the optional keys name attributes on
+    ``FortuneSettings``.
     """
     settings = get_settings()
     effort = getattr(settings, reasoning_key, "low")
@@ -689,12 +666,6 @@ def _model_settings(
         cap = getattr(settings, max_tokens_key, None)
         if cap is not None:
             kwargs["max_tokens"] = int(cap)
-    # PR-2 (refined in PR-4): the SDK exposes ``store`` as a first-class
-    # ``ModelSettings.store`` field and ALSO passes its own ``store`` kwarg
-    # to ``responses.create``. Threading ``store`` via ``extra_args`` causes
-    # a ``TypeError: got multiple values for keyword argument 'store'``
-    # at first call. Use the first-class field instead. ``service_tier``
-    # has no first-class equivalent today, so it stays in ``extra_args``.
     extra_args: dict[str, Any] = {}
     if service_tier_key is not None:
         tier = getattr(settings, service_tier_key, None)
@@ -793,13 +764,6 @@ def _build_narrative_agent(
     the OpenAI prompt-cache stable prefix stays identical across modes —
     only the bound schema and per-mode reasoning/max_tokens differ.
 
-    PR3 wires ``reasoning_setting_key`` to the per-mode keys in
-    ``FortuneSettings`` (e.g. ``narrative_reasoning_compatibility``) so
-    each mode picks its own reasoning effort. ``max_tokens_setting_key``
-    forwards an optional per-mode token cap (``None`` per key = uncapped).
-    PR-2 adds optional ``service_tier_setting_key`` (e.g. ``"priority"``)
-    and ``store_setting_key`` (for ``previous_response_id`` chaining in
-    PR-4) — both are forwarded only when the matching setting is truthy.
     """
     return Agent(
         name=name,
@@ -815,8 +779,6 @@ def _build_narrative_agent(
     )
 
 
-# Per-mode narrative agents (PR3 wiring).
-#
 # ``general`` retains ``narrative_reasoning`` (the legacy single key) so it
 # acts as a backstop for any focus shape that doesn't match one of the
 # four canonical modes — ``run_narrative`` / ``run_narrative_streamed``
@@ -876,19 +838,8 @@ def _narrative_mode(ctx: FortuneRunContext) -> str:
     schema) only when no mode matches — primarily useful in tests or
     internal debug runs.
     """
-    focus = (ctx.focus or "").lower()
-    if focus.startswith("compatibility"):
-        return "compatibility"
-    if focus.startswith("occasion"):
-        return "occasion"
-    # The route fan-out, frontend client, and ``classify_function`` only
-    # recognize ``luck_cycle:*``. Don't add ``luck:*`` aliases without
-    # updating those callers in lock-step.
-    if focus.startswith("luck_cycle"):
-        return "luck_cycle"
-    if focus == "custom_wish" or ctx.question:
-        return "wish"
-    return "general"
+    function_id = canonical_function(ctx.focus, ctx.question)
+    return "luck_cycle" if function_id == "cycle" else function_id or "general"
 
 
 GUARDRAIL_AGENT: Agent[FortuneRunContext] = Agent(
@@ -1171,10 +1122,6 @@ def _build_narrative_prompt(ctx: FortuneRunContext, foundation: dict[str, Any]) 
         }
 
     # 4. Occasion window (rarely-changing; depends on focus's window args).
-    # PR3: pass the foundation so the deterministic prefilter narrows
-    # 60+ candidate days to top-21 + coverage sample BEFORE the model sees
-    # them. ``repair_occasion_narrative`` still calls without foundation
-    # because it needs every candidate for date validation.
     occasion_window = _build_occasion_window(ctx, foundation=foundation)
     if occasion_window:
         prompt_data["occasion_window"] = occasion_window
@@ -1219,7 +1166,7 @@ def _build_occasion_window(
 
     Two call modes:
 
-    1. **Prefilter (PR3)** — when ``foundation`` is provided, the function
+    1. **Prefilter** — when ``foundation`` is provided, the function
        generates ALL candidate days for the requested window, scores each
        against the querent's chart via
        :func:`_foundation_cache.score_candidate_day`, then returns only
@@ -1233,8 +1180,7 @@ def _build_occasion_window(
        path needs the full date set so it can validate every pick the
        model emitted.
 
-    Day-chart computation goes through ``compute_day_chart_cached`` so
-    repeat windows in the same timezone share work (PR3 foundation cache).
+    Day-chart computation goes through ``compute_day_chart_cached``.
     """
     parsed = _parse_occasion_focus(ctx.focus)
     if parsed is None:
@@ -1245,8 +1191,7 @@ def _build_occasion_window(
     cursor = start
     # A user-facing lucky-day window is normally one month. Cap defensively
     # so an accidental long range cannot dominate the model prompt. The
-    # ``timedelta(days=61)`` produces exactly 62 inclusive calendar days
-    # from ``start`` (codex PR3 §4 fixed the off-by-one).
+    # ``timedelta(days=61)`` produces exactly 62 inclusive calendar days.
     final_day = min(end, start + timedelta(days=61))
     while cursor <= final_day:
         chart = compute_day_chart_cached(cursor.isoformat(), ctx.timezone)
@@ -1273,7 +1218,7 @@ def _build_occasion_window(
     favored, avoid = occasion_preferences(occasion_type)
     # Defensive parse — log the route with a clear ValueError if a future
     # caller hands us a foundation with a non-canonical day-pillar shape
-    # (e.g. CJK string fallback or {"raw": "甲寅"}); see codex PR3 §1.
+    # (e.g. CJK string fallback or {"raw": "甲寅"}).
     querent_dm_stem, querent_day_branch = pillar_stem_branch(
         foundation["pillars"]["day"],
     )
@@ -1435,10 +1380,6 @@ async def run_narrative(
     agent = NARRATIVE_AGENTS[_narrative_mode(ctx)]
     settings = get_settings()
     fn = classify_function(ctx.focus, ctx.question)
-    # PR3 follow-up: log the per-mode reasoning effort actually bound to
-    # the selected agent, not the legacy global ``narrative_reasoning``.
-    # Otherwise canary analysis on the per-mode latency win sees medium
-    # reported for occasion/luck/wish even though they run at low.
     _agent_reasoning = agent.model_settings.reasoning.effort
     with _stage(
         function=fn,

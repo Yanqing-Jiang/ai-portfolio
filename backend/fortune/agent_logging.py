@@ -1,7 +1,7 @@
 """Structured agent-stage logging for the fortune pipeline.
 
 Single-line key=value log records emitted at every Agent run boundary so the
-4 user-facing functions (compatibility / occasion / luck_cycle / wish) plus
+4 user-facing functions (compatibility / occasion / cycle / wish) plus
 the general reading can be A/B-tested, perf-traced, and grepped without
 parsing free-form messages.
 
@@ -29,6 +29,11 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from threading import Lock
 from typing import Any, Iterator
+
+try:
+    from .naming import canonical_function
+except ImportError:
+    from naming import canonical_function  # type: ignore[no-redef]
 
 logger = logging.getLogger("fortune.agent")
 _LATENCY_BUCKETS_MS = (250, 500, 1000, 2000, 5000, 10000, 30000, 60000)
@@ -76,18 +81,10 @@ def classify_function(focus: str | None, question: str | None) -> str:
     """Classify an incoming reading into one of 5 buckets.
 
     The 4 customer-facing functions are: compatibility, occasion (lucky day),
-    luck_cycle, wish. ``general`` covers the default Ming reading with no
+    cycle, wish. ``general`` covers the default Ming reading with no
     free-form question and no specialized focus prefix.
     """
-    if focus and focus.startswith("compatibility"):
-        return "compatibility"
-    if focus and focus.startswith("occasion"):
-        return "occasion"
-    if focus and focus.startswith("luck_cycle"):
-        return "luck_cycle"
-    if question:
-        return "wish"
-    return "general"
+    return canonical_function(focus, question) or "general"
 
 
 # ---------------------------------------------------------------------------

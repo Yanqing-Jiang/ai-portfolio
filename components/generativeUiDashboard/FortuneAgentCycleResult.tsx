@@ -61,7 +61,6 @@ export const FortuneAgentCycleResult: React.FC<FortuneAgentCycleResultProps> = (
                     status={thinkingStatus}
                     onPause={cancel}
                     paused={pausing}
-                    // PR-Panel: always-visible thinking panel.
                     showCompletedDock={true}
                 />
             )}

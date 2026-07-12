@@ -8,7 +8,6 @@ import {
   useNavigate,
   useLocation,
   useParams,
-  useSearchParams,
 } from 'react-router-dom';
 import Sidebar from './components/SidebarV2';
 import ProjectHelmet from './components/ProjectHelmet';
@@ -26,9 +25,6 @@ import { FortuneAgentCompatibilityResult } from './components/generativeUiDashbo
 import { FortuneAgentOccasionResult } from './components/generativeUiDashboard/FortuneAgentOccasionResult';
 import { FortuneAgentCycleResult } from './components/generativeUiDashboard/FortuneAgentCycleResult';
 import { FortuneAgentCustomWishResult } from './components/generativeUiDashboard/FortuneAgentCustomWishResult';
-import { FortuneAgentLandingA } from './components/generativeUiDashboard/FortuneAgentLandingA';
-import { FortuneAgentLandingB } from './components/generativeUiDashboard/FortuneAgentLandingB';
-import { FortuneAgentLandingC } from './components/generativeUiDashboard/FortuneAgentLandingC';
 import { AskDemoPage } from './components/generativeUiDashboard/fortune/AskDemoPage';
 import { ConsultingPage } from './components/consulting/ConsultingPage';
 import BlogIndexPage from './components/blog/BlogIndexPage';
@@ -40,6 +36,7 @@ import type { Project } from './types';
 import { ChevronLeftIcon } from './components/icons/ChevronLeftIcon';
 import { ChevronRightIcon } from './components/icons/ChevronRightIcon';
 import { supabase } from './services/auth';
+import { fortuneIntakeRoute, fortuneResultRoute } from './lib/fortuneRoutes';
 // @ts-ignore
 import { HelmetProvider } from 'react-helmet-async';
 
@@ -74,7 +71,7 @@ const FortuneAgentCompatibilityRoute: React.FC = () => {
   return (
     <FortuneAgentCompatibility
       onBack={() => navigate('/project/fortune-agent/explore')}
-      onComplete={(payload) => navigate('/project/fortune-agent/compatibility/result', { state: payload })}
+      onComplete={(payload) => navigate(fortuneResultRoute('compatibility'), { state: payload })}
     />
   );
 };
@@ -84,7 +81,7 @@ const FortuneAgentLuckyDayRoute: React.FC = () => {
   return (
     <FortuneAgentLuckyDay
       onBack={() => navigate('/project/fortune-agent/explore')}
-      onComplete={(payload) => navigate('/project/fortune-agent/lucky-day/result', { state: payload })}
+      onComplete={(payload) => navigate(fortuneResultRoute('occasion'), { state: payload })}
     />
   );
 };
@@ -94,7 +91,7 @@ const FortuneAgentLuckDrawRoute: React.FC = () => {
   return (
     <FortuneAgentLuckDraw
       onBack={() => navigate('/project/fortune-agent/explore')}
-      onComplete={(payload) => navigate('/project/fortune-agent/luck-draw/result', { state: payload })}
+      onComplete={(payload) => navigate(fortuneResultRoute('cycle'), { state: payload })}
     />
   );
 };
@@ -104,36 +101,41 @@ const FortuneAgentCustomWishRoute: React.FC = () => {
   return (
     <FortuneAgentCustomWish
       onBack={() => navigate('/project/fortune-agent/explore')}
-      onComplete={(payload) => navigate(`/project/fortune-agent/custom-wish/result?q=${encodeURIComponent(payload.question)}`, { state: payload })}
+      onComplete={(payload) => navigate(fortuneResultRoute('wish'), { state: payload })}
     />
   );
 };
 
-// Result demo pages (mock-data, no backend). Wired from the bespoke input pages' CTA.
-// Each input page fires onComplete(payload) which navigate() carries via route state.
 const FortuneAgentCompatibilityResultRoute: React.FC = () => {
   const navigate = useNavigate();
   const { state } = useLocation();
-  return <FortuneAgentCompatibilityResult onBack={() => navigate('/project/fortune-agent/compatibility')} inputPayload={state} />;
+  const { fortuneId } = useParams<{ fortuneId?: string }>();
+  if (!state && !fortuneId) return <Navigate to={fortuneIntakeRoute('compatibility')} replace />;
+  return <FortuneAgentCompatibilityResult onBack={() => navigate(fortuneIntakeRoute('compatibility'))} inputPayload={state} />;
 };
 
 const FortuneAgentOccasionResultRoute: React.FC = () => {
   const navigate = useNavigate();
   const { state } = useLocation();
-  return <FortuneAgentOccasionResult onBack={() => navigate('/project/fortune-agent/lucky-day')} inputPayload={state} />;
+  const { fortuneId } = useParams<{ fortuneId?: string }>();
+  if (!state && !fortuneId) return <Navigate to={fortuneIntakeRoute('occasion')} replace />;
+  return <FortuneAgentOccasionResult onBack={() => navigate(fortuneIntakeRoute('occasion'))} inputPayload={state} />;
 };
 
 const FortuneAgentCycleResultRoute: React.FC = () => {
   const navigate = useNavigate();
   const { state } = useLocation();
-  return <FortuneAgentCycleResult onBack={() => navigate('/project/fortune-agent/luck-draw')} inputPayload={state} />;
+  const { fortuneId } = useParams<{ fortuneId?: string }>();
+  if (!state && !fortuneId) return <Navigate to={fortuneIntakeRoute('cycle')} replace />;
+  return <FortuneAgentCycleResult onBack={() => navigate(fortuneIntakeRoute('cycle'))} inputPayload={state} />;
 };
 
 const FortuneAgentCustomWishResultRoute: React.FC = () => {
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
-  const question = searchParams.get('q') || undefined;
-  return <FortuneAgentCustomWishResult onBack={() => navigate('/project/fortune-agent/custom-wish')} initialQuestion={question} />;
+  const { state } = useLocation();
+  const { fortuneId } = useParams<{ fortuneId?: string }>();
+  if (!state && !fortuneId) return <Navigate to={fortuneIntakeRoute('wish')} replace />;
+  return <FortuneAgentCustomWishResult onBack={() => navigate(fortuneIntakeRoute('wish'))} />;
 };
 
 // Function: ProjectRoute - mounted by the /project/:id route; looks up the requested project and renders ProjectView or redirects home if missing; exists to keep route elements thin.
@@ -353,26 +355,22 @@ const Layout: React.FC = () => {
             {/* 2026 Fortune Agent — redesign experiments (local test routes) */}
             <Route path="/project/fortune-agent" element={<FortuneAgentIntroRoute />} />
             <Route path="/project/fortune-agent/explore" element={<FortuneAgentHubRoute />} />
-            <Route path="/project/fortune-agent/compatibility" element={<FortuneAgentCompatibilityRoute />} />
-            <Route path="/project/fortune-agent/lucky-day" element={<FortuneAgentLuckyDayRoute />} />
-            <Route path="/project/fortune-agent/luck-draw" element={<FortuneAgentLuckDrawRoute />} />
-            <Route path="/project/fortune-agent/custom-wish" element={<FortuneAgentCustomWishRoute />} />
+            <Route path={fortuneIntakeRoute('compatibility')} element={<FortuneAgentCompatibilityRoute />} />
+            <Route path={fortuneIntakeRoute('occasion')} element={<FortuneAgentLuckyDayRoute />} />
+            <Route path={fortuneIntakeRoute('cycle')} element={<FortuneAgentLuckDrawRoute />} />
+            <Route path={fortuneIntakeRoute('wish')} element={<FortuneAgentCustomWishRoute />} />
 
             {/* Result pages — /:fortuneId routes for live backend + replay */}
-            <Route path="/project/fortune-agent/custom-wish/:fortuneId" element={<FortuneAgentCustomWishResultRoute />} />
-            <Route path="/project/fortune-agent/luck-draw/:fortuneId" element={<FortuneAgentCycleResultRoute />} />
-            <Route path="/project/fortune-agent/compatibility/:fortuneId" element={<FortuneAgentCompatibilityResultRoute />} />
-            <Route path="/project/fortune-agent/lucky-day/:fortuneId" element={<FortuneAgentOccasionResultRoute />} />
+            <Route path={fortuneResultRoute('wish', ':fortuneId')} element={<FortuneAgentCustomWishResultRoute />} />
+            <Route path={fortuneResultRoute('cycle', ':fortuneId')} element={<FortuneAgentCycleResultRoute />} />
+            <Route path={fortuneResultRoute('compatibility', ':fortuneId')} element={<FortuneAgentCompatibilityResultRoute />} />
+            <Route path={fortuneResultRoute('occasion', ':fortuneId')} element={<FortuneAgentOccasionResultRoute />} />
 
             {/* State-backed result routes used by the current input flows */}
-            <Route path="/project/fortune-agent/compatibility/result" element={<FortuneAgentCompatibilityResultRoute />} />
-            <Route path="/project/fortune-agent/lucky-day/result" element={<FortuneAgentOccasionResultRoute />} />
-            <Route path="/project/fortune-agent/luck-draw/result" element={<FortuneAgentCycleResultRoute />} />
-            <Route path="/project/fortune-agent/custom-wish/result" element={<FortuneAgentCustomWishResultRoute />} />
-
-            <Route path="/project/fortune-agent/landing-a" element={<FortuneAgentLandingA />} />
-            <Route path="/project/fortune-agent/landing-b" element={<FortuneAgentLandingB />} />
-            <Route path="/project/fortune-agent/landing-c" element={<FortuneAgentLandingC />} />
+            <Route path={fortuneResultRoute('compatibility')} element={<FortuneAgentCompatibilityResultRoute />} />
+            <Route path={fortuneResultRoute('occasion')} element={<FortuneAgentOccasionResultRoute />} />
+            <Route path={fortuneResultRoute('cycle')} element={<FortuneAgentCycleResultRoute />} />
+            <Route path={fortuneResultRoute('wish')} element={<FortuneAgentCustomWishResultRoute />} />
 
             {/* Ask-tab redesign experiments — three concepts side-by-side */}
             <Route path="/project/fortune-agent/ask-demo" element={<AskDemoPage />} />
