@@ -4,7 +4,10 @@ services:
     container_name: portfolio-redis
     restart: unless-stopped
     # Fortune v2 makes Redis correctness-critical (event streams + run state).
-    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--maxmemory-policy", "noeviction"]
+    # maxmemory below the 128M container limit so pressure surfaces as
+    # noeviction write errors (visible as redis_publish_failed runs), not
+    # a container OOM-kill.
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--maxmemory-policy", "noeviction", "--maxmemory", "100mb"]
     volumes:
       - redis_data:/data
     networks:

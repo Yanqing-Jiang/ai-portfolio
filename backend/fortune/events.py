@@ -323,26 +323,19 @@ async def tail_envelopes(
 
 
 def _envelope_is_terminal(envelope: dict[str, Any]) -> bool:
+    """Only the explicit ``done`` frame ends the tail immediately.
+
+    The bridge emits terminal frames in the order meta-status → audit →
+    ``{"done": true}``. Stopping on the meta-status frame (as this helper
+    originally did) dropped audit/done from the first connection and forced
+    clients into a reconnect to drain them. Runs that never publish a done
+    frame are closed by the run-record idle check in ``tail_envelopes``.
+    """
     if envelope.get("done") is True:
         return True
     payload = envelope.get("payload")
-    if isinstance(payload, dict):
-        if payload.get("done") is True:
-            return True
-        dmu = payload.get("dataModelUpdate")
-        if isinstance(dmu, dict) and dmu.get("path") == "/data/meta":
-            contents = dmu.get("contents")
-            status = _meta_status(contents)
-            if status in {"complete", "error", "cancelled", "interrupted"}:
-                return True
+    if isinstance(payload, dict) and payload.get("done") is True:
+        return True
     return False
 
 
-def _meta_status(contents: Any) -> str | None:
-    if isinstance(contents, dict):
-        return contents.get("status")
-    if isinstance(contents, list):
-        for entry in contents:
-            if isinstance(entry, dict) and entry.get("key") == "status":
-                return entry.get("valueString") or entry.get("value")
-    return None

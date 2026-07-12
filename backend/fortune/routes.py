@@ -21,6 +21,7 @@ from typing import Any
 from fastapi import APIRouter, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
+from agents import OutputGuardrailTripwireTriggered
 
 logger = logging.getLogger(__name__)
 
@@ -38,12 +39,16 @@ try:
     from .agents import (
         FOUNDATION_VERSION,
         FortuneRunContext,
+        InsightBullet,
+        InsightSection,
+        EnrichedNarrativeOutput,
         NARRATIVE_SCHEMA_VERSION,
         NarrativeOutput,
+        ensure_narrative_guardrail,
     )
     from .config import get_settings
     from .store import get_repository, FortuneRepository
-    from .triage import ALLOWED_ACTION_IDS, normalize_action_focus, run_triage
+    from .triage import ASK_AGENT, ALLOWED_ACTION_IDS, normalize_action_focus, run_triage
     from .session_store import get_ask_session, list_conversation_turns
     from .simulator import simulate_birth_time
     from .naming import canonical_function
@@ -60,12 +65,16 @@ except ImportError:
     from agents import (  # type: ignore[no-redef]
         FOUNDATION_VERSION,
         FortuneRunContext,
+        InsightBullet,
+        InsightSection,
+        EnrichedNarrativeOutput,
         NARRATIVE_SCHEMA_VERSION,
         NarrativeOutput,
+        ensure_narrative_guardrail,
     )
     from config import get_settings  # type: ignore[no-redef]
     from store import get_repository, FortuneRepository  # type: ignore[no-redef]
-    from triage import ALLOWED_ACTION_IDS, normalize_action_focus, run_triage  # type: ignore[no-redef]
+    from triage import ASK_AGENT, ALLOWED_ACTION_IDS, normalize_action_focus, run_triage  # type: ignore[no-redef]
     from session_store import get_ask_session, list_conversation_turns  # type: ignore[no-redef]
     from simulator import simulate_birth_time  # type: ignore[no-redef]
     from naming import canonical_function  # type: ignore[no-redef]
@@ -225,6 +234,69 @@ def _snapshot_mechanics(session: "FortuneSession", analysis: Any) -> dict[str, A
 
 def _snapshot_references(foundation: dict[str, Any]) -> dict[str, Any]:
     return {"items": _to_jsonable(foundation.get("references", []))}
+
+
+# Match pipeline rejected-branch copy (_pipeline_run._SAFE_REJECTION_*).
+_ASK_SAFE_REJECTION_MESSAGE = "We can’t safely present this reading."
+_ASK_SAFE_REJECTION_DISCLAIMER = (
+    "Try again with a different question. This tool is for reflection and entertainment only."
+)
+
+
+def _ask_safe_rejection_narrative() -> dict[str, Any]:
+    """Deterministic Ask narrative used when the output guardrail trips."""
+    return EnrichedNarrativeOutput(
+        tldr=_ASK_SAFE_REJECTION_MESSAGE,
+        insights=[
+            InsightSection(
+                id="safety",
+                icon="•",
+                heading="Unavailable",
+                tagline="This answer was withheld by the safety check.",
+                bullets=[
+                    InsightBullet(icon="•", text=_ASK_SAFE_REJECTION_MESSAGE),
+                    InsightBullet(icon="•", text=_ASK_SAFE_REJECTION_DISCLAIMER),
+                ],
+            ),
+            InsightSection(
+                id="next_step",
+                icon="•",
+                heading="What to try",
+                tagline="Ask a different follow-up.",
+                bullets=[
+                    InsightBullet(
+                        icon="•",
+                        text="Rephrase without sensitive or prohibited requests.",
+                    ),
+                    InsightBullet(
+                        icon="•",
+                        text="Stay with reflective, entertainment-only guidance.",
+                    ),
+                ],
+            ),
+        ],
+    ).model_dump()
+
+
+async def _latest_non_ask_run_status(
+    repo: "FortuneRepository",
+    fortune_id: uuid.UUID,
+) -> str | None:
+    """Status of the latest initial/action run, or None when unavailable."""
+    if not repo.available or repo.pool is None:
+        return None
+    row = await repo.pool.fetchrow(
+        """
+        SELECT status
+        FROM fortune_run
+        WHERE fortune_id = $1
+          AND run_kind IN ('initial', 'action')
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        fortune_id,
+    )
+    return str(row["status"]) if row else None
 
 
 def _build_ask_original_input(req: "CreateFortuneRequest | None") -> dict[str, Any] | None:
@@ -877,6 +949,22 @@ async def _ask_fortune_locked(
             detail="Initial reading not yet complete; cannot answer follow-ups.",
         )
 
+    # Done-gate: foundation reconstructability is necessary but not sufficient.
+    # Ask must wait for a successful (status=done) initial/action reading.
+    try:
+        fid_for_status = uuid.UUID(fortune_id)
+    except ValueError:
+        fid_for_status = None
+    if fid_for_status is not None:
+        reading_status = await _latest_non_ask_run_status(repo, fid_for_status)
+        if reading_status is not None and reading_status != "done":
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Reading not complete — ask is available after a successful reading."
+                ),
+            )
+
     # Build a ctx from whichever source we have — prefer live session for
     # birth/focus/tone (most accurate), fall back to sensible defaults.
     req_src = fortune_session.request if fortune_session is not None else None
@@ -933,6 +1021,43 @@ async def _ask_fortune_locked(
             )
         except Exception as exc:
             logger.exception("[FORTUNE] /ask triage failed: %s", exc)
+            try:
+                await repo.update_run_status(
+                    uuid.UUID(new_run_id), "error", error_message=str(exc)[:500],
+                )
+            except Exception:
+                pass
+            raise HTTPException(status_code=500, detail="Ask run failed.")
+
+        # Same output guardrail as the initial narrative pipeline. Bound via the
+        # existing ensure_narrative_guardrail surface (policy agent is one turn).
+        try:
+            await ensure_narrative_guardrail(ctx, narrative, agent=ASK_AGENT)
+        except OutputGuardrailTripwireTriggered:
+            # Rejected ask text may remain in the SQLAlchemySession turn written
+            # by Runner.run inside run_triage. Purge/overwrite is not required:
+            # those session rows are backend-only behind RLS and never reach the
+            # HTTP response, snapshot, or trace summaries.
+            try:
+                await repo.update_run_status(
+                    uuid.UUID(new_run_id),
+                    "failed_guardrail",
+                    error_message="output_guardrail_tripwire",
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[FORTUNE] ask failed-guardrail status update failed: %s", exc,
+                )
+            return AskResponse(
+                fortune_id=fortune_id,
+                run_id=new_run_id,
+                narrative=_ask_safe_rejection_narrative(),
+                degraded_memory=degraded_memory,
+                chain_status="disabled",
+            )
+        except Exception as exc:
+            # Non-tripwire guardrail failure: never return the unvetted answer.
+            logger.exception("[FORTUNE] /ask guardrail failed: %s", exc)
             try:
                 await repo.update_run_status(
                     uuid.UUID(new_run_id), "error", error_message=str(exc)[:500],

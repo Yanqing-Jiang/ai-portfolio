@@ -528,47 +528,58 @@ class FortuneRepository:
         *,
         run_id: UUID | None = None,
     ) -> tuple[UUID | None, list[dict[str, Any]]]:
-        """Return redacted Glass Box projections for the fortune's latest run.
+        """Return redacted Glass Box projections for ALL of the fortune's runs.
 
         Rows in ``fortune_trace`` are already allowlisted/redacted at write
         time. This read path re-shapes them into the live ``payload.trace``
         projection so the frontend renders one shape for live + replay.
+        Fortune-scoped (pipeline run + every Ask turn, chronological) — a
+        latest-run-only read would drop the pipeline trace after the first
+        Ask. Pass ``run_id`` to scope to a single run.
         """
         if self.pool is None:
             return None, []
 
-        target_run_id = run_id or await self.get_latest_run_id(fortune_id)
-        if target_run_id is None:
+        latest_run_id = run_id or await self.get_latest_run_id(fortune_id)
+        if latest_run_id is None:
             return None, []
 
+        if run_id is not None:
+            where = "t.run_id = $1"
+            params: list[Any] = [run_id]
+        else:
+            where = "t.run_id IN (SELECT r.id FROM fortune_run r WHERE r.fortune_id = $1)"
+            params = [fortune_id]
+
         rows = await self.pool.fetch(
-            """
+            f"""
             SELECT
-                run_id,
-                span_id,
-                phase,
-                parent_span_id,
-                span_type,
-                agent_name,
-                tool_name,
-                model,
-                input_json,
-                output_json,
-                error,
-                started_at,
-                ended_at,
-                duration_ms
-            FROM fortune_trace
-            WHERE run_id = $1
-            ORDER BY started_at ASC NULLS LAST, span_id ASC, phase ASC
+                t.run_id,
+                t.span_id,
+                t.phase,
+                t.parent_span_id,
+                t.span_type,
+                t.agent_name,
+                t.tool_name,
+                t.model,
+                t.input_json,
+                t.output_json,
+                t.error,
+                t.started_at,
+                t.ended_at,
+                t.duration_ms
+            FROM fortune_trace t
+            WHERE {where}
+            ORDER BY t.started_at ASC NULLS LAST, t.span_id ASC, t.phase ASC
+            LIMIT 1000
             """,
-            target_run_id,
+            *params,
         )
 
         events: list[dict[str, Any]] = []
         for row in rows:
             events.append(_trace_row_to_projection(dict(row)))
-        return target_run_id, events
+        return latest_run_id, events
 
 
 def _jsonb_summary(value: Any, key: str = "summary") -> str:

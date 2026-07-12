@@ -361,8 +361,8 @@ async def _event_generator_impl(session, *, request=None, store=None):
     try:
         session.touch(RuntimeStatus.streaming)
         _t_start = _time.monotonic()
-        logger.info("[FORTUNE] %s stream start — run=%s focus=%s birth=%s",
-                    session.fortune_id, run_id, ctx.focus, ctx.birth_iso)
+        logger.info("[FORTUNE] %s stream start — run=%s focus=%s",
+                    session.fortune_id, run_id, ctx.focus)
 
         try:
             from .agent_logging import classify_function, log_stream_start

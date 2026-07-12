@@ -12,6 +12,7 @@ try:
     from .agents import (
         EnrichedNarrativeOutput,
         FortuneRunContext,
+        NARRATIVE_MAX_TURNS,
         _model,
         _model_settings,
         _run_config,
@@ -23,6 +24,7 @@ except ImportError:  # pragma: no cover
     from agents import (  # type: ignore[no-redef]
         EnrichedNarrativeOutput,
         FortuneRunContext,
+        NARRATIVE_MAX_TURNS,
         _model,
         _model_settings,
         _run_config,
@@ -206,7 +208,9 @@ async def run_triage(
             "has_session": str(session is not None).lower(),
         },
     ) as sh:
-        result = await Runner.run(ASK_AGENT, **kwargs)
+        result = await Runner.run(
+            ASK_AGENT, max_turns=NARRATIVE_MAX_TURNS, **kwargs,
+        )
         sh.attach_result(result)
     if isinstance(result.final_output, EnrichedNarrativeOutput):
         return result.final_output

@@ -224,7 +224,6 @@ def simulate_birth_time(birth_iso: str, timezone_name: str) -> dict[str, Any]:
         "completedBranches": n,
         "failedBranches":    [...branch_names],
         "partial":           bool,
-        "repDate":           "YYYY-MM-DD",
     }
 
     Hard-fails (raises) only when *every* branch failed, which means the
@@ -247,7 +246,6 @@ def simulate_birth_time(birth_iso: str, timezone_name: str) -> dict[str, Any]:
             "completedBranches": 0,
             "failedBranches": failed,
             "partial": True,
-            "repDate": birth_iso.split("T", 1)[0] if "T" in birth_iso else birth_iso,
             "error": "All 12 branch simulations failed; see server logs.",
         }
 
@@ -267,5 +265,4 @@ def simulate_birth_time(birth_iso: str, timezone_name: str) -> dict[str, Any]:
         "completedBranches": len(results),
         "failedBranches": failed,
         "partial": len(results) < len(EARTHLY_BRANCHES),
-        "repDate": birth_iso.split("T", 1)[0] if "T" in birth_iso else birth_iso,
     }
