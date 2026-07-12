@@ -1,0 +1,3519 @@
+[
+  {
+    "run_id": "22222222-2222-2222-2222-222222222222",
+    "fortune_id": "11111111-1111-1111-1111-111111111111",
+    "seq": 1,
+    "payload": {
+      "beginRendering": {
+        "surfaceId": "fortune_main",
+        "root": "layout_root",
+        "catalogId": "ming-fortune-v1"
+      }
+    }
+  },
+  {
+    "run_id": "22222222-2222-2222-2222-222222222222",
+    "fortune_id": "11111111-1111-1111-1111-111111111111",
+    "seq": 2,
+    "payload": {
+      "surfaceUpdate": {
+        "surfaceId": "fortune_main",
+        "components": [
+          {
+            "id": "kpi_day_master",
+            "component": {
+              "KpiCard": {
+                "title": {
+                  "literalString": "Day Master"
+                },
+                "valuePath": {
+                  "path": "/data/kpi/dayMaster"
+                },
+                "subtitlePath": {
+                  "path": "/data/kpi/dayMasterElement"
+                }
+              }
+            }
+          },
+          {
+            "id": "kpi_harmony",
+            "component": {
+              "KpiCard": {
+                "title": {
+                  "literalString": "Harmony Score"
+                },
+                "valuePath": {
+                  "path": "/data/kpi/harmonyScore"
+                },
+                "subtitlePath": {
+                  "literalString": "/ 100"
+                }
+              }
+            }
+          },
+          {
+            "id": "kpi_cycle",
+            "component": {
+              "KpiCard": {
+                "title": {
+                  "literalString": "Current Cycle"
+                },
+                "valuePath": {
+                  "path": "/data/kpi/currentCycle"
+                },
+                "subtitlePath": {
+                  "literalString": "大运"
+                }
+              }
+            }
+          },
+          {
+            "id": "kpi_seasonal",
+            "component": {
+              "KpiCard": {
+                "title": {
+                  "literalString": "Seasonal Strength"
+                },
+                "valuePath": {
+                  "path": "/data/kpi/seasonalStrength"
+                },
+                "subtitlePath": {
+                  "path": "/data/kpi/seasonalScore"
+                }
+              }
+            }
+          },
+          {
+            "id": "fortune_pillars",
+            "component": {
+              "FourPillarsCard": {
+                "title": {
+                  "literalString": "Four Pillars"
+                },
+                "pillarsPath": {
+                  "path": "/data/pillars"
+                }
+              }
+            }
+          },
+          {
+            "id": "fortune_elements_stacked",
+            "component": {
+              "ElementBalanceStacked": {
+                "sourcePath": {
+                  "path": "/data/elementBySource"
+                }
+              }
+            }
+          },
+          {
+            "id": "fortune_elements_radar",
+            "component": {
+              "ElementBalanceRadar": {
+                "title": {
+                  "literalString": "Element Radar"
+                },
+                "elementsPath": {
+                  "path": "/data/elements"
+                }
+              }
+            }
+          },
+          {
+            "id": "fortune_interactions",
+            "component": {
+              "InteractionGraph": {
+                "interactionsPath": {
+                  "path": "/data/interactions"
+                },
+                "pillarsPath": {
+                  "path": "/data/pillars"
+                }
+              }
+            }
+          },
+          {
+            "id": "fortune_ten_gods",
+            "component": {
+              "TenGodsTable": {
+                "godsPath": {
+                  "path": "/data/tenGods"
+                }
+              }
+            }
+          },
+          {
+            "id": "fortune_timeline",
+            "component": {
+              "LifeTimeline": {
+                "luckPillarsPath": {
+                  "path": "/data/luckPillars"
+                },
+                "annualPillarsPath": {
+                  "path": "/data/annualPillars"
+                },
+                "narrativePath": {
+                  "path": "/data/narrative"
+                },
+                "correctionsPath": {
+                  "path": "/data/corrections"
+                }
+              }
+            }
+          },
+          {
+            "id": "fortune_spooky",
+            "component": {
+              "SpookyAccuracyCard": {
+                "retrodictionsPath": {
+                  "path": "/data/retrodictions"
+                }
+              }
+            }
+          },
+          {
+            "id": "fortune_citations",
+            "component": {
+              "CitationViewer": {
+                "referencesPath": {
+                  "path": "/data/classics"
+                }
+              }
+            }
+          },
+          {
+            "id": "fortune_dag",
+            "component": {
+              "PipelineDag": {
+                "stepsPath": {
+                  "path": "/data/trace/steps"
+                }
+              }
+            }
+          },
+          {
+            "id": "fortune_classics",
+            "component": {
+              "ClassicalReferenceCard": {
+                "referencesPath": {
+                  "path": "/data/classics"
+                }
+              }
+            }
+          },
+          {
+            "id": "fortune_reading",
+            "component": {
+              "InsightAccordion": {
+                "insightsPath": {
+                  "path": "/data/narrative"
+                }
+              }
+            }
+          },
+          {
+            "id": "fortune_disclaimer",
+            "component": {
+              "DisclaimerBanner": {
+                "guardrailPath": {
+                  "path": "/data/guardrail"
+                }
+              }
+            }
+          },
+          {
+            "id": "btn_year_label",
+            "component": {
+              "Text": {
+                "text": {
+                  "literalString": "📅 Year Forecast"
+                },
+                "usageHint": "body"
+              }
+            }
+          },
+          {
+            "id": "btn_year",
+            "component": {
+              "Button": {
+                "child": "btn_year_label",
+                "action": {
+                  "name": "userAction",
+                  "context": [
+                    {
+                      "key": "actionId",
+                      "value": {
+                        "literalString": "year_forecast"
+                      }
+                    }
+                  ]
+                },
+                "variant": "secondary"
+              }
+            }
+          },
+          {
+            "id": "btn_career_label",
+            "component": {
+              "Text": {
+                "text": {
+                  "literalString": "📐 Career Deep Dive"
+                },
+                "usageHint": "body"
+              }
+            }
+          },
+          {
+            "id": "btn_career",
+            "component": {
+              "Button": {
+                "child": "btn_career_label",
+                "action": {
+                  "name": "userAction",
+                  "context": [
+                    {
+                      "key": "actionId",
+                      "value": {
+                        "literalString": "career_focus"
+                      }
+                    }
+                  ]
+                },
+                "variant": "secondary"
+              }
+            }
+          },
+          {
+            "id": "btn_compat_label",
+            "component": {
+              "Text": {
+                "text": {
+                  "literalString": "🤝 Compatibility"
+                },
+                "usageHint": "body"
+              }
+            }
+          },
+          {
+            "id": "btn_compat",
+            "component": {
+              "Button": {
+                "child": "btn_compat_label",
+                "action": {
+                  "name": "userAction",
+                  "context": [
+                    {
+                      "key": "actionId",
+                      "value": {
+                        "literalString": "relationship_focus"
+                      }
+                    }
+                  ]
+                },
+                "variant": "secondary"
+              }
+            }
+          },
+          {
+            "id": "btn_elements_label",
+            "component": {
+              "Text": {
+                "text": {
+                  "literalString": "🔮 Element Deep Dive"
+                },
+                "usageHint": "body"
+              }
+            }
+          },
+          {
+            "id": "btn_elements",
+            "component": {
+              "Button": {
+                "child": "btn_elements_label",
+                "action": {
+                  "name": "userAction",
+                  "context": [
+                    {
+                      "key": "actionId",
+                      "value": {
+                        "literalString": "deep_dive_element"
+                      }
+                    }
+                  ]
+                },
+                "variant": "secondary"
+              }
+            }
+          },
+          {
+            "id": "fortune_actions_row",
+            "component": {
+              "Row": {
+                "children": {
+                  "explicitList": [
+                    "btn_year",
+                    "btn_career",
+                    "btn_compat",
+                    "btn_elements"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "id": "kpi_row",
+            "component": {
+              "Row": {
+                "children": {
+                  "explicitList": [
+                    "kpi_day_master",
+                    "kpi_harmony",
+                    "kpi_cycle",
+                    "kpi_seasonal"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "id": "fortune_pillars_card",
+            "component": {
+              "Card": {
+                "child": "fortune_pillars"
+              }
+            }
+          },
+          {
+            "id": "fortune_elements_card",
+            "component": {
+              "Card": {
+                "child": "fortune_elements_stacked"
+              }
+            }
+          },
+          {
+            "id": "row_pillars_elements",
+            "component": {
+              "Row": {
+                "children": {
+                  "explicitList": [
+                    "fortune_pillars_card",
+                    "fortune_elements_card"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "id": "fortune_interactions_card",
+            "component": {
+              "Card": {
+                "child": "fortune_interactions"
+              }
+            }
+          },
+          {
+            "id": "fortune_ten_gods_card",
+            "component": {
+              "Card": {
+                "child": "fortune_ten_gods"
+              }
+            }
+          },
+          {
+            "id": "row_interactions_gods",
+            "component": {
+              "Row": {
+                "children": {
+                  "explicitList": [
+                    "fortune_interactions_card",
+                    "fortune_ten_gods_card"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "id": "fortune_spooky_card",
+            "component": {
+              "Card": {
+                "child": "fortune_spooky"
+              }
+            }
+          },
+          {
+            "id": "fortune_timeline_card",
+            "component": {
+              "Card": {
+                "child": "fortune_timeline"
+              }
+            }
+          },
+          {
+            "id": "fortune_dag_card",
+            "component": {
+              "Card": {
+                "child": "fortune_dag"
+              }
+            }
+          },
+          {
+            "id": "fortune_reading_card",
+            "component": {
+              "Card": {
+                "child": "fortune_reading"
+              }
+            }
+          },
+          {
+            "id": "fortune_citations_card",
+            "component": {
+              "Card": {
+                "child": "fortune_citations"
+              }
+            }
+          },
+          {
+            "id": "row_reading_citations",
+            "component": {
+              "Row": {
+                "children": {
+                  "explicitList": [
+                    "fortune_reading_card",
+                    "fortune_citations_card"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "id": "fortune_disclaimer_card",
+            "component": {
+              "Card": {
+                "child": "fortune_disclaimer"
+              }
+            }
+          },
+          {
+            "id": "fortune_trace",
+            "component": {
+              "AgentTraceSidebar": {
+                "stepsPath": {
+                  "path": "/data/trace/steps"
+                },
+                "summaryPath": {
+                  "path": "/data/trace/summary"
+                }
+              }
+            }
+          },
+          {
+            "id": "fortune_trace_card",
+            "component": {
+              "Card": {
+                "child": "fortune_trace"
+              }
+            }
+          },
+          {
+            "id": "fortune_root",
+            "component": {
+              "Column": {
+                "children": {
+                  "explicitList": [
+                    "kpi_row",
+                    "row_pillars_elements",
+                    "row_interactions_gods",
+                    "fortune_spooky_card",
+                    "fortune_timeline_card",
+                    "fortune_dag_card",
+                    "row_reading_citations",
+                    "fortune_actions_row",
+                    "fortune_disclaimer_card"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "id": "layout_root",
+            "component": {
+              "Row": {
+                "children": {
+                  "explicitList": [
+                    "fortune_root",
+                    "fortune_trace_card"
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "run_id": "22222222-2222-2222-2222-222222222222",
+    "fortune_id": "11111111-1111-1111-1111-111111111111",
+    "seq": 3,
+    "payload": {
+      "dataModelUpdate": {
+        "surfaceId": "fortune_main",
+        "contents": [
+          {
+            "key": "status",
+            "valueString": "streaming"
+          },
+          {
+            "key": "fortuneId",
+            "valueString": "11111111-1111-1111-1111-111111111111"
+          }
+        ],
+        "path": "/data/meta"
+      }
+    }
+  },
+  {
+    "run_id": "22222222-2222-2222-2222-222222222222",
+    "fortune_id": "11111111-1111-1111-1111-111111111111",
+    "seq": 4,
+    "payload": {
+      "dataModelUpdate": {
+        "surfaceId": "fortune_main",
+        "contents": [
+          {
+            "key": "items",
+            "valueArray": [
+              {
+                "stepId": "calendar",
+                "agentName": "Calendar",
+                "status": "queued",
+                "statusReason": "ok",
+                "modelId": "deterministic:cnlunar",
+                "sequence": 1,
+                "stage": 1,
+                "elapsedMs": 0,
+                "reasoningTokens": 0,
+                "reasoningEffort": "deterministic",
+                "startedAt": null,
+                "endedAt": null
+              },
+              {
+                "stepId": "bazi_interpreter",
+                "agentName": "BaZi Interpreter",
+                "status": "queued",
+                "statusReason": "ok",
+                "modelId": "python:bazi-engine",
+                "sequence": 2,
+                "stage": 1,
+                "elapsedMs": 0,
+                "reasoningTokens": 0,
+                "reasoningEffort": "deterministic",
+                "startedAt": null,
+                "endedAt": null
+              },
+              {
+                "stepId": "classics_retriever",
+                "agentName": "Classics Retriever",
+                "status": "queued",
+                "statusReason": "ok",
+                "modelId": "local:classics-retriever",
+                "sequence": 3,
+                "stage": 1,
+                "elapsedMs": 0,
+                "reasoningTokens": 0,
+                "reasoningEffort": "deterministic",
+                "startedAt": null,
+                "endedAt": null
+              },
+              {
+                "stepId": "narrative",
+                "agentName": "Narrative",
+                "status": "queued",
+                "statusReason": "ok",
+                "modelId": "gpt-5.4-mini",
+                "sequence": 4,
+                "stage": 1,
+                "elapsedMs": 0,
+                "reasoningTokens": 0,
+                "reasoningEffort": "low",
+                "startedAt": null,
+                "endedAt": null
+              },
+              {
+                "stepId": "guardrail",
+                "agentName": "Guardrail",
+                "status": "queued",
+                "statusReason": "ok",
+                "modelId": "gpt-5.4-mini",
+                "sequence": 5,
+                "stage": 1,
+                "elapsedMs": 0,
+                "reasoningTokens": 0,
+                "reasoningEffort": "low",
+                "startedAt": null,
+                "endedAt": null
+              }
+            ]
+          }
+        ],
+        "path": "/data/thinking/steps"
+      }
+    }
+  },
+  {
+    "run_id": "22222222-2222-2222-2222-222222222222",
+    "fortune_id": "11111111-1111-1111-1111-111111111111",
+    "seq": 5,
+    "payload": {
+      "dataModelUpdate": {
+        "surfaceId": "fortune_main",
+        "contents": [
+          {
+            "key": "phase",
+            "valueString": "foundation"
+          },
+          {
+            "key": "message",
+            "valueString": "Computing Four Pillars..."
+          },
+          {
+            "key": "percent",
+            "valueNumber": 20.0
+          }
+        ],
+        "path": "/data/meta/progress"
+      }
+    }
+  },
+  {
+    "run_id": "22222222-2222-2222-2222-222222222222",
+    "fortune_id": "11111111-1111-1111-1111-111111111111",
+    "seq": 6,
+    "payload": {
+      "dataModelUpdate": {
+        "surfaceId": "fortune_main",
+        "contents": [
+          {
+            "key": "year",
+            "valueMap": [
+              {
+                "key": "raw",
+                "valueString": "庚午"
+              },
+              {
+                "key": "stem",
+                "valueString": "Yang Metal"
+              },
+              {
+                "key": "branch",
+                "valueString": "Horse"
+              },
+              {
+                "key": "stemChinese",
+                "valueString": "庚"
+              },
+              {
+                "key": "branchChinese",
+                "valueString": "午"
+              },
+              {
+                "key": "element",
+                "valueString": "Metal"
+              },
+              {
+                "key": "stemElement",
+                "valueString": "Metal"
+              },
+              {
+                "key": "branchElement",
+                "valueString": "Fire"
+              }
+            ]
+          },
+          {
+            "key": "month",
+            "valueMap": [
+              {
+                "key": "raw",
+                "valueString": "辛巳"
+              },
+              {
+                "key": "stem",
+                "valueString": "Yin Metal"
+              },
+              {
+                "key": "branch",
+                "valueString": "Snake"
+              },
+              {
+                "key": "stemChinese",
+                "valueString": "辛"
+              },
+              {
+                "key": "branchChinese",
+                "valueString": "巳"
+              },
+              {
+                "key": "element",
+                "valueString": "Metal"
+              },
+              {
+                "key": "stemElement",
+                "valueString": "Metal"
+              },
+              {
+                "key": "branchElement",
+                "valueString": "Fire"
+              }
+            ]
+          },
+          {
+            "key": "day",
+            "valueMap": [
+              {
+                "key": "raw",
+                "valueString": "庚辰"
+              },
+              {
+                "key": "stem",
+                "valueString": "Yang Metal"
+              },
+              {
+                "key": "branch",
+                "valueString": "Dragon"
+              },
+              {
+                "key": "stemChinese",
+                "valueString": "庚"
+              },
+              {
+                "key": "branchChinese",
+                "valueString": "辰"
+              },
+              {
+                "key": "element",
+                "valueString": "Metal"
+              },
+              {
+                "key": "stemElement",
+                "valueString": "Metal"
+              },
+              {
+                "key": "branchElement",
+                "valueString": "Earth"
+              }
+            ]
+          },
+          {
+            "key": "hour",
+            "valueMap": [
+              {
+                "key": "raw",
+                "valueString": "辛巳"
+              },
+              {
+                "key": "stem",
+                "valueString": "Yin Metal"
+              },
+              {
+                "key": "branch",
+                "valueString": "Snake"
+              },
+              {
+                "key": "stemChinese",
+                "valueString": "辛"
+              },
+              {
+                "key": "branchChinese",
+                "valueString": "巳"
+              },
+              {
+                "key": "element",
+                "valueString": "Metal"
+              },
+              {
+                "key": "stemElement",
+                "valueString": "Metal"
+              },
+              {
+                "key": "branchElement",
+                "valueString": "Fire"
+              }
+            ]
+          },
+          {
+            "key": "dayMaster",
+            "valueString": "Yang Metal"
+          },
+          {
+            "key": "dayMasterChinese",
+            "valueString": "庚"
+          },
+          {
+            "key": "dayMasterElement",
+            "valueString": "Metal"
+          },
+          {
+            "key": "birthTimeUnknown",
+            "valueBoolean": false
+          }
+        ],
+        "path": "/data/pillars"
+      }
+    }
+  },
+  {
+    "run_id": "22222222-2222-2222-2222-222222222222",
+    "fortune_id": "11111111-1111-1111-1111-111111111111",
+    "seq": 7,
+    "payload": {
+      "dataModelUpdate": {
+        "surfaceId": "fortune_main",
+        "contents": [
+          {
+            "key": "Wood",
+            "valueNumber": 0.0
+          },
+          {
+            "key": "Fire",
+            "valueNumber": 3.0
+          },
+          {
+            "key": "Earth",
+            "valueNumber": 1.0
+          },
+          {
+            "key": "Metal",
+            "valueNumber": 4.0
+          },
+          {
+            "key": "Water",
+            "valueNumber": 0.0
+          }
+        ],
+        "path": "/data/elements"
+      }
+    }
+  },
+  {
+    "run_id": "22222222-2222-2222-2222-222222222222",
+    "fortune_id": "11111111-1111-1111-1111-111111111111",
+    "seq": 8,
+    "payload": {
+      "dataModelUpdate": {
+        "surfaceId": "fortune_main",
+        "contents": [
+          {
+            "key": "references",
+            "valueArray": [
+              {
+                "id": "yuan_hai_timing",
+                "passage": "大运看十年之祸福，流年看一年之吉凶。运年并论，方得其真。",
+                "translation": "Major cycles reveal fortune and misfortune over ten-year periods; annual cycles reveal luck for a single year. Only by examining both together can the truth be found.",
+                "source": "渊海子平 · 论大运流年",
+                "sourceEnglish": "Yuanhai Ziping · On Luck & Annual Pillars",
+                "relevance": "Cosine similarity 0.438 against query: Will I find a new role this year? warm metal"
+              },
+              {
+                "id": "san_ming_tai_sui",
+                "passage": "太岁者，一年之主宰也。犯太岁则灾，合太岁则吉。",
+                "translation": "Tai Sui is the sovereign of the year. Offending Tai Sui brings disaster; harmonizing with Tai Sui brings fortune.",
+                "source": "三命通会 · 论太岁",
+                "sourceEnglish": "Three Lives Compendium · On the Grand Duke (Year God)",
+                "relevance": "Cosine similarity 0.340 against query: Will I find a new role this year? warm metal"
+              },
+              {
+                "id": "san_ming_san_he",
+                "passage": "申子辰合水局，亥卯未合木局，寅午戌合火局，巳酉丑合金局。",
+                "translation": "Shen-Zi-Chen form a Water frame, Hai-Mao-Wei form a Wood frame, Yin-Wu-Xu form a Fire frame, Si-You-Chou form a Metal frame.",
+                "source": "三命通会 · 论三合",
+                "sourceEnglish": "Three Lives Compendium · On Three Harmonies",
+                "relevance": "Cosine similarity 0.303 against query: Will I find a new role this year? warm metal"
+              },
+              {
+                "id": "di_tian_sui_xin",
+                "passage": "辛金软弱，温润而清。畏土之叠，乐水之盈。",
+                "translation": "Xin Metal is soft and delicate — warm, refined, and pure. It fears excessive Earth piling up, and delights in abundant Water.",
+                "source": "滴天髓 · 辛金",
+                "sourceEnglish": "Drops of Heaven's Essence · Yin Metal",
+                "relevance": "Cosine similarity 0.206 against query: Will I find a new role this year? warm metal"
+              }
+            ]
+          }
+        ],
+        "path": "/data/classics"
+      }
+    }
+  },
+  {
+    "run_id": "22222222-2222-2222-2222-222222222222",
+    "fortune_id": "11111111-1111-1111-1111-111111111111",
+    "seq": 9,
+    "payload": {
+      "dataModelUpdate": {
+        "surfaceId": "fortune_main",
+        "contents": [
+          {
+            "key": "year",
+            "valueArray": [
+              {
+                "stem": "丁",
+                "element": "fire",
+                "strength": "main_qi"
+              },
+              {
+                "stem": "己",
+                "element": "earth",
+                "strength": "middle_qi"
+              }
+            ]
+          },
+          {
+            "key": "month",
+            "valueArray": [
+              {
+                "stem": "丙",
+                "element": "fire",
+                "strength": "main_qi"
+              },
+              {
+                "stem": "庚",
+                "element": "metal",
+                "strength": "middle_qi"
+              },
+              {
+                "stem": "戊",
+                "element": "earth",
+                "strength": "residual_qi"
+              }
+            ]
+          },
+          {
+            "key": "day",
+            "valueArray": [
+              {
+                "stem": "戊",
+                "element": "earth",
+                "strength": "main_qi"
+              },
+              {
+                "stem": "乙",
+                "element": "wood",
+                "strength": "middle_qi"
+              },
+              {
+                "stem": "癸",
+                "element": "water",
+                "strength": "residual_qi"
+              }
+            ]
+          },
+          {
+            "key": "hour",
+            "valueArray": [
+              {
+                "stem": "丙",
+                "element": "fire",
+                "strength": "main_qi"
+              },
+              {
+                "stem": "庚",
+                "element": "metal",
+                "strength": "middle_qi"
+              },
+              {
+                "stem": "戊",
+                "element": "earth",
+                "strength": "residual_qi"
+              }
+            ]
+          }
+        ],
+        "path": "/data/hiddenStems"
+      }
+    }
+  },
+  {
+    "run_id": "22222222-2222-2222-2222-222222222222",
+    "fortune_id": "11111111-1111-1111-1111-111111111111",
+    "seq": 10,
+    "payload": {
+      "dataModelUpdate": {
+        "surfaceId": "fortune_main",
+        "contents": [
+          {
+            "key": "items",
+            "valueArray": [
+              {
+                "stem": "庚",
+                "god": "比肩",
+                "english": "Companion",
+                "pillar": "year",
+                "position": "stem"
+              },
+              {
+                "stem": "丁",
+                "god": "正官",
+                "english": "Direct Officer",
+                "pillar": "year",
+                "position": "hidden_main"
+              },
+              {
+                "stem": "己",
+                "god": "正印",
+                "english": "Direct Seal",
+                "pillar": "year",
+                "position": "hidden_middle"
+              },
+              {
+                "stem": "辛",
+                "god": "劫财",
+                "english": "Rob Wealth",
+                "pillar": "month",
+                "position": "stem"
+              },
+              {
+                "stem": "丙",
+                "god": "七杀",
+                "english": "Seven Killings",
+                "pillar": "month",
+                "position": "hidden_main"
+              },
+              {
+                "stem": "庚",
+                "god": "比肩",
+                "english": "Companion",
+                "pillar": "month",
+                "position": "hidden_middle"
+              },
+              {
+                "stem": "戊",
+                "god": "偏印",
+                "english": "Indirect Seal",
+                "pillar": "month",
+                "position": "hidden_residual"
+              },
+              {
+                "stem": "戊",
+                "god": "偏印",
+                "english": "Indirect Seal",
+                "pillar": "day",
+                "position": "hidden_main"
+              },
+              {
+                "stem": "乙",
+                "god": "正财",
+                "english": "Direct Wealth",
+                "pillar": "day",
+                "position": "hidden_middle"
+              },
+              {
+                "stem": "癸",
+                "god": "伤官",
+                "english": "Hurting Officer",
+                "pillar": "day",
+                "position": "hidden_residual"
+              },
+              {
+                "stem": "辛",
+                "god": "劫财",
+                "english": "Rob Wealth",
+                "pillar": "hour",
+                "position": "stem"
+              },
+              {
+                "stem": "丙",
+                "god": "七杀",
+                "english": "Seven Killings",
+                "pillar": "hour",
+                "position": "hidden_main"
+              },
+              {
+                "stem": "庚",
+                "god": "比肩",
+                "english": "Companion",
+                "pillar": "hour",
+                "position": "hidden_middle"
+              },
+              {
+                "stem": "戊",
+                "god": "偏印",
+                "english": "Indirect Seal",
+                "pillar": "hour",
+                "position": "hidden_residual"
+              }
+            ]
+          }
+        ],
+        "path": "/data/tenGods"
+      }
+    }
+  },
+  {
+    "run_id": "22222222-2222-2222-2222-222222222222",
+    "fortune_id": "11111111-1111-1111-1111-111111111111",
+    "seq": 11,
+    "payload": {
+      "dataModelUpdate": {
+        "surfaceId": "fortune_main",
+        "contents": [
+          {
+            "key": "items",
+            "valueArray": []
+          }
+        ],
+        "path": "/data/interactions"
+      }
+    }
+  },
+  {
+    "run_id": "22222222-2222-2222-2222-222222222222",
+    "fortune_id": "11111111-1111-1111-1111-111111111111",
+    "seq": 12,
+    "payload": {
+      "dataModelUpdate": {
+        "surfaceId": "fortune_main",
+        "contents": [
+          {
+            "key": "dayMasterElement",
+            "valueString": "metal"
+          },
+          {
+            "key": "monthBranch",
+            "valueString": "巳"
+          },
+          {
+            "key": "season",
+            "valueString": "summer"
+          },
+          {
+            "key": "strength",
+            "valueString": "dead"
+          },
+          {
+            "key": "score",
+            "valueNumber": 0.1
+          }
+        ],
+        "path": "/data/seasonalStrength"
+      }
+    }
+  },
+  {
+    "run_id": "22222222-2222-2222-2222-222222222222",
+    "fortune_id": "11111111-1111-1111-1111-111111111111",
+    "seq": 13,
+    "payload": {
+      "dataModelUpdate": {
+        "surfaceId": "fortune_main",
+        "contents": [
+          {
+            "key": "year",
+            "valueMap": [
+              {
+                "key": "wood",
+                "valueNumber": 0.0
+              },
+              {
+                "key": "fire",
+                "valueNumber": 1.0
+              },
+              {
+                "key": "earth",
+                "valueNumber": 0.5
+              },
+              {
+                "key": "metal",
+                "valueNumber": 1.0
+              },
+              {
+                "key": "water",
+                "valueNumber": 0.0
+              }
+            ]
+          },
+          {
+            "key": "month",
+            "valueMap": [
+              {
+                "key": "wood",
+                "valueNumber": 0.0
+              },
+              {
+                "key": "fire",
+                "valueNumber": 1.0
+              },
+              {
+                "key": "earth",
+                "valueNumber": 0.3
+              },
+              {
+                "key": "metal",
+                "valueNumber": 1.5
+              },
+              {
+                "key": "water",
+                "valueNumber": 0.0
+              }
+            ]
+          },
+          {
+            "key": "day",
+            "valueMap": [
+              {
+                "key": "wood",
+                "valueNumber": 0.5
+              },
+              {
+                "key": "fire",
+                "valueNumber": 0.0
+              },
+              {
+                "key": "earth",
+                "valueNumber": 1.0
+              },
+              {
+                "key": "metal",
+                "valueNumber": 1.0
+              },
+              {
+                "key": "water",
+                "valueNumber": 0.3
+              }
+            ]
+          },
+          {
+            "key": "hour",
+            "valueMap": [
+              {
+                "key": "wood",
+                "valueNumber": 0.0
+              },
+              {
+                "key": "fire",
+                "valueNumber": 1.0
+              },
+              {
+                "key": "earth",
+                "valueNumber": 0.3
+              },
+              {
+                "key": "metal",
+                "valueNumber": 1.5
+              },
+              {
+                "key": "water",
+                "valueNumber": 0.0
+              }
+            ]
+          }
+        ],
+        "path": "/data/elementBySource"
+      }
+    }
+  },
+  {
+    "run_id": "22222222-2222-2222-2222-222222222222",
+    "fortune_id": "11111111-1111-1111-1111-111111111111",
+    "seq": 14,
+    "payload": {
+      "dataModelUpdate": {
+        "surfaceId": "fortune_main",
+        "contents": [
+          {
+            "key": "items",
+            "valueArray": [
+              {
+                "index": 0,
+                "startAge": 3,
+                "endAge": 12,
+                "stem": "庚",
+                "branch": "辰",
+                "stemElement": "metal",
+                "branchElement": "earth",
+                "startYear": 1993,
+                "endYear": 2002
+              },
+              {
+                "index": 1,
+                "startAge": 13,
+                "endAge": 22,
+                "stem": "己",
+                "branch": "卯",
+                "stemElement": "earth",
+                "branchElement": "wood",
+                "startYear": 2003,
+                "endYear": 2012
+              },
+              {
+                "index": 2,
+                "startAge": 23,
+                "endAge": 32,
+                "stem": "戊",
+                "branch": "寅",
+                "stemElement": "earth",
+                "branchElement": "wood",
+                "startYear": 2013,
+                "endYear": 2022
+              },
+              {
+                "index": 3,
+                "startAge": 33,
+                "endAge": 42,
+                "stem": "丁",
+                "branch": "丑",
+                "stemElement": "fire",
+                "branchElement": "earth",
+                "startYear": 2023,
+                "endYear": 2032
+              },
+              {
+                "index": 4,
+                "startAge": 43,
+                "endAge": 52,
+                "stem": "丙",
+                "branch": "子",
+                "stemElement": "fire",
+                "branchElement": "water",
+                "startYear": 2033,
+                "endYear": 2042
+              },
+              {
+                "index": 5,
+                "startAge": 53,
+                "endAge": 62,
+                "stem": "乙",
+                "branch": "亥",
+                "stemElement": "wood",
+                "branchElement": "water",
+                "startYear": 2043,
+                "endYear": 2052
+              },
+              {
+                "index": 6,
+                "startAge": 63,
+                "endAge": 72,
+                "stem": "甲",
+                "branch": "戌",
+                "stemElement": "wood",
+                "branchElement": "earth",
+                "startYear": 2053,
+                "endYear": 2062
+              },
+              {
+                "index": 7,
+                "startAge": 73,
+                "endAge": 82,
+                "stem": "癸",
+                "branch": "酉",
+                "stemElement": "water",
+                "branchElement": "metal",
+                "startYear": 2063,
+                "endYear": 2072
+              }
+            ]
+          }
+        ],
+        "path": "/data/luckPillars"
+      }
+    }
+  },
+  {
+    "run_id": "22222222-2222-2222-2222-222222222222",
+    "fortune_id": "11111111-1111-1111-1111-111111111111",
+    "seq": 15,
+    "payload": {
+      "dataModelUpdate": {
+        "surfaceId": "fortune_main",
+        "contents": [
+          {
+            "key": "items",
+            "valueArray": [
+              {
+                "year": 1990,
+                "stem": "庚",
+                "branch": "午",
+                "stemElement": "metal",
+                "branchElement": "fire",
+                "interactions": [],
+                "luckPillarIndex": -1
+              },
+              {
+                "year": 1991,
+                "stem": "辛",
+                "branch": "未",
+                "stemElement": "metal",
+                "branchElement": "earth",
+                "interactions": [
+                  {
+                    "type": "combination",
+                    "between": [
+                      "未",
+                      "午"
+                    ],
+                    "description": "流年未合year午 → fire"
+                  }
+                ],
+                "luckPillarIndex": -1
+              },
+              {
+                "year": 1992,
+                "stem": "壬",
+                "branch": "申",
+                "stemElement": "water",
+                "branchElement": "metal",
+                "interactions": [
+                  {
+                    "type": "combination",
+                    "between": [
+                      "申",
+                      "巳"
+                    ],
+                    "description": "流年申合month巳 → water"
+                  },
+                  {
+                    "type": "combination",
+                    "between": [
+                      "申",
+                      "巳"
+                    ],
+                    "description": "流年申合hour巳 → water"
+                  }
+                ],
+                "luckPillarIndex": -1
+              },
+              {
+                "year": 1993,
+                "stem": "癸",
+                "branch": "酉",
+                "stemElement": "water",
+                "branchElement": "metal",
+                "interactions": [
+                  {
+                    "type": "combination",
+                    "between": [
+                      "酉",
+                      "辰"
+                    ],
+                    "description": "流年酉合day辰 → metal"
+                  }
+                ],
+                "luckPillarIndex": 0
+              },
+              {
+                "year": 1994,
+                "stem": "甲",
+                "branch": "戌",
+                "stemElement": "wood",
+                "branchElement": "earth",
+                "interactions": [
+                  {
+                    "type": "clash",
+                    "between": [
+                      "戌",
+                      "辰"
+                    ],
+                    "description": "流年戌冲day辰"
+                  }
+                ],
+                "luckPillarIndex": 0
+              },
+              {
+                "year": 1995,
+                "stem": "乙",
+                "branch": "亥",
+                "stemElement": "wood",
+                "branchElement": "water",
+                "interactions": [
+                  {
+                    "type": "clash",
+                    "between": [
+                      "亥",
+                      "巳"
+                    ],
+                    "description": "流年亥冲month巳"
+                  },
+                  {
+                    "type": "clash",
+                    "between": [
+                      "亥",
+                      "巳"
+                    ],
+                    "description": "流年亥冲hour巳"
+                  }
+                ],
+                "luckPillarIndex": 0
+              },
+              {
+                "year": 1996,
+                "stem": "丙",
+                "branch": "子",
+                "stemElement": "fire",
+                "branchElement": "water",
+                "interactions": [
+                  {
+                    "type": "clash",
+                    "between": [
+                      "子",
+                      "午"
+                    ],
+                    "description": "流年子冲year午"
+                  }
+                ],
+                "luckPillarIndex": 0
+              },
+              {
+                "year": 1997,
+                "stem": "丁",
+                "branch": "丑",
+                "stemElement": "fire",
+                "branchElement": "earth",
+                "interactions": [
+                  {
+                    "type": "harm",
+                    "between": [
+                      "丑",
+                      "午"
+                    ],
+                    "description": "流年丑害year午"
+                  }
+                ],
+                "luckPillarIndex": 0
+              },
+              {
+                "year": 1998,
+                "stem": "戊",
+                "branch": "寅",
+                "stemElement": "earth",
+                "branchElement": "wood",
+                "interactions": [
+                  {
+                    "type": "harm",
+                    "between": [
+                      "寅",
+                      "巳"
+                    ],
+                    "description": "流年寅害month巳"
+                  },
+                  {
+                    "type": "harm",
+                    "between": [
+                      "寅",
+                      "巳"
+                    ],
+                    "description": "流年寅害hour巳"
+                  }
+                ],
+                "luckPillarIndex": 0
+              },
+              {
+                "year": 1999,
+                "stem": "己",
+                "branch": "卯",
+                "stemElement": "earth",
+                "branchElement": "wood",
+                "interactions": [
+                  {
+                    "type": "harm",
+                    "between": [
+                      "卯",
+                      "辰"
+                    ],
+                    "description": "流年卯害day辰"
+                  }
+                ],
+                "luckPillarIndex": 0
+              },
+              {
+                "year": 2000,
+                "stem": "庚",
+                "branch": "辰",
+                "stemElement": "metal",
+                "branchElement": "earth",
+                "interactions": [],
+                "luckPillarIndex": 0
+              },
+              {
+                "year": 2001,
+                "stem": "辛",
+                "branch": "巳",
+                "stemElement": "metal",
+                "branchElement": "fire",
+                "interactions": [],
+                "luckPillarIndex": 0
+              },
+              {
+                "year": 2002,
+                "stem": "壬",
+                "branch": "午",
+                "stemElement": "water",
+                "branchElement": "fire",
+                "interactions": [],
+                "luckPillarIndex": 0
+              },
+              {
+                "year": 2003,
+                "stem": "癸",
+                "branch": "未",
+                "stemElement": "water",
+                "branchElement": "earth",
+                "interactions": [
+                  {
+                    "type": "combination",
+                    "between": [
+                      "未",
+                      "午"
+                    ],
+                    "description": "流年未合year午 → fire"
+                  }
+                ],
+                "luckPillarIndex": 1
+              },
+              {
+                "year": 2004,
+                "stem": "甲",
+                "branch": "申",
+                "stemElement": "wood",
+                "branchElement": "metal",
+                "interactions": [
+                  {
+                    "type": "combination",
+                    "between": [
+                      "申",
+                      "巳"
+                    ],
+                    "description": "流年申合month巳 → water"
+                  },
+                  {
+                    "type": "combination",
+                    "between": [
+                      "申",
+                      "巳"
+                    ],
+                    "description": "流年申合hour巳 → water"
+                  }
+                ],
+                "luckPillarIndex": 1
+              },
+              {
+                "year": 2005,
+                "stem": "乙",
+                "branch": "酉",
+                "stemElement": "wood",
+                "branchElement": "metal",
+                "interactions": [
+                  {
+                    "type": "combination",
+                    "between": [
+                      "酉",
+                      "辰"
+                    ],
+                    "description": "流年酉合day辰 → metal"
+                  }
+                ],
+                "luckPillarIndex": 1
+              },
+              {
+                "year": 2006,
+                "stem": "丙",
+                "branch": "戌",
+                "stemElement": "fire",
+                "branchElement": "earth",
+                "interactions": [
+                  {
+                    "type": "clash",
+                    "between": [
+                      "戌",
+                      "辰"
+                    ],
+                    "description": "流年戌冲day辰"
+                  }
+                ],
+                "luckPillarIndex": 1
+              },
+              {
+                "year": 2007,
+                "stem": "丁",
+                "branch": "亥",
+                "stemElement": "fire",
+                "branchElement": "water",
+                "interactions": [
+                  {
+                    "type": "clash",
+                    "between": [
+                      "亥",
+                      "巳"
+                    ],
+                    "description": "流年亥冲month巳"
+                  },
+                  {
+                    "type": "clash",
+                    "between": [
+                      "亥",
+                      "巳"
+                    ],
+                    "description": "流年亥冲hour巳"
+                  }
+                ],
+                "luckPillarIndex": 1
+              },
+              {
+                "year": 2008,
+                "stem": "戊",
+                "branch": "子",
+                "stemElement": "earth",
+                "branchElement": "water",
+                "interactions": [
+                  {
+                    "type": "clash",
+                    "between": [
+                      "子",
+                      "午"
+                    ],
+                    "description": "流年子冲year午"
+                  }
+                ],
+                "luckPillarIndex": 1
+              },
+              {
+                "year": 2009,
+                "stem": "己",
+                "branch": "丑",
+                "stemElement": "earth",
+                "branchElement": "earth",
+                "interactions": [
+                  {
+                    "type": "harm",
+                    "between": [
+                      "丑",
+                      "午"
+                    ],
+                    "description": "流年丑害year午"
+                  }
+                ],
+                "luckPillarIndex": 1
+              },
+              {
+                "year": 2010,
+                "stem": "庚",
+                "branch": "寅",
+                "stemElement": "metal",
+                "branchElement": "wood",
+                "interactions": [
+                  {
+                    "type": "harm",
+                    "between": [
+                      "寅",
+                      "巳"
+                    ],
+                    "description": "流年寅害month巳"
+                  },
+                  {
+                    "type": "harm",
+                    "between": [
+                      "寅",
+                      "巳"
+                    ],
+                    "description": "流年寅害hour巳"
+                  }
+                ],
+                "luckPillarIndex": 1
+              },
+              {
+                "year": 2011,
+                "stem": "辛",
+                "branch": "卯",
+                "stemElement": "metal",
+                "branchElement": "wood",
+                "interactions": [
+                  {
+                    "type": "harm",
+                    "between": [
+                      "卯",
+                      "辰"
+                    ],
+                    "description": "流年卯害day辰"
+                  }
+                ],
+                "luckPillarIndex": 1
+              },
+              {
+                "year": 2012,
+                "stem": "壬",
+                "branch": "辰",
+                "stemElement": "water",
+                "branchElement": "earth",
+                "interactions": [],
+                "luckPillarIndex": 1
+              },
+              {
+                "year": 2013,
+                "stem": "癸",
+                "branch": "巳",
+                "stemElement": "water",
+                "branchElement": "fire",
+                "interactions": [],
+                "luckPillarIndex": 2
+              },
+              {
+                "year": 2014,
+                "stem": "甲",
+                "branch": "午",
+                "stemElement": "wood",
+                "branchElement": "fire",
+                "interactions": [],
+                "luckPillarIndex": 2
+              },
+              {
+                "year": 2015,
+                "stem": "乙",
+                "branch": "未",
+                "stemElement": "wood",
+                "branchElement": "earth",
+                "interactions": [
+                  {
+                    "type": "combination",
+                    "between": [
+                      "未",
+                      "午"
+                    ],
+                    "description": "流年未合year午 → fire"
+                  }
+                ],
+                "luckPillarIndex": 2
+              },
+              {
+                "year": 2016,
+                "stem": "丙",
+                "branch": "申",
+                "stemElement": "fire",
+                "branchElement": "metal",
+                "interactions": [
+                  {
+                    "type": "combination",
+                    "between": [
+                      "申",
+                      "巳"
+                    ],
+                    "description": "流年申合month巳 → water"
+                  },
+                  {
+                    "type": "combination",
+                    "between": [
+                      "申",
+                      "巳"
+                    ],
+                    "description": "流年申合hour巳 → water"
+                  }
+                ],
+                "luckPillarIndex": 2
+              },
+              {
+                "year": 2017,
+                "stem": "丁",
+                "branch": "酉",
+                "stemElement": "fire",
+                "branchElement": "metal",
+                "interactions": [
+                  {
+                    "type": "combination",
+                    "between": [
+                      "酉",
+                      "辰"
+                    ],
+                    "description": "流年酉合day辰 → metal"
+                  }
+                ],
+                "luckPillarIndex": 2
+              },
+              {
+                "year": 2018,
+                "stem": "戊",
+                "branch": "戌",
+                "stemElement": "earth",
+                "branchElement": "earth",
+                "interactions": [
+                  {
+                    "type": "clash",
+                    "between": [
+                      "戌",
+                      "辰"
+                    ],
+                    "description": "流年戌冲day辰"
+                  }
+                ],
+                "luckPillarIndex": 2
+              },
+              {
+                "year": 2019,
+                "stem": "己",
+                "branch": "亥",
+                "stemElement": "earth",
+                "branchElement": "water",
+                "interactions": [
+                  {
+                    "type": "clash",
+                    "between": [
+                      "亥",
+                      "巳"
+                    ],
+                    "description": "流年亥冲month巳"
+                  },
+                  {
+                    "type": "clash",
+                    "between": [
+                      "亥",
+                      "巳"
+                    ],
+                    "description": "流年亥冲hour巳"
+                  }
+                ],
+                "luckPillarIndex": 2
+              },
+              {
+                "year": 2020,
+                "stem": "庚",
+                "branch": "子",
+                "stemElement": "metal",
+                "branchElement": "water",
+                "interactions": [
+                  {
+                    "type": "clash",
+                    "between": [
+                      "子",
+                      "午"
+                    ],
+                    "description": "流年子冲year午"
+                  }
+                ],
+                "luckPillarIndex": 2
+              },
+              {
+                "year": 2021,
+                "stem": "辛",
+                "branch": "丑",
+                "stemElement": "metal",
+                "branchElement": "earth",
+                "interactions": [
+                  {
+                    "type": "harm",
+                    "between": [
+                      "丑",
+                      "午"
+                    ],
+                    "description": "流年丑害year午"
+                  }
+                ],
+                "luckPillarIndex": 2
+              },
+              {
+                "year": 2022,
+                "stem": "壬",
+                "branch": "寅",
+                "stemElement": "water",
+                "branchElement": "wood",
+                "interactions": [
+                  {
+                    "type": "harm",
+                    "between": [
+                      "寅",
+                      "巳"
+                    ],
+                    "description": "流年寅害month巳"
+                  },
+                  {
+                    "type": "harm",
+                    "between": [
+                      "寅",
+                      "巳"
+                    ],
+                    "description": "流年寅害hour巳"
+                  }
+                ],
+                "luckPillarIndex": 2
+              },
+              {
+                "year": 2023,
+                "stem": "癸",
+                "branch": "卯",
+                "stemElement": "water",
+                "branchElement": "wood",
+                "interactions": [
+                  {
+                    "type": "harm",
+                    "between": [
+                      "卯",
+                      "辰"
+                    ],
+                    "description": "流年卯害day辰"
+                  }
+                ],
+                "luckPillarIndex": 3
+              },
+              {
+                "year": 2024,
+                "stem": "甲",
+                "branch": "辰",
+                "stemElement": "wood",
+                "branchElement": "earth",
+                "interactions": [],
+                "luckPillarIndex": 3
+              },
+              {
+                "year": 2025,
+                "stem": "乙",
+                "branch": "巳",
+                "stemElement": "wood",
+                "branchElement": "fire",
+                "interactions": [],
+                "luckPillarIndex": 3
+              },
+              {
+                "year": 2026,
+                "stem": "丙",
+                "branch": "午",
+                "stemElement": "fire",
+                "branchElement": "fire",
+                "interactions": [],
+                "luckPillarIndex": 3
+              },
+              {
+                "year": 2027,
+                "stem": "丁",
+                "branch": "未",
+                "stemElement": "fire",
+                "branchElement": "earth",
+                "interactions": [
+                  {
+                    "type": "combination",
+                    "between": [
+                      "未",
+                      "午"
+                    ],
+                    "description": "流年未合year午 → fire"
+                  }
+                ],
+                "luckPillarIndex": 3
+              },
+              {
+                "year": 2028,
+                "stem": "戊",
+                "branch": "申",
+                "stemElement": "earth",
+                "branchElement": "metal",
+                "interactions": [
+                  {
+                    "type": "combination",
+                    "between": [
+                      "申",
+                      "巳"
+                    ],
+                    "description": "流年申合month巳 → water"
+                  },
+                  {
+                    "type": "combination",
+                    "between": [
+                      "申",
+                      "巳"
+                    ],
+                    "description": "流年申合hour巳 → water"
+                  }
+                ],
+                "luckPillarIndex": 3
+              },
+              {
+                "year": 2029,
+                "stem": "己",
+                "branch": "酉",
+                "stemElement": "earth",
+                "branchElement": "metal",
+                "interactions": [
+                  {
+                    "type": "combination",
+                    "between": [
+                      "酉",
+                      "辰"
+                    ],
+                    "description": "流年酉合day辰 → metal"
+                  }
+                ],
+                "luckPillarIndex": 3
+              },
+              {
+                "year": 2030,
+                "stem": "庚",
+                "branch": "戌",
+                "stemElement": "metal",
+                "branchElement": "earth",
+                "interactions": [
+                  {
+                    "type": "clash",
+                    "between": [
+                      "戌",
+                      "辰"
+                    ],
+                    "description": "流年戌冲day辰"
+                  }
+                ],
+                "luckPillarIndex": 3
+              },
+              {
+                "year": 2031,
+                "stem": "辛",
+                "branch": "亥",
+                "stemElement": "metal",
+                "branchElement": "water",
+                "interactions": [
+                  {
+                    "type": "clash",
+                    "between": [
+                      "亥",
+                      "巳"
+                    ],
+                    "description": "流年亥冲month巳"
+                  },
+                  {
+                    "type": "clash",
+                    "between": [
+                      "亥",
+                      "巳"
+                    ],
+                    "description": "流年亥冲hour巳"
+                  }
+                ],
+                "luckPillarIndex": 3
+              },
+              {
+                "year": 2032,
+                "stem": "壬",
+                "branch": "子",
+                "stemElement": "water",
+                "branchElement": "water",
+                "interactions": [
+                  {
+                    "type": "clash",
+                    "between": [
+                      "子",
+                      "午"
+                    ],
+                    "description": "流年子冲year午"
+                  }
+                ],
+                "luckPillarIndex": 3
+              },
+              {
+                "year": 2033,
+                "stem": "癸",
+                "branch": "丑",
+                "stemElement": "water",
+                "branchElement": "earth",
+                "interactions": [
+                  {
+                    "type": "harm",
+                    "between": [
+                      "丑",
+                      "午"
+                    ],
+                    "description": "流年丑害year午"
+                  }
+                ],
+                "luckPillarIndex": 4
+              },
+              {
+                "year": 2034,
+                "stem": "甲",
+                "branch": "寅",
+                "stemElement": "wood",
+                "branchElement": "wood",
+                "interactions": [
+                  {
+                    "type": "harm",
+                    "between": [
+                      "寅",
+                      "巳"
+                    ],
+                    "description": "流年寅害month巳"
+                  },
+                  {
+                    "type": "harm",
+                    "between": [
+                      "寅",
+                      "巳"
+                    ],
+                    "description": "流年寅害hour巳"
+                  }
+                ],
+                "luckPillarIndex": 4
+              },
+              {
+                "year": 2035,
+                "stem": "乙",
+                "branch": "卯",
+                "stemElement": "wood",
+                "branchElement": "wood",
+                "interactions": [
+                  {
+                    "type": "harm",
+                    "between": [
+                      "卯",
+                      "辰"
+                    ],
+                    "description": "流年卯害day辰"
+                  }
+                ],
+                "luckPillarIndex": 4
+              },
+              {
+                "year": 2036,
+                "stem": "丙",
+                "branch": "辰",
+                "stemElement": "fire",
+                "branchElement": "earth",
+                "interactions": [],
+                "luckPillarIndex": 4
+              }
+            ]
+          }
+        ],
+        "path": "/data/annualPillars"
+      }
+    }
+  },
+  {
+    "run_id": "22222222-2222-2222-2222-222222222222",
+    "fortune_id": "11111111-1111-1111-1111-111111111111",
+    "seq": 16,
+    "payload": {
+      "dataModelUpdate": {
+        "surfaceId": "fortune_main",
+        "contents": [
+          {
+            "key": "dayMaster",
+            "valueString": "Yang Metal"
+          },
+          {
+            "key": "dayMasterChinese",
+            "valueString": "庚"
+          },
+          {
+            "key": "dayMasterElement",
+            "valueString": "Metal"
+          },
+          {
+            "key": "harmonyScore",
+            "valueNumber": 70.0
+          },
+          {
+            "key": "currentCycle",
+            "valueString": "丁丑"
+          },
+          {
+            "key": "seasonalStrength",
+            "valueString": "dead"
+          },
+          {
+            "key": "seasonalScore",
+            "valueNumber": 10.0
+          }
+        ],
+        "path": "/data/kpi"
+      }
+    }
+  },
+  {
+    "run_id": "22222222-2222-2222-2222-222222222222",
+    "fortune_id": "11111111-1111-1111-1111-111111111111",
+    "seq": 17,
+    "payload": {
+      "dataModelUpdate": {
+        "surfaceId": "fortune_main",
+        "contents": [
+          {
+            "key": "items",
+            "valueArray": [
+              {
+                "year": 1994,
+                "prediction": "Around 1994, you may have gone through a personal identity shift or health-related event.",
+                "interactionType": "clash",
+                "interactionDescription": "流年戌冲day辰",
+                "affectedPillar": "day",
+                "confidence": 0.85
+              },
+              {
+                "year": 1995,
+                "prediction": "Around 1995, your career or authority figures may have been a source of tension or sudden change.",
+                "interactionType": "clash",
+                "interactionDescription": "流年亥冲month巳",
+                "affectedPillar": "month",
+                "confidence": 0.85
+              },
+              {
+                "year": 1995,
+                "prediction": "Around 1995, your plans, projects, or relationship with children may have faced unexpected turbulence.",
+                "interactionType": "clash",
+                "interactionDescription": "流年亥冲hour巳",
+                "affectedPillar": "hour",
+                "confidence": 0.85
+              },
+              {
+                "year": 1996,
+                "prediction": "Around 1996, you likely experienced a disruption in family dynamics or a shift in your social circle.",
+                "interactionType": "clash",
+                "interactionDescription": "流年子冲year午",
+                "affectedPillar": "year",
+                "confidence": 0.85
+              },
+              {
+                "year": 2006,
+                "prediction": "Around 2006, you may have gone through a personal identity shift or health-related event.",
+                "interactionType": "clash",
+                "interactionDescription": "流年戌冲day辰",
+                "affectedPillar": "day",
+                "confidence": 0.85
+              }
+            ]
+          }
+        ],
+        "path": "/data/retrodictions"
+      }
+    }
+  },
+  {
+    "run_id": "22222222-2222-2222-2222-222222222222",
+    "fortune_id": "11111111-1111-1111-1111-111111111111",
+    "seq": 18,
+    "payload": {
+      "dataModelUpdate": {
+        "surfaceId": "fortune_main",
+        "contents": [
+          {
+            "key": "items",
+            "valueArray": [
+              {
+                "stepId": "ts_<HASH>",
+                "stepType": "tool_call",
+                "kind": "tool_call",
+                "agentName": "foundation",
+                "toolName": "compute_bazi_chart",
+                "label": "Calculating Four Pillars",
+                "inputSummary": "1990-05-15T10:30:00 tz=America/Los_Angeles",
+                "outputSummary": "Day Master: 庚 (metal)",
+                "timestamp": "<TIMESTAMP>",
+                "durationMs": 0,
+                "status": "success"
+              },
+              {
+                "stepId": "ts_<HASH>",
+                "stepType": "tool_call",
+                "kind": "tool_call",
+                "agentName": "foundation",
+                "toolName": "compute_hidden_stems",
+                "label": "Extracting Hidden Stems (藏干)",
+                "inputSummary": "4 branches",
+                "outputSummary": "11 hidden stems across 4 pillars",
+                "timestamp": "<TIMESTAMP>",
+                "durationMs": 0,
+                "status": "success"
+              },
+              {
+                "stepId": "ts_<HASH>",
+                "stepType": "tool_call",
+                "kind": "tool_call",
+                "agentName": "foundation",
+                "toolName": "compute_ten_gods",
+                "label": "Classifying Ten Gods (十神)",
+                "inputSummary": "Day Master: 庚",
+                "outputSummary": "14 positions classified",
+                "timestamp": "<TIMESTAMP>",
+                "durationMs": 0,
+                "status": "success"
+              },
+              {
+                "stepId": "ts_<HASH>",
+                "stepType": "tool_call",
+                "kind": "tool_call",
+                "agentName": "foundation",
+                "toolName": "compute_interactions",
+                "label": "Detecting Clashes & Combinations (冲合害)",
+                "inputSummary": "checking all branch pairs",
+                "outputSummary": "0 interactions found",
+                "timestamp": "<TIMESTAMP>",
+                "durationMs": 0,
+                "status": "success"
+              },
+              {
+                "stepId": "ts_<HASH>",
+                "stepType": "tool_call",
+                "kind": "tool_call",
+                "agentName": "foundation",
+                "toolName": "compute_seasonal_strength",
+                "label": "Evaluating Seasonal Strength (旺相休囚死)",
+                "inputSummary": "metal in 巳",
+                "outputSummary": "dead (score: 0.1)",
+                "timestamp": "<TIMESTAMP>",
+                "durationMs": 0,
+                "status": "success"
+              },
+              {
+                "stepId": "ts_<HASH>",
+                "stepType": "tool_call",
+                "kind": "tool_call",
+                "agentName": "foundation",
+                "toolName": "compute_enhanced_elements",
+                "label": "Weighting Element Balance",
+                "inputSummary": "stems + hidden stems",
+                "outputSummary": "Dominant: metal (5.0)",
+                "timestamp": "<TIMESTAMP>",
+                "durationMs": 0,
+                "status": "success"
+              },
+              {
+                "stepId": "ts_<HASH>",
+                "stepType": "tool_call",
+                "kind": "tool_call",
+                "agentName": "foundation",
+                "toolName": "compute_luck_pillars",
+                "label": "Computing Luck Pillars (大运)",
+                "inputSummary": "gender=female",
+                "outputSummary": "8 decades computed",
+                "timestamp": "<TIMESTAMP>",
+                "durationMs": 0,
+                "status": "success"
+              },
+              {
+                "stepId": "ts_<HASH>",
+                "stepType": "tool_call",
+                "kind": "tool_call",
+                "agentName": "foundation",
+                "toolName": "compute_annual_pillars",
+                "label": "Computing Annual Pillars (流年)",
+                "inputSummary": "1990-2036",
+                "outputSummary": "47 years, 36 with interactions",
+                "timestamp": "<TIMESTAMP>",
+                "durationMs": 0,
+                "status": "success"
+              },
+              {
+                "stepId": "ts_<HASH>",
+                "stepType": "tool_call",
+                "kind": "tool_call",
+                "agentName": "foundation",
+                "toolName": "compute_retrodictions",
+                "label": "Generating Retrodictions (Spooky Accuracy)",
+                "inputSummary": "scanning past years for strong interactions",
+                "outputSummary": "5 retrodictions generated",
+                "timestamp": "<TIMESTAMP>",
+                "durationMs": 0,
+                "status": "success"
+              },
+              {
+                "stepId": "ts_<HASH>",
+                "stepType": "tool_call",
+                "kind": "tool_call",
+                "agentName": "foundation",
+                "toolName": "retrieve_classical_references",
+                "label": "Consulting Classical Texts",
+                "inputSummary": "query: general",
+                "outputSummary": "4 passages matched",
+                "timestamp": "<TIMESTAMP>",
+                "durationMs": 0,
+                "status": "success"
+              }
+            ]
+          }
+        ],
+        "path": "/data/trace/steps"
+      }
+    }
+  },
+  {
+    "run_id": "22222222-2222-2222-2222-222222222222",
+    "fortune_id": "11111111-1111-1111-1111-111111111111",
+    "seq": 19,
+    "payload": {
+      "dataModelUpdate": {
+        "surfaceId": "fortune_main",
+        "contents": [
+          {
+            "key": "step",
+            "valueMap": [
+              {
+                "key": "stepId",
+                "valueString": "calendar"
+              },
+              {
+                "key": "agentName",
+                "valueString": "Calendar"
+              },
+              {
+                "key": "status",
+                "valueString": "done"
+              },
+              {
+                "key": "statusReason",
+                "valueString": "ok"
+              },
+              {
+                "key": "modelId",
+                "valueString": "deterministic:cnlunar"
+              },
+              {
+                "key": "sequence",
+                "valueNumber": 1.0
+              },
+              {
+                "key": "stage",
+                "valueNumber": 1.0
+              },
+              {
+                "key": "elapsedMs",
+                "valueNumber": 0
+              },
+              {
+                "key": "reasoningTokens",
+                "valueNumber": 0.0
+              },
+              {
+                "key": "reasoningEffort",
+                "valueString": "deterministic"
+              }
+            ]
+          }
+        ],
+        "path": "/data/thinking/steps/calendar"
+      }
+    }
+  },
+  {
+    "run_id": "22222222-2222-2222-2222-222222222222",
+    "fortune_id": "11111111-1111-1111-1111-111111111111",
+    "seq": 20,
+    "payload": {
+      "dataModelUpdate": {
+        "surfaceId": "fortune_main",
+        "contents": [
+          {
+            "key": "step",
+            "valueMap": [
+              {
+                "key": "stepId",
+                "valueString": "bazi_interpreter"
+              },
+              {
+                "key": "agentName",
+                "valueString": "BaZi Interpreter"
+              },
+              {
+                "key": "status",
+                "valueString": "done"
+              },
+              {
+                "key": "statusReason",
+                "valueString": "ok"
+              },
+              {
+                "key": "modelId",
+                "valueString": "python:bazi-engine"
+              },
+              {
+                "key": "sequence",
+                "valueNumber": 2.0
+              },
+              {
+                "key": "stage",
+                "valueNumber": 1.0
+              },
+              {
+                "key": "elapsedMs",
+                "valueNumber": 0
+              },
+              {
+                "key": "reasoningTokens",
+                "valueNumber": 0.0
+              },
+              {
+                "key": "reasoningEffort",
+                "valueString": "deterministic"
+              }
+            ]
+          }
+        ],
+        "path": "/data/thinking/steps/bazi_interpreter"
+      }
+    }
+  },
+  {
+    "run_id": "22222222-2222-2222-2222-222222222222",
+    "fortune_id": "11111111-1111-1111-1111-111111111111",
+    "seq": 21,
+    "payload": {
+      "dataModelUpdate": {
+        "surfaceId": "fortune_main",
+        "contents": [
+          {
+            "key": "step",
+            "valueMap": [
+              {
+                "key": "stepId",
+                "valueString": "classics_retriever"
+              },
+              {
+                "key": "agentName",
+                "valueString": "Classics Retriever"
+              },
+              {
+                "key": "status",
+                "valueString": "done"
+              },
+              {
+                "key": "statusReason",
+                "valueString": "ok"
+              },
+              {
+                "key": "modelId",
+                "valueString": "local:classics-retriever"
+              },
+              {
+                "key": "sequence",
+                "valueNumber": 3.0
+              },
+              {
+                "key": "stage",
+                "valueNumber": 1.0
+              },
+              {
+                "key": "elapsedMs",
+                "valueNumber": 0
+              },
+              {
+                "key": "reasoningTokens",
+                "valueNumber": 0.0
+              },
+              {
+                "key": "reasoningEffort",
+                "valueString": "deterministic"
+              }
+            ]
+          }
+        ],
+        "path": "/data/thinking/steps/classics_retriever"
+      }
+    }
+  },
+  {
+    "run_id": "22222222-2222-2222-2222-222222222222",
+    "fortune_id": "11111111-1111-1111-1111-111111111111",
+    "seq": 22,
+    "payload": {
+      "dataModelUpdate": {
+        "surfaceId": "fortune_main",
+        "contents": [
+          {
+            "key": "phase",
+            "valueString": "narrative"
+          },
+          {
+            "key": "message",
+            "valueString": "Generating interpretation..."
+          },
+          {
+            "key": "percent",
+            "valueNumber": 55.0
+          }
+        ],
+        "path": "/data/meta/progress"
+      }
+    }
+  },
+  {
+    "run_id": "22222222-2222-2222-2222-222222222222",
+    "fortune_id": "11111111-1111-1111-1111-111111111111",
+    "seq": 23,
+    "payload": {
+      "dataModelUpdate": {
+        "surfaceId": "fortune_main",
+        "contents": [
+          {
+            "key": "items",
+            "valueArray": [
+              {
+                "stepId": "ts_<HASH>",
+                "stepType": "tool_call",
+                "kind": "tool_call",
+                "agentName": "foundation",
+                "toolName": "compute_bazi_chart",
+                "label": "Calculating Four Pillars",
+                "inputSummary": "1990-05-15T10:30:00 tz=America/Los_Angeles",
+                "outputSummary": "Day Master: 庚 (metal)",
+                "timestamp": "<TIMESTAMP>",
+                "durationMs": 0,
+                "status": "success"
+              },
+              {
+                "stepId": "ts_<HASH>",
+                "stepType": "tool_call",
+                "kind": "tool_call",
+                "agentName": "foundation",
+                "toolName": "compute_hidden_stems",
+                "label": "Extracting Hidden Stems (藏干)",
+                "inputSummary": "4 branches",
+                "outputSummary": "11 hidden stems across 4 pillars",
+                "timestamp": "<TIMESTAMP>",
+                "durationMs": 0,
+                "status": "success"
+              },
+              {
+                "stepId": "ts_<HASH>",
+                "stepType": "tool_call",
+                "kind": "tool_call",
+                "agentName": "foundation",
+                "toolName": "compute_ten_gods",
+                "label": "Classifying Ten Gods (十神)",
+                "inputSummary": "Day Master: 庚",
+                "outputSummary": "14 positions classified",
+                "timestamp": "<TIMESTAMP>",
+                "durationMs": 0,
+                "status": "success"
+              },
+              {
+                "stepId": "ts_<HASH>",
+                "stepType": "tool_call",
+                "kind": "tool_call",
+                "agentName": "foundation",
+                "toolName": "compute_interactions",
+                "label": "Detecting Clashes & Combinations (冲合害)",
+                "inputSummary": "checking all branch pairs",
+                "outputSummary": "0 interactions found",
+                "timestamp": "<TIMESTAMP>",
+                "durationMs": 0,
+                "status": "success"
+              },
+              {
+                "stepId": "ts_<HASH>",
+                "stepType": "tool_call",
+                "kind": "tool_call",
+                "agentName": "foundation",
+                "toolName": "compute_seasonal_strength",
+                "label": "Evaluating Seasonal Strength (旺相休囚死)",
+                "inputSummary": "metal in 巳",
+                "outputSummary": "dead (score: 0.1)",
+                "timestamp": "<TIMESTAMP>",
+                "durationMs": 0,
+                "status": "success"
+              },
+              {
+                "stepId": "ts_<HASH>",
+                "stepType": "tool_call",
+                "kind": "tool_call",
+                "agentName": "foundation",
+                "toolName": "compute_enhanced_elements",
+                "label": "Weighting Element Balance",
+                "inputSummary": "stems + hidden stems",
+                "outputSummary": "Dominant: metal (5.0)",
+                "timestamp": "<TIMESTAMP>",
+                "durationMs": 0,
+                "status": "success"
+              },
+              {
+                "stepId": "ts_<HASH>",
+                "stepType": "tool_call",
+                "kind": "tool_call",
+                "agentName": "foundation",
+                "toolName": "compute_luck_pillars",
+                "label": "Computing Luck Pillars (大运)",
+                "inputSummary": "gender=female",
+                "outputSummary": "8 decades computed",
+                "timestamp": "<TIMESTAMP>",
+                "durationMs": 0,
+                "status": "success"
+              },
+              {
+                "stepId": "ts_<HASH>",
+                "stepType": "tool_call",
+                "kind": "tool_call",
+                "agentName": "foundation",
+                "toolName": "compute_annual_pillars",
+                "label": "Computing Annual Pillars (流年)",
+                "inputSummary": "1990-2036",
+                "outputSummary": "47 years, 36 with interactions",
+                "timestamp": "<TIMESTAMP>",
+                "durationMs": 0,
+                "status": "success"
+              },
+              {
+                "stepId": "ts_<HASH>",
+                "stepType": "tool_call",
+                "kind": "tool_call",
+                "agentName": "foundation",
+                "toolName": "compute_retrodictions",
+                "label": "Generating Retrodictions (Spooky Accuracy)",
+                "inputSummary": "scanning past years for strong interactions",
+                "outputSummary": "5 retrodictions generated",
+                "timestamp": "<TIMESTAMP>",
+                "durationMs": 0,
+                "status": "success"
+              },
+              {
+                "stepId": "ts_<HASH>",
+                "stepType": "tool_call",
+                "kind": "tool_call",
+                "agentName": "foundation",
+                "toolName": "retrieve_classical_references",
+                "label": "Consulting Classical Texts",
+                "inputSummary": "query: general",
+                "outputSummary": "4 passages matched",
+                "timestamp": "<TIMESTAMP>",
+                "durationMs": 0,
+                "status": "success"
+              },
+              {
+                "stepId": "ts_<HASH>",
+                "stepType": "llm_start",
+                "kind": "llm",
+                "agentName": "narrative",
+                "toolName": null,
+                "label": "Generating Narrative",
+                "inputSummary": "focus=general",
+                "outputSummary": "",
+                "timestamp": "<TIMESTAMP>",
+                "durationMs": 0,
+                "status": "success"
+              }
+            ]
+          }
+        ],
+        "path": "/data/trace/steps"
+      }
+    }
+  },
+  {
+    "run_id": "22222222-2222-2222-2222-222222222222",
+    "fortune_id": "11111111-1111-1111-1111-111111111111",
+    "seq": 24,
+    "payload": {
+      "dataModelUpdate": {
+        "surfaceId": "fortune_main",
+        "contents": [
+          {
+            "key": "step",
+            "valueMap": [
+              {
+                "key": "stepId",
+                "valueString": "narrative"
+              },
+              {
+                "key": "agentName",
+                "valueString": "Narrative"
+              },
+              {
+                "key": "status",
+                "valueString": "running"
+              },
+              {
+                "key": "statusReason",
+                "valueString": "ok"
+              },
+              {
+                "key": "modelId",
+                "valueString": "gpt-5.4-mini"
+              },
+              {
+                "key": "sequence",
+                "valueNumber": 4.0
+              },
+              {
+                "key": "stage",
+                "valueNumber": 1.0
+              },
+              {
+                "key": "elapsedMs",
+                "valueNumber": 0
+              },
+              {
+                "key": "reasoningTokens",
+                "valueNumber": 0.0
+              },
+              {
+                "key": "reasoningEffort",
+                "valueString": "low"
+              }
+            ]
+          }
+        ],
+        "path": "/data/thinking/steps/narrative"
+      }
+    }
+  },
+  {
+    "run_id": "22222222-2222-2222-2222-222222222222",
+    "fortune_id": "11111111-1111-1111-1111-111111111111",
+    "seq": 25,
+    "payload": {
+      "dataModelUpdate": {
+        "surfaceId": "fortune_main",
+        "contents": [
+          {
+            "key": "step",
+            "valueMap": [
+              {
+                "key": "stepId",
+                "valueString": "narrative"
+              },
+              {
+                "key": "agentName",
+                "valueString": "fortune_narrative_wish"
+              },
+              {
+                "key": "status",
+                "valueString": "done"
+              },
+              {
+                "key": "statusReason",
+                "valueString": "ok"
+              },
+              {
+                "key": "modelId",
+                "valueString": "gpt-5.4-mini"
+              },
+              {
+                "key": "sequence",
+                "valueNumber": 4.0
+              },
+              {
+                "key": "stage",
+                "valueNumber": 1.0
+              },
+              {
+                "key": "elapsedMs",
+                "valueNumber": 0
+              },
+              {
+                "key": "reasoningTokens",
+                "valueNumber": 1.0
+              },
+              {
+                "key": "reasoningEffort",
+                "valueString": "low"
+              }
+            ]
+          }
+        ],
+        "path": "/data/thinking/steps/narrative"
+      }
+    }
+  },
+  {
+    "run_id": "22222222-2222-2222-2222-222222222222",
+    "fortune_id": "11111111-1111-1111-1111-111111111111",
+    "seq": 26,
+    "payload": {
+      "dataModelUpdate": {
+        "surfaceId": "fortune_main",
+        "contents": [
+          {
+            "key": "tldr",
+            "valueString": "Metal day master meeting a fire season — decisive year ahead."
+          },
+          {
+            "key": "insights",
+            "valueArray": [
+              {
+                "id": "strengths",
+                "icon": "⚔️",
+                "heading": "Core Strengths",
+                "tagline": "Clarity under pressure.",
+                "bullets": [
+                  {
+                    "icon": "•",
+                    "text": "You cut through noise quickly."
+                  },
+                  {
+                    "icon": "•",
+                    "text": "Commitments stick when named aloud."
+                  }
+                ],
+                "citations": []
+              },
+              {
+                "id": "watch",
+                "icon": "👀",
+                "heading": "Watch Outs",
+                "tagline": "Pace the push.",
+                "bullets": [
+                  {
+                    "icon": "•",
+                    "text": "Avoid stacking deadlines."
+                  },
+                  {
+                    "icon": "•",
+                    "text": "Leave recovery between sprints."
+                  }
+                ],
+                "citations": []
+              }
+            ]
+          },
+          {
+            "key": "yearPredictions",
+            "valueArray": []
+          },
+          {
+            "key": "isComplete",
+            "valueBoolean": true
+          }
+        ],
+        "path": "/data/narrative"
+      }
+    }
+  },
+  {
+    "run_id": "22222222-2222-2222-2222-222222222222",
+    "fortune_id": "11111111-1111-1111-1111-111111111111",
+    "seq": 27,
+    "payload": {
+      "dataModelUpdate": {
+        "surfaceId": "fortune_main",
+        "contents": [
+          {
+            "key": "phase",
+            "valueString": "guardrail"
+          },
+          {
+            "key": "message",
+            "valueString": "Running safety check..."
+          },
+          {
+            "key": "percent",
+            "valueNumber": 95.0
+          }
+        ],
+        "path": "/data/meta/progress"
+      }
+    }
+  },
+  {
+    "run_id": "22222222-2222-2222-2222-222222222222",
+    "fortune_id": "11111111-1111-1111-1111-111111111111",
+    "seq": 28,
+    "payload": {
+      "dataModelUpdate": {
+        "surfaceId": "fortune_main",
+        "contents": [
+          {
+            "key": "step",
+            "valueMap": [
+              {
+                "key": "stepId",
+                "valueString": "guardrail"
+              },
+              {
+                "key": "agentName",
+                "valueString": "Guardrail"
+              },
+              {
+                "key": "status",
+                "valueString": "running"
+              },
+              {
+                "key": "statusReason",
+                "valueString": "ok"
+              },
+              {
+                "key": "modelId",
+                "valueString": "gpt-5.4-mini"
+              },
+              {
+                "key": "sequence",
+                "valueNumber": 5.0
+              },
+              {
+                "key": "stage",
+                "valueNumber": 1.0
+              },
+              {
+                "key": "elapsedMs",
+                "valueNumber": 0
+              },
+              {
+                "key": "reasoningTokens",
+                "valueNumber": 0.0
+              },
+              {
+                "key": "reasoningEffort",
+                "valueString": "low"
+              }
+            ]
+          }
+        ],
+        "path": "/data/thinking/steps/guardrail"
+      }
+    }
+  },
+  {
+    "run_id": "22222222-2222-2222-2222-222222222222",
+    "fortune_id": "11111111-1111-1111-1111-111111111111",
+    "seq": 29,
+    "payload": {
+      "dataModelUpdate": {
+        "surfaceId": "fortune_main",
+        "contents": [
+          {
+            "key": "step",
+            "valueMap": [
+              {
+                "key": "stepId",
+                "valueString": "guardrail"
+              },
+              {
+                "key": "agentName",
+                "valueString": "Guardrail"
+              },
+              {
+                "key": "status",
+                "valueString": "done"
+              },
+              {
+                "key": "statusReason",
+                "valueString": "ok"
+              },
+              {
+                "key": "modelId",
+                "valueString": "gpt-5.4-mini"
+              },
+              {
+                "key": "sequence",
+                "valueNumber": 5.0
+              },
+              {
+                "key": "stage",
+                "valueNumber": 1.0
+              },
+              {
+                "key": "elapsedMs",
+                "valueNumber": 0
+              },
+              {
+                "key": "reasoningTokens",
+                "valueNumber": 0.0
+              },
+              {
+                "key": "reasoningEffort",
+                "valueString": "low"
+              }
+            ]
+          }
+        ],
+        "path": "/data/thinking/steps/guardrail"
+      }
+    }
+  },
+  {
+    "run_id": "22222222-2222-2222-2222-222222222222",
+    "fortune_id": "11111111-1111-1111-1111-111111111111",
+    "seq": 30,
+    "payload": {
+      "dataModelUpdate": {
+        "surfaceId": "fortune_main",
+        "contents": [
+          {
+            "key": "level",
+            "valueString": "info"
+          },
+          {
+            "key": "message",
+            "valueString": "For reflection and entertainment only."
+          },
+          {
+            "key": "disclaimer",
+            "valueString": "Not medical, legal, or financial advice."
+          },
+          {
+            "key": "followUpButtons",
+            "valueArray": [
+              {
+                "id": "year_forecast",
+                "label": "Explore This Year Luck"
+              },
+              {
+                "id": "career_focus",
+                "label": "Career Deep Dive"
+              },
+              {
+                "id": "relationship_focus",
+                "label": "Compatibility Check"
+              }
+            ]
+          }
+        ],
+        "path": "/data/guardrail"
+      }
+    }
+  },
+  {
+    "run_id": "22222222-2222-2222-2222-222222222222",
+    "fortune_id": "11111111-1111-1111-1111-111111111111",
+    "seq": 31,
+    "payload": {
+      "dataModelUpdate": {
+        "surfaceId": "fortune_main",
+        "contents": [
+          {
+            "key": "items",
+            "valueArray": [
+              {
+                "stepId": "ts_<HASH>",
+                "stepType": "tool_call",
+                "kind": "tool_call",
+                "agentName": "foundation",
+                "toolName": "compute_bazi_chart",
+                "label": "Calculating Four Pillars",
+                "inputSummary": "1990-05-15T10:30:00 tz=America/Los_Angeles",
+                "outputSummary": "Day Master: 庚 (metal)",
+                "timestamp": "<TIMESTAMP>",
+                "durationMs": 0,
+                "status": "success"
+              },
+              {
+                "stepId": "ts_<HASH>",
+                "stepType": "tool_call",
+                "kind": "tool_call",
+                "agentName": "foundation",
+                "toolName": "compute_hidden_stems",
+                "label": "Extracting Hidden Stems (藏干)",
+                "inputSummary": "4 branches",
+                "outputSummary": "11 hidden stems across 4 pillars",
+                "timestamp": "<TIMESTAMP>",
+                "durationMs": 0,
+                "status": "success"
+              },
+              {
+                "stepId": "ts_<HASH>",
+                "stepType": "tool_call",
+                "kind": "tool_call",
+                "agentName": "foundation",
+                "toolName": "compute_ten_gods",
+                "label": "Classifying Ten Gods (十神)",
+                "inputSummary": "Day Master: 庚",
+                "outputSummary": "14 positions classified",
+                "timestamp": "<TIMESTAMP>",
+                "durationMs": 0,
+                "status": "success"
+              },
+              {
+                "stepId": "ts_<HASH>",
+                "stepType": "tool_call",
+                "kind": "tool_call",
+                "agentName": "foundation",
+                "toolName": "compute_interactions",
+                "label": "Detecting Clashes & Combinations (冲合害)",
+                "inputSummary": "checking all branch pairs",
+                "outputSummary": "0 interactions found",
+                "timestamp": "<TIMESTAMP>",
+                "durationMs": 0,
+                "status": "success"
+              },
+              {
+                "stepId": "ts_<HASH>",
+                "stepType": "tool_call",
+                "kind": "tool_call",
+                "agentName": "foundation",
+                "toolName": "compute_seasonal_strength",
+                "label": "Evaluating Seasonal Strength (旺相休囚死)",
+                "inputSummary": "metal in 巳",
+                "outputSummary": "dead (score: 0.1)",
+                "timestamp": "<TIMESTAMP>",
+                "durationMs": 0,
+                "status": "success"
+              },
+              {
+                "stepId": "ts_<HASH>",
+                "stepType": "tool_call",
+                "kind": "tool_call",
+                "agentName": "foundation",
+                "toolName": "compute_enhanced_elements",
+                "label": "Weighting Element Balance",
+                "inputSummary": "stems + hidden stems",
+                "outputSummary": "Dominant: metal (5.0)",
+                "timestamp": "<TIMESTAMP>",
+                "durationMs": 0,
+                "status": "success"
+              },
+              {
+                "stepId": "ts_<HASH>",
+                "stepType": "tool_call",
+                "kind": "tool_call",
+                "agentName": "foundation",
+                "toolName": "compute_luck_pillars",
+                "label": "Computing Luck Pillars (大运)",
+                "inputSummary": "gender=female",
+                "outputSummary": "8 decades computed",
+                "timestamp": "<TIMESTAMP>",
+                "durationMs": 0,
+                "status": "success"
+              },
+              {
+                "stepId": "ts_<HASH>",
+                "stepType": "tool_call",
+                "kind": "tool_call",
+                "agentName": "foundation",
+                "toolName": "compute_annual_pillars",
+                "label": "Computing Annual Pillars (流年)",
+                "inputSummary": "1990-2036",
+                "outputSummary": "47 years, 36 with interactions",
+                "timestamp": "<TIMESTAMP>",
+                "durationMs": 0,
+                "status": "success"
+              },
+              {
+                "stepId": "ts_<HASH>",
+                "stepType": "tool_call",
+                "kind": "tool_call",
+                "agentName": "foundation",
+                "toolName": "compute_retrodictions",
+                "label": "Generating Retrodictions (Spooky Accuracy)",
+                "inputSummary": "scanning past years for strong interactions",
+                "outputSummary": "5 retrodictions generated",
+                "timestamp": "<TIMESTAMP>",
+                "durationMs": 0,
+                "status": "success"
+              },
+              {
+                "stepId": "ts_<HASH>",
+                "stepType": "tool_call",
+                "kind": "tool_call",
+                "agentName": "foundation",
+                "toolName": "retrieve_classical_references",
+                "label": "Consulting Classical Texts",
+                "inputSummary": "query: general",
+                "outputSummary": "4 passages matched",
+                "timestamp": "<TIMESTAMP>",
+                "durationMs": 0,
+                "status": "success"
+              },
+              {
+                "stepId": "ts_<HASH>",
+                "stepType": "llm_start",
+                "kind": "llm",
+                "agentName": "narrative",
+                "toolName": null,
+                "label": "Generating Narrative",
+                "inputSummary": "focus=general",
+                "outputSummary": "",
+                "timestamp": "<TIMESTAMP>",
+                "durationMs": 0,
+                "status": "success"
+              },
+              {
+                "stepId": "ts_<HASH>",
+                "stepType": "llm_complete",
+                "kind": "llm",
+                "agentName": "narrative",
+                "toolName": null,
+                "label": "Narrative Complete",
+                "inputSummary": "",
+                "outputSummary": "2 insights, 0ms",
+                "timestamp": "<TIMESTAMP>",
+                "durationMs": 0,
+                "status": "success"
+              },
+              {
+                "stepId": "ts_<HASH>",
+                "stepType": "llm_start",
+                "kind": "llm",
+                "agentName": "guardrail",
+                "toolName": null,
+                "label": "Running Safety Check",
+                "inputSummary": "",
+                "outputSummary": "",
+                "timestamp": "<TIMESTAMP>",
+                "durationMs": 0,
+                "status": "success"
+              },
+              {
+                "stepId": "ts_<HASH>",
+                "stepType": "llm_complete",
+                "kind": "llm",
+                "agentName": "guardrail",
+                "toolName": null,
+                "label": "Safety Check Complete",
+                "inputSummary": "",
+                "outputSummary": "level=info, 0ms",
+                "timestamp": "<TIMESTAMP>",
+                "durationMs": 0,
+                "status": "success"
+              }
+            ]
+          }
+        ],
+        "path": "/data/trace/steps"
+      }
+    }
+  },
+  {
+    "run_id": "22222222-2222-2222-2222-222222222222",
+    "fortune_id": "11111111-1111-1111-1111-111111111111",
+    "seq": 32,
+    "payload": {
+      "dataModelUpdate": {
+        "surfaceId": "fortune_main",
+        "contents": [
+          {
+            "key": "totalDurationMs",
+            "valueNumber": 0
+          },
+          {
+            "key": "toolCallCount",
+            "valueNumber": 10.0
+          },
+          {
+            "key": "llmCallCount",
+            "valueNumber": 2.0
+          },
+          {
+            "key": "stepCount",
+            "valueNumber": 14.0
+          }
+        ],
+        "path": "/data/trace/summary"
+      }
+    }
+  },
+  {
+    "run_id": "22222222-2222-2222-2222-222222222222",
+    "fortune_id": "11111111-1111-1111-1111-111111111111",
+    "seq": 33,
+    "payload": {
+      "dataModelUpdate": {
+        "surfaceId": "fortune_main",
+        "contents": [
+          {
+            "key": "status",
+            "valueString": "complete"
+          }
+        ],
+        "path": "/data/meta"
+      }
+    }
+  },
+  {
+    "run_id": "22222222-2222-2222-2222-222222222222",
+    "fortune_id": "11111111-1111-1111-1111-111111111111",
+    "seq": 34,
+    "payload": {
+      "audit": {
+        "event": "stream_complete",
+        "details": null,
+        "timestamp": "<TIMESTAMP>"
+      }
+    }
+  },
+  {
+    "run_id": "22222222-2222-2222-2222-222222222222",
+    "fortune_id": "11111111-1111-1111-1111-111111111111",
+    "seq": 35,
+    "payload": {
+      "done": true
+    }
+  }
+]

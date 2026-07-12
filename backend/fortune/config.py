@@ -127,6 +127,11 @@ class FortuneSettings(BaseSettings):
     snapshot_schema_versions_enabled: bool = True
     annual_prompt_horizon_years: int = 10
 
+    # Phase 1 — event backbone. ``v1`` keeps the in-process SSE generator
+    # (default / instant rollback). ``v2`` publishes frames to Redis Streams
+    # and serves ``/stream`` as a dumb tail. Env: FORTUNE_PIPELINE.
+    pipeline: str = "v1"
+
     # Limits
     max_classical_references: int = 4
     max_sections: int = 6

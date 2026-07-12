@@ -3,6 +3,8 @@ services:
     image: redis:7-alpine
     container_name: portfolio-redis
     restart: unless-stopped
+    # Fortune v2 makes Redis correctness-critical (event streams + run state).
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--maxmemory-policy", "noeviction"]
     volumes:
       - redis_data:/data
     networks:

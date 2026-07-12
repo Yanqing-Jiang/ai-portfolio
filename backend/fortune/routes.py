@@ -77,6 +77,17 @@ try:
     from .simulator import simulate_birth_time
     from .naming import canonical_function
     from ._thinking_heartbeat import HeartbeatTick, iter_with_heartbeats
+    from .state import (
+        CreateFortuneRequest as _StateCreateFortuneRequest,
+        FortuneSession,
+        PersonBirthInfo as _StatePersonBirthInfo,
+        RuntimeStatus,
+        get_run_state,
+        is_v2_pipeline,
+        pipeline_mode,
+    )
+    from . import events as fortune_events
+    from . import pipeline as fortune_pipeline
 except ImportError:
     from agents import (  # type: ignore[no-redef]
         DEFAULT_FOLLOW_UP_BUTTONS,
@@ -107,6 +118,17 @@ except ImportError:
     from simulator import simulate_birth_time  # type: ignore[no-redef]
     from naming import canonical_function  # type: ignore[no-redef]
     from _thinking_heartbeat import HeartbeatTick, iter_with_heartbeats  # type: ignore[no-redef]
+    from state import (  # type: ignore[no-redef]
+        CreateFortuneRequest as _StateCreateFortuneRequest,
+        FortuneSession,
+        PersonBirthInfo as _StatePersonBirthInfo,
+        RuntimeStatus,
+        get_run_state,
+        is_v2_pipeline,
+        pipeline_mode,
+    )
+    import events as fortune_events  # type: ignore[no-redef]
+    import pipeline as fortune_pipeline  # type: ignore[no-redef]
 
 
 router = APIRouter(prefix="/api/fortune", tags=["fortune"])
@@ -116,14 +138,7 @@ router = APIRouter(prefix="/api/fortune", tags=["fortune"])
 # Models
 # ---------------------------------------------------------------------------
 
-class RuntimeStatus(str, Enum):
-    initialized = "initialized"
-    awaiting_clarification = "awaiting_clarification"
-    streaming = "streaming"
-    interrupted = "interrupted"
-    complete = "complete"
-    error = "error"
-
+# RuntimeStatus imported from state.py
 
 class PersonBirthInfo(BaseModel):
     birth_iso: str = Field(..., min_length=1)
@@ -181,72 +196,11 @@ class CorrectionRequest(BaseModel):
 # Session state (in-memory)
 # ---------------------------------------------------------------------------
 
-class FortuneSession(BaseModel):
-    """In-memory live-run cache. Durable state lives in Supabase via store.py."""
+# FortuneSession / FortuneStore deleted — see state.py (get_run_state).
 
-    fortune_id: str
-    run_id: str | None = None
-    surface_id: str
-    request: CreateFortuneRequest
-    status: RuntimeStatus = RuntimeStatus.initialized
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    latest_foundation: dict[str, Any] = Field(default_factory=dict)
-    latest_narrative: dict[str, Any] | None = None
-    latest_guardrail: dict[str, Any] | None = None
-    # Set by POST /action; consumed by the next GET /stream so the triage
-    # agent runs instead of the default narrative agent. Cleared after stream.
-    pending_action_id: str | None = None
-    pending_action_question: str | None = None
-    # Set by POST /{fortune_id}/cancel. The stream loop checks this flag
-    # after every emit; once true, it aborts the Runner.run_streamed() call
-    # gracefully and closes the SSE stream so the client can release the UI.
-    cancel_requested: bool = False
-
-    def touch(self, new_status: RuntimeStatus | None = None) -> None:
-        if new_status is not None:
-            self.status = new_status
-
-
-class FortuneStore:
-    """Ephemeral per-process cache of active streaming sessions.
-
-    Durable state (fortune, fortune_run, fortune_snapshot) lives in Supabase.
-    This cache exists only to hold foundation/narrative/guardrail mid-stream
-    so the hot path doesn't round-trip to the DB for every event.
-
-    Also owns a per-fortune ``asyncio.Lock`` so concurrent
-    ``/action`` + ``/stream`` + ``/ask`` on the same fortune cannot clobber
-    ``run_id`` / ``pending_action_id`` / session state mid-flight.
-    """
-
-    def __init__(self) -> None:
-        self._items: dict[str, FortuneSession] = {}
-        self._locks: dict[str, asyncio.Lock] = {}
-
-    def put(self, session: FortuneSession) -> FortuneSession:
-        self._items[session.fortune_id] = session
-        return session
-
-    def get(self, fortune_id: str) -> FortuneSession | None:
-        return self._items.get(fortune_id)
-
-    def get_lock(self, fortune_id: str) -> asyncio.Lock:
-        """Return a stable lock for this fortune. Created lazily on first touch."""
-        lock = self._locks.get(fortune_id)
-        if lock is None:
-            lock = asyncio.Lock()
-            self._locks[fortune_id] = lock
-        return lock
-
-
-_store: FortuneStore | None = None
-
-
-def get_fortune_store() -> FortuneStore:
-    global _store
-    if _store is None:
-        _store = FortuneStore()
-    return _store
+def get_fortune_store():
+    """Back-compat alias for tests/callers; returns the Redis/memory run state."""
+    return get_run_state()
 
 
 # ---------------------------------------------------------------------------
@@ -493,18 +447,51 @@ async def create_fortune(request_body: CreateFortuneRequest, request: Request):
         else:
             run_id_str = str(run_rec.id)
 
-    # Hot-path cache for active streaming.
-    store = get_fortune_store()
+    # Hot-path cache for active streaming (Redis registry via state.py).
+    store = get_run_state()
     session = FortuneSession(
         fortune_id=fortune_id_str,
         run_id=run_id_str,
         surface_id=settings.default_surface_id,
-        request=normalized,
+        request=_StateCreateFortuneRequest.model_validate(normalized.model_dump()),
     )
-    store.put(session)
 
-    logger.info("[FORTUNE] create fortune=%s run=%s focus=%s degraded=%s",
-                fortune_id_str, run_id_str, normalized.focus, degraded_persistence)
+    if is_v2_pipeline():
+        try:
+            await fortune_events.get_events_redis(required=True)
+        except fortune_events.RedisUnavailable as exc:
+            logger.error("[FORTUNE] Redis unavailable at create (v2): %s", exc)
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "redis_unavailable",
+                    "message": "Fortune service temporarily unavailable. Please retry shortly.",
+                },
+                headers={"Retry-After": "30"},
+            ) from exc
+        try:
+            await store.put(session)
+        except Exception as exc:
+            logger.error("[FORTUNE] state put failed at create (v2): %s", exc)
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "redis_unavailable",
+                    "message": "Fortune service temporarily unavailable. Please retry shortly.",
+                },
+                headers={"Retry-After": "30"},
+            ) from exc
+        await fortune_events.set_run_record(
+            run_id_str, fortune_id=fortune_id_str, status="queued",
+        )
+        # DEBT: run task dies with its owning worker; no runner service/lease.
+        # Upgrade when workers > 1 or deploys must not kill active runs.
+        asyncio.create_task(fortune_pipeline.run_and_publish_safe(session))
+    else:
+        await store.put(session)
+
+    logger.info("[FORTUNE] create fortune=%s run=%s focus=%s degraded=%s pipeline=%s",
+                fortune_id_str, run_id_str, normalized.focus, degraded_persistence, pipeline_mode())
 
     response_payload = {
         "fortune_id": fortune_id_str,
@@ -600,8 +587,8 @@ async def get_fortune_replay(
 
     repo = await get_repository()
     if not repo.available:
-        store = get_fortune_store()
-        if store.get(fortune_id) is not None:
+        store = get_run_state()
+        if await store.get(fortune_id) is not None:
             return JSONResponse(
                 status_code=202,
                 content={"fortune_id": fortune_id, "status": "pending"},
@@ -678,272 +665,37 @@ async def get_fortune_replay(
     )
 
 
-def _make_seq_allocator(
-    run_uuid: uuid.UUID | None,
-    repo: Any,
-    *,
-    batch_size: int = 16,
-) -> Any:
-    """Build a per-stream seq allocator backed by a 16-slot DB-allocated buffer.
-
-    Returns an async ``alloc()`` that dispenses the next replay seq. On the
-    happy path it draws from a buffer pre-allocated via
-    ``repo.allocate_seq_batch(run_uuid, batch_size)`` — one Postgres
-    roundtrip per ~16 emits instead of one per emit. Falls back to
-    single-step ``allocate_seq`` if the repository surface lacks the batch
-    method (older mocks/tests), and to a local monotonic counter if the DB
-    is degraded.
-
-    The local fallback honours a ``last_dispensed`` floor so transient DB
-    failures mid-stream cannot replay a seq the live client has already
-    advanced past — without the floor, a flake after the first 16 events
-    would dispense seq=1 again and the frontend dedupe would silently drop
-    every subsequent envelope.
-    """
-    seq_buffer = {"next": 0, "end": 0}
-    batch_supported = {"ok": True}
-    last_dispensed = {"seq": 0}
-    local_counter = {"n": 0}
-
-    async def _refill() -> bool:
-        if run_uuid is None or not getattr(repo, "available", False):
-            return False
-        if batch_supported["ok"]:
-            try:
-                new_max = await repo.allocate_seq_batch(run_uuid, batch_size)
-            except AttributeError:
-                # Older repository surfaces only single-shot allocation.
-                batch_supported["ok"] = False
-                new_max = 0
-            except Exception as exc:
-                logger.debug("[FORTUNE] allocate_seq_batch fallback: %s", exc)
-                new_max = 0
-            if new_max > 0:
-                seq_buffer["next"] = new_max - batch_size + 1
-                seq_buffer["end"] = new_max + 1
-                return True
-        # Single-step fallback path.
-        try:
-            n = await repo.allocate_seq(run_uuid)
-            if n > 0:
-                seq_buffer["next"] = n
-                seq_buffer["end"] = n + 1
-                return True
-        except Exception as exc:
-            logger.debug("[FORTUNE] allocate_seq fallback: %s", exc)
-        return False
-
-    async def alloc() -> int:
-        if seq_buffer["next"] < seq_buffer["end"]:
-            n = seq_buffer["next"]
-            seq_buffer["next"] = n + 1
-        elif await _refill():
-            n = seq_buffer["next"]
-            seq_buffer["next"] = n + 1
-        else:
-            # Local fallback: stay above any DB-allocated seq we already emitted.
-            n = max(local_counter["n"], last_dispensed["seq"]) + 1
-            local_counter["n"] = n
-        last_dispensed["seq"] = n
-        return n
-
-    return alloc
-
-
-def _extract_stream_event_meta(event: Any) -> dict[str, Any] | None:
-    """Translate an SDK stream event into a minimal dict for the UI.
-
-    The Agents SDK's streamed run yields three classes of events:
-      * ``RawResponsesStreamEvent`` — token-level text deltas (too noisy for
-        JSON output agents; the partial JSON mid-stream is not useful to
-        render, so we skip these).
-      * ``RunItemStreamEvent`` — higher-level tool calls, tool outputs,
-        message outputs. These are the semantic breadcrumbs worth surfacing.
-      * ``AgentUpdatedStreamEvent`` — fires on each handoff / specialist switch.
-
-    Returns a small dict describing the event in portable terms, or ``None``
-    if the event should be skipped. Kept defensive against minor SDK shape
-    drift: attribute lookups use ``getattr`` with fallbacks.
-    """
-    cls_name = type(event).__name__
-    # Hot path: a 7k-token narrative emits ~7000 RawResponsesStreamEvents
-    # (per-token deltas). They never produce UI breadcrumbs for a structured
-    # JSON agent, so short-circuit before walking the rest of the cascade —
-    # saves 50-200 ms of Python frame setup per narrative.
-    if cls_name == "RawResponsesStreamEvent":
-        return None
-    if cls_name == "AgentUpdatedStreamEvent":
-        new_agent = getattr(event, "new_agent", None)
-        return {
-            "kind": "handoff",
-            "agent": getattr(new_agent, "name", None) or "unknown",
-        }
-    if cls_name == "RunItemStreamEvent":
-        item = getattr(event, "item", None)
-        if item is None:
-            return None
-        raw_item = getattr(item, "raw_item", None)
-        tool_name = (
-            getattr(raw_item, "name", None)
-            or getattr(raw_item, "tool_name", None)
-            or (raw_item.get("name") if isinstance(raw_item, dict) else None)
-            or (raw_item.get("tool_name") if isinstance(raw_item, dict) else None)
-        )
-        # Canonicalize the item kind: snake_case (``tool_call_item``) and
-        # PascalCase (``ToolCallItem``) both collapse to the same token once
-        # underscores are stripped and the string is lowered. Try both the
-        # ``type`` field (SDK-provided, usually snake) and the class name
-        # (always present) so shape drift between SDK minor versions doesn't
-        # silently swallow events.
-        type_field = getattr(item, "type", None) or ""
-        class_token = type(item).__name__ or ""
-        tokens = {
-            s.replace("_", "").lower() for s in (type_field, class_token) if s
-        }
-        if not tokens:
-            return None
-        if "toolcalloutputitem" in tokens or "tooloutputitem" in tokens:
-            return {"kind": "tool_output", "tool": tool_name or "tool"}
-        if "toolcallitem" in tokens:
-            return {"kind": "tool_call", "tool": tool_name or "tool"}
-        if "handoffcallitem" in tokens or "handoffoutputitem" in tokens:
-            target = (
-                getattr(raw_item, "target", None)
-                or getattr(raw_item, "handoff_target", None)
-            )
-            return {"kind": "handoff_call", "target": target}
-        if "reasoningitem" in tokens:
-            raw_summary = (
-                getattr(item, "summary", None)
-                or getattr(raw_item, "summary", None)
-                or getattr(raw_item, "content", None)
-            )
-
-            def _text_of(entry: Any) -> str:
-                if entry is None:
-                    return ""
-                if isinstance(entry, str):
-                    return entry
-                if isinstance(entry, dict):
-                    return str(entry.get("text") or entry.get("content") or "")
-                return str(getattr(entry, "text", None) or "")
-
-            if isinstance(raw_summary, list):
-                summary_text = " ".join(_text_of(s) for s in raw_summary).strip()
-            else:
-                summary_text = _text_of(raw_summary)
-            return {"kind": "reasoning", "summary": summary_text or None}
-        if "messageoutputitem" in tokens:
-            return {"kind": "message", "tool": None}
-        return None
-    return None
-
-
-# ------------------------------------------------------------------
-# Always-visible Thinking Panel canonical rows
-# ------------------------------------------------------------------
-#
-# These five (or six) rows are seeded as ``queued`` placeholders the
-# instant the stream opens, then transition to ``running`` and
-# ``done``/``skipped``/``error`` as work happens. The frontend reducer
-# is keyed by ``stepId`` so later writes naturally overwrite earlier
-# ones — safe under SSE replay/reconnect because every row also carries
-# an explicit ``sequence`` for stable sort.
-#
-# Sentinel rule: every row reaches a terminal state. A
-# ``statusReason="no_data"`` (e.g., classics no-match) is a valid done
-# state — the row still renders with elapsed_ms and 0 tokens, never
-# blank. The audit test asserts pipeline completeness.
-
-# Deterministic agents — these run inside ``run_foundation`` and have
-# no LLM reasoning; the panel renders them with ``reasoningEffort =
-# "deterministic"`` (display: "—") and ``reasoningTokens = 0``.
-_PANEL_DETERMINISTIC_ROWS: tuple[dict[str, Any], ...] = (
-    {
-        "step_id": "calendar",
-        "agent_name": "Calendar",
-        "model_id": "deterministic:cnlunar",
-        "sequence": 1,
-        "reasoning_effort": "deterministic",
-    },
-    {
-        "step_id": "bazi_interpreter",
-        "agent_name": "BaZi Interpreter",
-        "model_id": "python:bazi-engine",
-        "sequence": 2,
-        "reasoning_effort": "deterministic",
-    },
-    {
-        "step_id": "classics_retriever",
-        "agent_name": "Classics Retriever",
-        "model_id": "local:classics-retriever",
-        "sequence": 3,
-        "reasoning_effort": "deterministic",
-    },
-)
-
-
-def _panel_canonical_rows(
-    narrative_agent: Any,
-    *,
-    narrative_model_id: str,
-    guardrail_agent: Any | None = None,
-) -> list[dict[str, Any]]:
-    """Build the 5-row canonical schema for the current stream.
-
-    The deterministic rows are static; the narrative + guardrail rows
-    pick up ``model_id`` and ``reasoning_effort`` from the selected
-    agent's ``ModelSettings`` so the panel never lies about which tier
-    was actually used.
-    """
-    narrative_effort = (
-        narrative_agent.model_settings.reasoning.effort
-        if narrative_agent.model_settings.reasoning is not None
-        else None
-    )
-    guardrail_effort = (
-        guardrail_agent.model_settings.reasoning.effort
-        if guardrail_agent is not None
-        and guardrail_agent.model_settings.reasoning is not None
-        else None
-    )
-    rows: list[dict[str, Any]] = [dict(r) for r in _PANEL_DETERMINISTIC_ROWS]
-    rows.append(
-        {
-            "step_id": "narrative",
-            "agent_name": "Narrative",
-            "model_id": narrative_model_id,
-            "sequence": 4,
-            "reasoning_effort": narrative_effort,
-        }
-    )
-    rows.append(
-        {
-            "step_id": "guardrail",
-            "agent_name": "Guardrail",
-            "model_id": narrative_model_id,  # same model family
-            "sequence": 5,
-            "reasoning_effort": guardrail_effort,
-        }
-    )
-    return rows
-
-
 @router.get("/{fortune_id}/stream")
-async def stream_fortune(fortune_id: str, request: Request):
+async def stream_fortune(
+    fortune_id: str,
+    request: Request,
+    after: str | None = None,
+):
     await smart_rate_limit(request, scope=RateLimitScope.FORTUNE_STREAM, weight=1)
 
-    store = get_fortune_store()
-    session = store.get(fortune_id)
+    store = get_run_state()
+    session = await store.get(fortune_id)
+
+    # Resume cursor: Last-Event-ID header OR ?after=<redis-id>
+    last_event_id = request.headers.get("last-event-id") or request.headers.get("Last-Event-ID")
+    cursor = after or last_event_id or "0-0"
+
+    if is_v2_pipeline():
+        return await _stream_fortune_v2(fortune_id, request, session, store, cursor)
+
     if session is None:
         raise HTTPException(status_code=404, detail="Fortune session not found")
 
-    # Per-fortune lock prevents two browser tabs or a mid-stream reconnect from
-    # racing on the same FortuneSession. We probe-acquire before even entering
-    # the generator so the 409 comes back as a clean HTTP response, not a
-    # mid-stream error envelope.
-    lock = store.get_lock(fortune_id)
-    if lock.locked():
+    # v1: single in-flight stream per fortune (process-local lock semantics)
+    if await store.lock_is_held_async(fortune_id):
+        raise HTTPException(
+            status_code=409,
+            detail="A stream is already in progress for this fortune.",
+            headers={"Retry-After": "5"},
+        )
+
+    lock_token = await store.acquire_lock(fortune_id)
+    if lock_token is None:
         raise HTTPException(
             status_code=409,
             detail="A stream is already in progress for this fortune.",
@@ -951,838 +703,129 @@ async def stream_fortune(fortune_id: str, request: Request):
         )
 
     async def event_generator():
-        import time as _time
-        import json as _json
-
-        # Hold the lock for the full life of the generator. FastAPI's
-        # StreamingResponse drives this generator in the same task as the
-        # inbound request, so the lock is released even on client disconnect
-        # (the finally block runs on GeneratorExit).
-        async with lock:
-            bridge = FortuneStreamBridge(surface_id=session.surface_id)
-            ctx = FortuneRunContext(
-                fortune_id=session.fortune_id,
-                surface_id=session.surface_id,
-                run_id=session.run_id,
-                question=session.request.question,
-                focus=session.request.focus,
-                tone=session.request.tone,
-                birth_iso=session.request.birth_iso,
-                timezone=session.request.timezone or "UTC",
-                birth_time_unknown=session.request.birth_time_unknown,
-                gender=session.request.gender or "unknown",
-            )
-
-            # Per-stream envelope. Seq numbers come from the DB via
-            # ``allocate_seq`` when persistence is available so they line up
-            # with any durable event rows; we fall back to a local counter if
-            # the DB is degraded.
-            run_id = session.run_id
-            fortune_id_str = session.fortune_id
-            repo = await get_repository()
-            run_uuid: uuid.UUID | None = None
+        try:
+            async for frame in fortune_pipeline.iter_fortune_sse_frames(
+                session, request=request, store=store,
+            ):
+                yield frame
+        finally:
+            # Session object is mutated in-place in the memory overlay; sync once.
             try:
-                run_uuid = uuid.UUID(run_id) if run_id else None
-            except (ValueError, TypeError):
-                run_uuid = None
-
-            _alloc_seq = _make_seq_allocator(run_uuid, repo)
-
-            async def _emit(payload: str) -> str:
-                seq = await _alloc_seq()
-                try:
-                    inner = _json.loads(payload)
-                except (ValueError, TypeError):
-                    inner = {"raw": payload}
-                env = {
-                    "run_id": run_id,
-                    "fortune_id": fortune_id_str,
-                    "seq": seq,
-                    "payload": inner,
-                }
-                return f"data: {_json.dumps(env)}\n\n"
-
-            pending_cleared = False
-            pending_action = session.pending_action_id
-            pending_question = session.pending_action_question
-
-            async def _maybe_clear_pending() -> None:
-                nonlocal pending_cleared
-                if pending_cleared:
-                    return
-                pending_cleared = True
-                session.pending_action_id = None
-                session.pending_action_question = None
-
-            async def _cancel_event(stage: str, trace_obj: Any | None = None) -> str | None:
-                disconnected = await request.is_disconnected()
-                if not session.cancel_requested and not disconnected:
-                    return None
-                reason = "cancelled" if session.cancel_requested else "client_disconnected"
-                session.touch(RuntimeStatus.interrupted)
-                if trace_obj:
-                    trace_obj.add_instant(
-                        "cancelled",
-                        stage,
-                        label="Reading Paused",
-                        output_summary=reason,
-                    )
-                if run_uuid is not None:
-                    try:
-                        await repo.update_run_status(
-                            run_uuid,
-                            "interrupted",
-                            error_message=reason,
-                        )
-                    except Exception as exc:
-                        logger.warning("[FORTUNE] interrupted-status update failed: %s", exc)
-                message = (
-                    "Reading paused by user"
-                    if session.cancel_requested
-                    else "Client disconnected"
-                )
-                return await _emit(
-                    bridge.emit_progress("cancelled", message),
-                )
-
-            if run_uuid is not None:
-                try:
-                    await repo.update_run_status(run_uuid, "streaming")
-                except Exception as exc:
-                    logger.warning("[FORTUNE] run status update failed: %s", exc)
-
-            try:
-                session.touch(RuntimeStatus.streaming)
-                _t_start = _time.monotonic()
-                logger.info("[FORTUNE] %s stream start — run=%s focus=%s birth=%s",
-                            session.fortune_id, run_id, ctx.focus, ctx.birth_iso)
-
-                # Structured one-line banner so the 4 customer functions
-                # (compatibility / occasion / luck_cycle / wish) plus the
-                # default reading can be grepped from server logs by
-                # `grep "[FORTUNE-AGENT]" ... | grep "fn=<name>"`.
-                try:
-                    from .agent_logging import classify_function, log_stream_start
-                except ImportError:
-                    from agent_logging import classify_function, log_stream_start  # type: ignore[no-redef]
-                _fn_label = classify_function(ctx.focus, ctx.question)
-                _settings_for_log = get_settings()
-                _stream_start_mode = _narrative_mode(ctx)
-                _stream_start_agent = NARRATIVE_AGENTS[_stream_start_mode]
-                log_stream_start(
-                    fortune_id=session.fortune_id,
-                    run_id=run_id,
-                    function=_fn_label,
-                    focus=ctx.focus,
-                    model=_settings_for_log.narrative_model,
-                    reasoning=_stream_start_agent.model_settings.reasoning.effort,
-                    has_person_b=session.request.person_b is not None,
-                    extra={
-                        "tone": ctx.tone or "-",
-                        "has_question": "true" if ctx.question else "false",
-                        "pending_action": pending_action or "-",
-                        "mode": _stream_start_mode,
-                    },
-                )
-
-                # 1. Begin rendering
-                for msg in bridge.begin_messages(fortune_id=session.fortune_id):
-                    yield await _emit(msg)
-
-                _panel_rows = _panel_canonical_rows(
-                    _stream_start_agent,
-                    narrative_model_id=_settings_for_log.narrative_model,
-                    guardrail_agent=GUARDRAIL_AGENT,
-                )
-                yield await _emit(bridge.emit_agent_steps_batch(_panel_rows))
-                _panel_t0 = _t_start  # wall-clock anchor for elapsed_ms
-
-                # After the first event is on the wire the run is durably
-                # committed as streaming; safe to drop the pending-action
-                # sentinel so a reconnect does not re-dispatch it.
-                await _maybe_clear_pending()
-                cancel_msg = await _cancel_event("begin")
-                if cancel_msg:
-                    yield cancel_msg
-                    return
-
-                # 2. Foundation — reuse cached if available.
-                cached = session.latest_foundation
-                if cached and cached.get("analysis"):
-                    logger.info("[FORTUNE] %s reusing cached foundation", session.fortune_id)
-                    foundation = cached
-                    analysis = foundation["analysis"]
-                    trace = foundation.get("trace")
-                else:
-                    yield await _emit(
-                        bridge.emit_progress("foundation", "Computing Four Pillars..."),
-                    )
-                    _t_found = _time.monotonic()
-                    foundation = await run_foundation(ctx)
-                    analysis = foundation["analysis"]
-                    dur_f = round((_time.monotonic() - _t_found) * 1000, 1)
-                    logger.info("[FORTUNE] %s foundation complete — %0.fms", session.fortune_id, dur_f)
-                    session.latest_foundation = foundation
-                    trace = foundation.get("trace")
-
-                cancel_msg = await _cancel_event("foundation", trace)
-                if cancel_msg:
-                    yield cancel_msg
-                    return
-
-                yield await _emit(bridge.emit_pillars(foundation["pillars"]))
-                elements_data = (
-                    foundation["elements"].model_dump()
-                    if hasattr(foundation["elements"], "model_dump")
-                    else foundation["elements"]
-                )
-                yield await _emit(bridge.emit_elements(elements_data))
-                refs_data = [
-                    r.model_dump() if hasattr(r, "model_dump") else r
-                    for r in foundation["references"]
-                ]
-                yield await _emit(bridge.emit_references(refs_data))
-
-                yield await _emit(bridge.emit_hidden_stems(analysis.hidden_stems))
-                yield await _emit(bridge.emit_ten_gods(analysis.ten_gods))
-                yield await _emit(bridge.emit_interactions(analysis.interactions))
-                yield await _emit(bridge.emit_seasonal_strength(analysis.seasonal_strength))
-                yield await _emit(bridge.emit_element_by_source(analysis.element_by_source))
-
-                # Compatibility: compute Person B foundation and emit both
-                # persons under /data/compatibility/{personA,personB} so the
-                # compat UI (PillarsTab, OverviewTab) can render two charts.
-                function_id = canonical_function(ctx.focus, session.request.question)
-                is_compat = function_id == "compatibility"
-                person_b_info = session.request.person_b
-                foundation_b: dict[str, Any] | None = None
-                if is_compat:
-                    yield await _emit(bridge.emit_compat_person(
-                        "personA",
-                        name=None,
-                        pillars=foundation["pillars"],
-                        elements=elements_data,
-                        ten_gods=analysis.ten_gods,
-                        hidden_stems=analysis.hidden_stems,
-                    ))
-                    if person_b_info is not None:
-                        yield await _emit(
-                            bridge.emit_progress("foundation", "Computing Person B's Four Pillars..."),
-                        )
-                        cancel_msg = await _cancel_event("foundation", trace)
-                        if cancel_msg:
-                            yield cancel_msg
-                            return
-                        ctx_b = FortuneRunContext(
-                            fortune_id=session.fortune_id,
-                            surface_id=session.surface_id,
-                            run_id=session.run_id,
-                            focus=ctx.focus,
-                            birth_iso=person_b_info.birth_iso,
-                            timezone=person_b_info.timezone or ctx.timezone,
-                            birth_time_unknown=person_b_info.birth_time_unknown,
-                            gender=person_b_info.gender or "unknown",
-                        )
-                        foundation_b = await run_foundation(ctx_b)
-                        analysis_b = foundation_b["analysis"]
-                        cancel_msg = await _cancel_event("foundation", trace)
-                        if cancel_msg:
-                            yield cancel_msg
-                            return
-                        elements_b = (
-                            foundation_b["elements"].model_dump()
-                            if hasattr(foundation_b["elements"], "model_dump")
-                            else foundation_b["elements"]
-                        )
-                        yield await _emit(bridge.emit_compat_person(
-                            "personB",
-                            name=person_b_info.name,
-                            pillars=foundation_b["pillars"],
-                            elements=elements_b,
-                            ten_gods=analysis_b.ten_gods,
-                            hidden_stems=analysis_b.hidden_stems,
-                        ))
-                        # Include Person B in the exact foundation passed to
-                        # narrative generation, not only the reconnect cache.
-                        foundation = {**foundation, "person_b": foundation_b}
-                        session.latest_foundation = foundation
-                if analysis.luck_pillars:
-                    yield await _emit(bridge.emit_luck_pillars(analysis.luck_pillars))
-                if analysis.annual_pillars:
-                    yield await _emit(bridge.emit_annual_pillars(analysis.annual_pillars))
-                yield await _emit(bridge.emit_kpi(analysis))
-
-                retrodictions = foundation.get("retrodictions", [])
-                if retrodictions:
-                    yield await _emit(bridge.emit_retrodictions(retrodictions))
-
-                if trace:
-                    yield await _emit(bridge.emit_trace_steps_batch(trace.steps))
-
-                _panel_found_ms = int(locals().get("dur_f", 0) or 0)
-                for _det_row in _PANEL_DETERMINISTIC_ROWS:
-                    yield await _emit(
-                        bridge.emit_agent_step(
-                            step_id=_det_row["step_id"],
-                            agent_name=_det_row["agent_name"],
-                            status="done",
-                            model_id=_det_row["model_id"],
-                            sequence=_det_row["sequence"],
-                            reasoning_effort="deterministic",
-                            elapsed_ms=_panel_found_ms,
-                            reasoning_tokens=0,
-                        )
-                    )
-
-                # Early partial snapshot BEFORE narrative generation starts.
-                # Mid-run reconnects (page refresh, crashed tab) can now hit
-                # GET /{fortune_id} and get a populated dashboard back — the
-                # narrative section stays empty until the later partial write.
-                # Without this write, replay returned 202 pending for the
-                # entire narrative generation window.
-                if run_uuid is not None:
-                    try:
-                        await repo.upsert_snapshot(
-                            uuid.UUID(fortune_id_str),
-                            status="partial",
-                            mechanics=_snapshot_mechanics(session, analysis),
-                            pillars=_snapshot_pillars(session, foundation),
-                            references=_snapshot_references(foundation),
-                            retrodictions=(
-                                {"items": _to_jsonable(retrodictions)}
-                                if retrodictions else None
-                            ),
-                        )
-                    except Exception as exc:
-                        logger.warning(
-                            "[FORTUNE] foundation snapshot persistence failed: %s", exc,
-                        )
-
-                if not session.request.focus:
-                    session.request = session.request.model_copy(update={"focus": "general"})
-                    ctx = FortuneRunContext(
-                        fortune_id=ctx.fortune_id,
-                        surface_id=ctx.surface_id,
-                        run_id=ctx.run_id,
-                        question=ctx.question,
-                        focus="general",
-                        tone=ctx.tone,
-                        birth_iso=ctx.birth_iso,
-                        timezone=ctx.timezone,
-                        birth_time_unknown=ctx.birth_time_unknown,
-                        gender=ctx.gender,
-                    )
-
-                # 4. Narrative OR triage.
-                cancel_msg = await _cancel_event("narrative", trace)
-                if cancel_msg:
-                    yield cancel_msg
-                    return
-
-                if pending_action:
-                    yield await _emit(
-                        bridge.emit_progress(
-                            "narrative", f"Routing follow-up via triage ({pending_action})...",
-                        ),
-                    )
-                    if trace:
-                        trace.add_instant(
-                            "llm_start", "narrative", label="Triage + Specialist",
-                            input_summary=f"action={pending_action}",
-                        )
-                        yield await _emit(bridge.emit_trace_steps_batch(trace.steps))
-                    _t_narrative = _time.monotonic()
-                    logger.info(
-                        "[FORTUNE] %s triage start — action=%s",
-                        session.fortune_id, pending_action,
-                    )
-                    _panel_narr_row = next(
-                        r for r in _panel_rows if r["step_id"] == "narrative"
-                    )
-                    yield await _emit(
-                        bridge.emit_agent_step(
-                            step_id="narrative",
-                            agent_name=_panel_narr_row["agent_name"],
-                            status="running",
-                            model_id=_panel_narr_row["model_id"],
-                            sequence=_panel_narr_row["sequence"],
-                            reasoning_effort=_panel_narr_row["reasoning_effort"],
-                        )
-                    )
-                    narrative = await run_triage(
-                        ctx,
-                        foundation=foundation,
-                        action_id=pending_action,
-                        question=pending_question,
-                        original_input=_build_ask_original_input(session.request),
-                        latest_narrative=session.latest_narrative,
-                    )
-                    cancel_msg = await _cancel_event("narrative", trace)
-                    if cancel_msg:
-                        yield cancel_msg
-                        return
-                    _dur_triage = int((_time.monotonic() - _t_narrative) * 1000)
-                    yield await _emit(
-                        bridge.emit_agent_step(
-                            step_id="narrative",
-                            agent_name=_panel_narr_row["agent_name"],
-                            status="done",
-                            model_id=_panel_narr_row["model_id"],
-                            sequence=4,
-                            reasoning_effort=_panel_narr_row["reasoning_effort"],
-                            elapsed_ms=_dur_triage,
-                            reasoning_tokens=0,
-                            status_reason="triage",
-                        )
-                    )
-                else:
-                    yield await _emit(
-                        bridge.emit_progress("narrative", "Generating interpretation..."),
-                    )
-                    if trace:
-                        trace.add_instant(
-                            "llm_start", "narrative", label="Generating Narrative",
-                            input_summary=f"focus={ctx.focus}",
-                        )
-                        yield await _emit(bridge.emit_trace_steps_batch(trace.steps))
-
-                    _panel_narr_row = next(
-                        r for r in _panel_rows if r["step_id"] == "narrative"
-                    )
-                    yield await _emit(
-                        bridge.emit_agent_step(
-                            step_id="narrative",
-                            agent_name=_panel_narr_row["agent_name"],
-                            status="running",
-                            model_id=_panel_narr_row["model_id"],
-                            sequence=_panel_narr_row["sequence"],
-                            reasoning_effort=_panel_narr_row["reasoning_effort"],
-                        )
-                    )
-
-                    _t_narrative = _time.monotonic()
-                    logger.info(
-                        "[FORTUNE] %s narrative start — model=%s",
-                        session.fortune_id,
-                        get_settings().narrative_model,
-                    )
-
-                    stream_result = await run_narrative_streamed(ctx, foundation=foundation)
-                    seen_tools: set[str] = set()
-                    async for event in iter_with_heartbeats(
-                        stream_result.stream_events(), interval=8.0
-                    ):
-                        cancel_msg = await _cancel_event("narrative", trace)
-                        if cancel_msg:
-                            try:
-                                stream_result.cancel()
-                            except Exception:  # pragma: no cover - SDK drift
-                                pass
-                            yield cancel_msg
-                            return
-                        if isinstance(event, HeartbeatTick):
-                            # Format mirrors the LiveView elapsed counter so
-                            # the user sees consistent timing.
-                            yield await _emit(
-                                bridge.emit_progress(
-                                    "narrative",
-                                    f"Still reasoning… ({event.elapsed_s}s)",
-                                ),
-                            )
-                            continue
-                        meta = _extract_stream_event_meta(event)
-                        if meta is None:
-                            continue
-                        kind = meta.get("kind")
-                        if kind == "handoff":
-                            msg = f"Agent → {meta.get('agent')}"
-                            yield await _emit(bridge.emit_progress("narrative", msg))
-                            if trace:
-                                trace.add_instant(
-                                    "handoff", "narrative",
-                                    label=msg,
-                                    input_summary=meta.get("agent") or "",
-                                )
-                                yield await _emit(bridge.emit_trace_steps_batch(trace.steps))
-                        elif kind == "tool_call":
-                            tool = meta.get("tool") or "tool"
-                            if tool in seen_tools:
-                                continue
-                            seen_tools.add(tool)
-                            yield await _emit(
-                                bridge.emit_progress("narrative", f"Calling tool: {tool}"),
-                            )
-                            if trace:
-                                trace.add_instant(
-                                    "tool_call", "narrative",
-                                    tool_name=tool, label=f"Calling {tool}",
-                                )
-                                yield await _emit(bridge.emit_trace_steps_batch(trace.steps))
-                        elif kind == "tool_output":
-                            tool = meta.get("tool") or "tool"
-                            yield await _emit(
-                                bridge.emit_progress("narrative", f"Tool returned: {tool}"),
-                            )
-                            if trace:
-                                trace.add_instant(
-                                    "tool_result", "narrative",
-                                    tool_name=tool, label=f"{tool} complete",
-                                )
-                                yield await _emit(bridge.emit_trace_steps_batch(trace.steps))
-                        elif kind == "reasoning":
-                            snippet = (meta.get("summary") or "").strip()
-                            label = (
-                                f"Reasoning · {snippet[:80]}"
-                                if snippet else "Reasoning…"
-                            )
-                            yield await _emit(
-                                bridge.emit_progress("narrative", label),
-                            )
-                            if trace:
-                                trace.add_instant(
-                                    "reasoning", "narrative",
-                                    label=label,
-                                    output_summary=snippet[:240] if snippet else "",
-                                )
-                                yield await _emit(bridge.emit_trace_steps_batch(trace.steps))
-                        elif kind == "message":
-                            yield await _emit(
-                                bridge.emit_progress("narrative", "Model response received"),
-                            )
-
-                    # The narrative agent now ships per-mode narrow output
-                    # types (CompatibilityNarrativeOutput, etc.) for the four
-                    # canonical focuses; ``general`` mode still returns the
-                    # legacy union ``EnrichedNarrativeOutput``. The helper
-                    # promotes any of those plus the legacy bare
-                    # ``NarrativeOutput`` back into the merged shape so the
-                    # downstream fan-out emitters and snapshot upserter see
-                    # the same dict layout regardless of mode.
-                    narrative = _promote_narrative_to_enriched(
-                        stream_result.final_output
-                    )
-
-                session.latest_narrative = repair_occasion_narrative(
-                    ctx,
-                    narrative.model_dump(),
-                )
-                guardrail_narrative = EnrichedNarrativeOutput.model_validate(
-                    session.latest_narrative,
-                )
-
-                dur_n = round((_time.monotonic() - _t_narrative) * 1000, 1)
-                n_insights = len(narrative.insights) if hasattr(narrative, "insights") else 0
-                logger.info("[FORTUNE] %s narrative complete — %d insights, %.0fms",
-                            session.fortune_id, n_insights, dur_n)
-
-                # Structured per-stage log mirroring run_narrative()'s line so
-                # the streamed path is observable too. Usage on
-                # ``stream_result.context_wrapper.usage`` is only fully
-                # populated AFTER the stream is consumed (see SDK note in
-                # ``run_narrative_streamed``).
-                try:
-                    from .agent_logging import (
-                        classify_function as _classify_fn,
-                        extract_usage as _extract_usage,
-                        record_latency as _record_latency,
-                        UsageSummary as _UsageSummary,
-                        logger as _agent_logger,
-                    )
-                except ImportError:
-                    from agent_logging import (  # type: ignore[no-redef]
-                        classify_function as _classify_fn,
-                        extract_usage as _extract_usage,
-                        record_latency as _record_latency,
-                        UsageSummary as _UsageSummary,
-                        logger as _agent_logger,
-                    )
-                if not pending_action:
-                    try:
-                        _stream_used = _extract_usage(stream_result)
-                    except Exception:
-                        _stream_used = _UsageSummary()
-                    _settings_now = get_settings()
-                    _stream_fn = _classify_fn(ctx.focus, ctx.question)
-                    _latency_bucket = _record_latency(
-                        _stream_fn,
-                        "narrative_streamed",
-                        dur_n,
-                    )
-                    # Record the actual selected per-mode agent (e.g.
-                    # ``fortune_narrative_compatibility``) so post-merge
-                    # latency attribution can break out by mode. Resolved
-                    # from the dispatcher rather than tracked on the run
-                    # result so this stays correct if SDK shape drifts.
-                    _selected_mode = _narrative_mode(ctx)
-                    _selected_agent_obj = NARRATIVE_AGENTS[_selected_mode]
-                    _selected_agent = _selected_agent_obj.name
-                    _selected_reasoning = _selected_agent_obj.model_settings.reasoning
-                    _selected_effort = (
-                        _selected_reasoning.effort
-                        if _selected_reasoning is not None
-                        else _settings_now.narrative_reasoning
-                    )
-                    _agent_logger.info(
-                        "[FORTUNE-AGENT] "
-                        f"fn={_stream_fn} "
-                        f"stage=narrative_streamed "
-                        f"model={_settings_now.narrative_model} "
-                        f"reasoning={_selected_effort} "
-                        f"latency_ms={dur_n:.0f} "
-                        f"latency_bucket_ms={_latency_bucket} "
-                        f"tokens_in={_stream_used.input_tokens} "
-                        f"tokens_out={_stream_used.output_tokens} "
-                        f"reasoning_tokens={_stream_used.reasoning_tokens} "
-                        f"requests={_stream_used.requests} "
-                        f"run_id={ctx.run_id or '-'} "
-                        f"fortune_id={ctx.fortune_id or '-'} "
-                        f"agent={_selected_agent} mode={_selected_mode} ok=true insights={n_insights} "
-                        f"streamed=true person_b={'true' if 'person_b' in foundation else 'false'}"
-                    )
-
-                if trace:
-                    trace.add_instant(
-                        "llm_complete", "narrative", label="Narrative Complete",
-                        output_summary=f"{n_insights} insights, {dur_n:.0f}ms",
-                    )
-                    trace.steps[-1].duration_ms = dur_n
-
-                _panel_narr_tokens = int(
-                    getattr(_stream_used, "reasoning_tokens", 0) or 0
-                )
-                yield await _emit(
-                    bridge.emit_agent_step(
-                        step_id="narrative",
-                        agent_name=_selected_agent or "Narrative",
-                        status="done",
-                        model_id=_settings_now.narrative_model,
-                        sequence=4,
-                        reasoning_effort=_selected_effort,
-                        elapsed_ms=int(dur_n),
-                        reasoning_tokens=_panel_narr_tokens,
-                    )
-                )
-
-                yield await _emit(
-                    bridge.emit_narrative_complete(session.latest_narrative),
-                )
-
-                # Compatibility fan-out: if the narrative includes a
-                # `compatibility` block, split it into the three paths the
-                # frontend CompatibilityModel reads from.
-                compat_block = session.latest_narrative.get("compatibility") if session.latest_narrative else None
-                if is_compat and compat_block:
-                    overview = compat_block.get("overview")
-                    if overview:
-                        yield await _emit(bridge.emit_compat_overview(overview))
-                    pair_interactions = compat_block.get("pair_interactions") or []
-                    if pair_interactions:
-                        yield await _emit(bridge.emit_compat_pair_interactions(pair_interactions))
-                    mechanisms = compat_block.get("mechanisms") or []
-                    if mechanisms:
-                        yield await _emit(bridge.emit_compat_mechanisms(mechanisms))
-
-                # Occasion fan-out
-                occasion_block = session.latest_narrative.get("occasion") if session.latest_narrative else None
-                is_occasion = function_id == "occasion"
-                logger.info(
-                    "[FORTUNE] %s occasion fan-out: is_occasion=%s block=%s picks=%d mechs=%d",
-                    session.fortune_id, is_occasion,
-                    bool(occasion_block),
-                    len((occasion_block or {}).get("top_picks") or []),
-                    len((occasion_block or {}).get("mechanisms") or []),
-                )
-                if is_occasion and occasion_block:
-                    if occasion_block.get("top_picks"):
-                        yield await _emit(bridge.emit_occasion_top_picks(
-                            occasion_block["top_picks"],
-                            fallback_mechanisms=occasion_block.get("mechanisms") or [],
-                        ))
-                        yield await _emit(bridge.emit_occasion_calendar(
-                            occasion_block["top_picks"],
-                        ))
-                    if occasion_block.get("analysis"):
-                        yield await _emit(bridge.emit_occasion_analysis(occasion_block["analysis"]))
-                    if occasion_block.get("mechanisms"):
-                        yield await _emit(bridge.emit_occasion_mechanisms(occasion_block["mechanisms"]))
-
-                # Luck cycle fan-out
-                luck_block = session.latest_narrative.get("luck_cycle") if session.latest_narrative else None
-                is_luck = function_id == "cycle"
-                if is_luck:
-                    yield await _emit(bridge.emit_luck_cycle_timeline(
-                        luck_pillars=analysis.luck_pillars,
-                        annual_pillars=analysis.annual_pillars,
-                    ))
-                    yield await _emit(bridge.emit_luck_cycle_current_window(
-                        (luck_block or {}).get("current_window") or {},
-                        luck_pillars=analysis.luck_pillars,
-                    ))
-                    if luck_block and luck_block.get("mechanisms"):
-                        yield await _emit(bridge.emit_luck_cycle_mechanisms(luck_block["mechanisms"]))
-
-                # Wish fan-out
-                wish_block = session.latest_narrative.get("wish") if session.latest_narrative else None
-                is_wish = function_id == "wish"
-                if is_wish and wish_block:
-                    if wish_block.get("verdict"):
-                        yield await _emit(bridge.emit_wish_verdict(wish_block["verdict"]))
-                    if wish_block.get("anchors"):
-                        yield await _emit(bridge.emit_wish_anchors(wish_block["anchors"]))
-                    if wish_block.get("mechanisms"):
-                        yield await _emit(bridge.emit_wish_mechanisms(wish_block["mechanisms"]))
-
-                if run_uuid is not None:
-                    try:
-                        await repo.upsert_snapshot(
-                            uuid.UUID(fortune_id_str),
-                            status="partial",
-                            narrative=session.latest_narrative,
-                            mechanics=_snapshot_mechanics(session, analysis),
-                            pillars=_snapshot_pillars(session, foundation),
-                            references=_snapshot_references(foundation),
-                            retrodictions={"items": _to_jsonable(retrodictions)} if retrodictions else None,
-                        )
-                    except Exception as exc:
-                        logger.warning("[FORTUNE] partial snapshot persistence failed: %s", exc)
-
-                # 6. Guardrail
-                cancel_msg = await _cancel_event("guardrail", trace)
-                if cancel_msg:
-                    yield cancel_msg
-                    return
-                yield await _emit(
-                    bridge.emit_progress("guardrail", "Running safety check..."),
-                )
-                if trace:
-                    trace.add_instant("llm_start", "guardrail", label="Running Safety Check")
-
-                _panel_guard_row = next(
-                    r for r in _panel_rows if r["step_id"] == "guardrail"
-                )
-                yield await _emit(
-                    bridge.emit_agent_step(
-                        step_id="guardrail",
-                        agent_name=_panel_guard_row["agent_name"],
-                        status="running",
-                        model_id=_panel_guard_row["model_id"],
-                        sequence=_panel_guard_row["sequence"],
-                        reasoning_effort=_panel_guard_row["reasoning_effort"],
-                    )
-                )
-
-                _t_guard = _time.monotonic()
-                guardrail = await run_guardrail(ctx, narrative=guardrail_narrative)
-                if not guardrail.follow_up_buttons:
-                    guardrail = GuardrailOutput(
-                        level=guardrail.level,
-                        message=guardrail.message,
-                        disclaimer=guardrail.disclaimer,
-                        follow_up_buttons=DEFAULT_FOLLOW_UP_BUTTONS,
-                    )
-                session.latest_guardrail = guardrail.model_dump()
-
-                dur_g = round((_time.monotonic() - _t_guard) * 1000, 1)
-                logger.info("[FORTUNE] %s guardrail complete — level=%s, %.0fms",
-                            session.fortune_id, guardrail.level, dur_g)
-
-                if trace:
-                    trace.add_instant(
-                        "llm_complete", "guardrail", label="Safety Check Complete",
-                        output_summary=f"level={guardrail.level}, {dur_g:.0f}ms",
-                    )
-                    trace.steps[-1].duration_ms = dur_g
-
-                yield await _emit(
-                    bridge.emit_agent_step(
-                        step_id="guardrail",
-                        agent_name=_panel_guard_row["agent_name"],
-                        status="done",
-                        model_id=_panel_guard_row["model_id"],
-                        sequence=5,
-                        reasoning_effort=_panel_guard_row["reasoning_effort"],
-                        elapsed_ms=int(dur_g),
-                        reasoning_tokens=0,
-                    )
-                )
-
-                yield await _emit(
-                    bridge.emit_guardrail(session.latest_guardrail),
-                )
-
-                if trace:
-                    yield await _emit(bridge.emit_trace_steps_batch(trace.steps))
-                    yield await _emit(
-                        bridge.emit_trace_summary(trace.summary()),
-                    )
-
-                # 7. Complete — persist snapshot + update run status.
-                total_ms = round((_time.monotonic() - _t_start) * 1000, 1)
-                logger.info("[FORTUNE] %s stream complete — total %.0fms", session.fortune_id, total_ms)
-                try:
-                    from .agent_logging import log_stream_end as _log_stream_end
-                except ImportError:
-                    from agent_logging import log_stream_end as _log_stream_end  # type: ignore[no-redef]
-                _log_stream_end(
-                    fortune_id=session.fortune_id,
-                    run_id=run_id,
-                    function=_fn_label,
-                    total_ms=total_ms,
-                    ok=True,
-                )
-                session.touch(RuntimeStatus.complete)
-
-                if run_uuid is not None:
-                    try:
-                        await repo.upsert_snapshot(
-                            uuid.UUID(fortune_id_str),
-                            status="done",
-                            narrative=session.latest_narrative,
-                            mechanics=_snapshot_mechanics(session, analysis),
-                            pillars=_snapshot_pillars(session, foundation),
-                            references=_snapshot_references(foundation),
-                            retrodictions={"items": _to_jsonable(retrodictions)} if retrodictions else None,
-                        )
-                        await repo.update_run_status(run_uuid, "done")
-                    except Exception as exc:
-                        logger.warning("[FORTUNE] snapshot/status persistence failed: %s", exc)
-
-                for msg in bridge.emit_complete():
-                    yield await _emit(msg)
-
-            except Exception as exc:
-                logger.exception("[FORTUNE] %s stream error: %s", session.fortune_id, exc)
-                try:
-                    from .agent_logging import log_stream_end as _log_stream_end
-                except ImportError:
-                    from agent_logging import log_stream_end as _log_stream_end  # type: ignore[no-redef]
-                _log_stream_end(
-                    fortune_id=session.fortune_id,
-                    run_id=run_id,
-                    function=_fn_label,
-                    total_ms=(_time.monotonic() - _t_start) * 1000,
-                    ok=False,
-                    error=str(exc),
-                )
-                session.touch(RuntimeStatus.error)
-                if run_uuid is not None:
-                    try:
-                        await repo.update_run_status(
-                            run_uuid, "error", error_message=str(exc)[:500],
-                        )
-                    except Exception as update_exc:
-                        logger.warning("[FORTUNE] error-status update failed: %s", update_exc)
-                # Pending-action was not cleared if we failed pre-first-event;
-                # clear it now to avoid a poisoned re-dispatch on retry.
-                await _maybe_clear_pending()
-                for msg in bridge.emit_error(str(exc)):
-                    yield await _emit(msg)
+                await store.put(session)
+            except Exception:
+                pass
+            await store.release_lock(fortune_id, lock_token)
 
     return StreamingResponse(
         with_heartbeat(event_generator()),
         media_type="text/event-stream",
         headers={
-            "Cache-Control": "no-cache",
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+async def _stream_fortune_v2(
+    fortune_id: str,
+    request: Request,
+    session,
+    store,
+    cursor: str,
+):
+    """Tail Redis Streams for a run. Independent cursors — no consumer groups."""
+    run_id = session.run_id if session is not None else None
+
+    # Resolve unknown run: Redis run hash via session, else snapshot store.
+    if session is None:
+        repo = await get_repository()
+        try:
+            fid = uuid.UUID(fortune_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid fortune_id")
+        row = None
+        if repo.available:
+            try:
+                row = await repo.get_fortune_with_snapshot(fid)
+            except Exception:
+                row = None
+        if row is None and (not repo.available or await repo.get_fortune(fid) is None):
+            raise HTTPException(status_code=404, detail="Fortune session not found")
+        # Fortune exists in durable store but no live session / stream — resync.
+        async def resync_only():
+            yield fortune_events.format_typed_sse(
+                "resync_required",
+                {
+                    "fortune_id": fortune_id,
+                    "reason": "stream_unavailable",
+                    "message": "Reconnect window expired; re-hydrate from snapshot.",
+                },
+            )
+        return StreamingResponse(
+            with_heartbeat(resync_only()),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    run_id = session.run_id or ""
+
+    # Trim-gap / expired stream → typed resync_required (never hang).
+    if cursor and cursor not in {"0", "0-0"}:
+        try:
+            if await fortune_events.needs_resync(run_id, cursor):
+                async def resync_gen():
+                    yield fortune_events.format_typed_sse(
+                        "resync_required",
+                        {
+                            "fortune_id": fortune_id,
+                            "run_id": run_id,
+                            "reason": "cursor_out_of_window",
+                            "after": cursor,
+                            "message": "Event cursor predates retained window; re-hydrate from snapshot.",
+                        },
+                    )
+                return StreamingResponse(
+                    with_heartbeat(resync_gen()),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache, no-transform",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
+        except Exception as exc:
+            logger.warning("[FORTUNE] resync check failed: %s", exc)
+
+    async def event_generator():
+        try:
+            async for entry_id, envelope in fortune_events.tail_envelopes(
+                run_id, after=cursor or "0-0",
+            ):
+                if await request.is_disconnected():
+                    return
+                yield fortune_events.format_sse(envelope, event_id=entry_id)
+        except Exception as exc:
+            logger.exception("[FORTUNE] v2 stream tail error: %s", exc)
+            # Clean terminal error — do not hang.
+            yield fortune_events.format_sse(
+                {
+                    "run_id": run_id,
+                    "fortune_id": fortune_id,
+                    "seq": 0,
+                    "payload": {"done": True, "error": True, "message": "stream_unavailable"},
+                }
+            )
+
+    return StreamingResponse(
+        with_heartbeat(event_generator()),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
         },
@@ -1800,16 +843,15 @@ async def handle_fortune_action(
     if request_body.action_id not in ALLOWED_ACTION_IDS:
         raise HTTPException(status_code=400, detail="Unsupported action_id")
 
-    store = get_fortune_store()
-    session = store.get(fortune_id)
+    store = get_run_state()
+    session = await store.get(fortune_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Fortune session not found")
 
     # Refuse to rotate run_id under an active stream — otherwise the in-flight
     # generator consumes `pending_action_id` set by the NEXT click and
     # dispatches it as if it belonged to the current run.
-    lock = store.get_lock(fortune_id)
-    if lock.locked():
+    if await store.lock_is_held_async(fortune_id):
         raise HTTPException(
             status_code=409,
             detail="A stream is active; wait for it to finish before choosing a new action.",
@@ -1843,6 +885,15 @@ async def handle_fortune_action(
         request_body.payload.get("question") if isinstance(request_body.payload, dict) else None
     )
     session.touch(RuntimeStatus.initialized)
+    await store.put(session)
+
+    if is_v2_pipeline():
+        await fortune_events.set_run_record(
+            new_run_id, fortune_id=fortune_id, status="queued",
+        )
+        # DEBT: run task dies with its owning worker; no runner service/lease.
+        # Upgrade when workers > 1 or deploys must not kill active runs.
+        asyncio.create_task(fortune_pipeline.run_and_publish_safe(session))
 
     return {
         "fortune_id": fortune_id,
@@ -1869,8 +920,8 @@ async def ask_fortune(
     """
     await smart_rate_limit(request, scope=RateLimitScope.FORTUNE_ASK, weight=1)
 
-    store = get_fortune_store()
-    fortune_session = store.get(fortune_id)
+    store = get_run_state()
+    fortune_session = await store.get(fortune_id)
     repo = await get_repository()
 
     # Preferred path: hot in-memory session with live foundation.
@@ -2017,11 +1068,11 @@ async def cancel_fortune(fortune_id: str, request: Request):
     then closes the stream. Idempotent: calling it on a completed session is
     a no-op.
     """
-    store = get_fortune_store()
-    session = store.get(fortune_id)
+    store = get_run_state()
+    session = await store.get(fortune_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Fortune session not found")
-    session.cancel_requested = True
+    await store.request_cancel(fortune_id)
     logger.info("[FORTUNE] %s cancel requested", fortune_id)
     return {"fortune_id": fortune_id, "cancelled": True}
 
@@ -2037,8 +1088,8 @@ async def simulate_fortune(fortune_id: str, request: Request):
     """
     await smart_rate_limit(request, scope=RateLimitScope.FORTUNE_SIMULATE, weight=4)
 
-    store = get_fortune_store()
-    session = store.get(fortune_id)
+    store = get_run_state()
+    session = await store.get(fortune_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Fortune session not found")
 
@@ -2074,8 +1125,8 @@ async def submit_correction(
         raise HTTPException(status_code=400, detail="Invalid fortune_id")
 
     repo = await get_repository()
-    store = get_fortune_store()
-    session = store.get(fortune_id)
+    store = get_run_state()
+    session = await store.get(fortune_id)
 
     # The fortune must exist somewhere. Accept the correction as long as
     # EITHER the in-memory session OR the durable row resolves.
