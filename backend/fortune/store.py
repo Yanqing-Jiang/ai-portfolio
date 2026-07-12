@@ -229,7 +229,7 @@ class FortuneRepository:
     async def update_run_status(
         self,
         run_id: UUID,
-        status: str,  # queued | streaming | done | error | interrupted
+        status: str,  # queued | streaming | done | failed_guardrail | error | interrupted
         *,
         error_message: str | None = None,
         prompt_tokens: int | None = None,
@@ -240,7 +240,9 @@ class FortuneRepository:
             return
         now = datetime.now(timezone.utc)
         started_at = now if status == "streaming" else None
-        finished_at = now if status in ("done", "error", "interrupted") else None
+        finished_at = now if status in (
+            "done", "failed_guardrail", "error", "interrupted",
+        ) else None
         await self.pool.execute(
             """
             UPDATE fortune_run

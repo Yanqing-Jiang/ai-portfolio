@@ -43,6 +43,7 @@ class RuntimeStatus(str, Enum):
     streaming = "streaming"
     interrupted = "interrupted"
     complete = "complete"
+    failed_guardrail = "failed_guardrail"
     error = "error"
 
 

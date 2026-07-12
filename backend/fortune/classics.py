@@ -104,7 +104,7 @@ def retrieve_classical_references(
     exposed separately as ``retrieve_classical_references_tool``.
     """
     settings = get_settings()
-    target_limit = limit or settings.max_classical_references
+    target_limit = max(1, min(limit or settings.max_classical_references, 5))
     query_vec = _hash_embed(query)
 
     ranked: list[tuple[float, ClassicalPassage]] = []

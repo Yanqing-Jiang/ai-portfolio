@@ -12,6 +12,7 @@ import time as _time
 import uuid
 from typing import Any
 
+from agents import OutputGuardrailTripwireTriggered
 from agents.stream_events import (
     AgentUpdatedStreamEvent,
     RawResponsesStreamEvent,
@@ -19,6 +20,11 @@ from agents.stream_events import (
 )
 
 logger = logging.getLogger(__name__)
+
+_SAFE_REJECTION_MESSAGE = "We can’t safely present this reading."
+_SAFE_REJECTION_DISCLAIMER = (
+    "Try again with a different question. This tool is for reflection and entertainment only."
+)
 
 try:
     from .agents import (
@@ -28,6 +34,7 @@ try:
         GUARDRAIL_AGENT,
         GuardrailOutput,
         NARRATIVE_AGENTS,
+        ensure_narrative_guardrail,
         _narrative_mode,
         _promote_narrative_to_enriched,
         repair_occasion_narrative,
@@ -42,6 +49,7 @@ try:
     from .naming import canonical_function
     from ._thinking_heartbeat import HeartbeatTick, iter_with_heartbeats
     from .state import RuntimeStatus
+    from .tracing import flush_pending_spans
     from .session_store import get_ask_session
     from .pipeline import (
         _build_ask_original_input,
@@ -59,6 +67,7 @@ except ImportError:  # pragma: no cover
         GUARDRAIL_AGENT,
         GuardrailOutput,
         NARRATIVE_AGENTS,
+        ensure_narrative_guardrail,
         _narrative_mode,
         _promote_narrative_to_enriched,
         repair_occasion_narrative,
@@ -73,6 +82,7 @@ except ImportError:  # pragma: no cover
     from naming import canonical_function  # type: ignore[no-redef]
     from _thinking_heartbeat import HeartbeatTick, iter_with_heartbeats  # type: ignore[no-redef]
     from state import RuntimeStatus  # type: ignore[no-redef]
+    from tracing import flush_pending_spans  # type: ignore[no-redef]
     from session_store import get_ask_session  # type: ignore[no-redef]
     from pipeline import (  # type: ignore[no-redef]
         _build_ask_original_input,
@@ -82,6 +92,18 @@ except ImportError:  # pragma: no cover
         _snapshot_references,
         _to_jsonable,
     )
+
+
+async def _events_or_tripwire(stream_result: Any):
+    """Surface an SDK output tripwire as the final buffered stream item."""
+    try:
+        async for event in iter_with_heartbeats(
+            stream_result.stream_events(), interval=8.0,
+        ):
+            yield event
+    except OutputGuardrailTripwireTriggered as exc:
+        yield exc
+
 
 def _extract_stream_event_meta(event: Any) -> dict[str, Any] | None:
     """Translate an SDK stream event into a minimal dict for the UI.
@@ -235,6 +257,9 @@ async def _event_generator_impl(session, *, request=None, store=None):
         birth_time_unknown=session.request.birth_time_unknown,
         gender=session.request.gender or "unknown",
     )
+    # The SDK output guardrail resolves this dependency from context. Keeping
+    # the binding here also preserves the existing offline golden's mock seam.
+    ctx.metadata["guardrail_runner"] = run_guardrail
 
     run_id = session.run_id
     fortune_id_str = session.fortune_id
@@ -523,6 +548,7 @@ async def _event_generator_impl(session, *, request=None, store=None):
                 timezone=ctx.timezone,
                 birth_time_unknown=ctx.birth_time_unknown,
                 gender=ctx.gender,
+                metadata=ctx.metadata,
             )
 
         cancel_msg = await _cancel_event("narrative", trace)
@@ -530,6 +556,7 @@ async def _event_generator_impl(session, *, request=None, store=None):
             yield cancel_msg
             return
 
+        guardrail_tripwire: OutputGuardrailTripwireTriggered | None = None
         if pending_action:
             yield await _emit(
                 bridge.emit_progress(
@@ -627,9 +654,10 @@ async def _event_generator_impl(session, *, request=None, store=None):
                 session=sdk_session,
             )
             seen_tools: set[str] = set()
-            async for event in iter_with_heartbeats(
-                stream_result.stream_events(), interval=8.0
-            ):
+            async for event in _events_or_tripwire(stream_result):
+                if isinstance(event, OutputGuardrailTripwireTriggered):
+                    guardrail_tripwire = event
+                    break
                 cancel_msg = await _cancel_event("narrative", trace)
                 if cancel_msg:
                     try:
@@ -706,9 +734,12 @@ async def _event_generator_impl(session, *, request=None, store=None):
                         bridge.emit_progress("narrative", "Model response received"),
                     )
 
-            narrative = _promote_narrative_to_enriched(
-                stream_result.final_output
+            raw_narrative = (
+                guardrail_tripwire.guardrail_result.agent_output
+                if guardrail_tripwire is not None
+                else stream_result.final_output
             )
+            narrative = _promote_narrative_to_enriched(raw_narrative)
 
         session.latest_narrative = repair_occasion_narrative(
             ctx,
@@ -785,10 +816,105 @@ async def _event_generator_impl(session, *, request=None, store=None):
             )
             trace.steps[-1].duration_ms = dur_n
 
-        _panel_narr_tokens = int(
-            getattr(_stream_used, "reasoning_tokens", 0) or 0
+        _t_guard = _time.monotonic()
+        if trace:
+            trace.add_instant("llm_start", "guardrail", label="Running Safety Check")
+        guardrail_rejected = False
+        try:
+            if guardrail_tripwire is not None:
+                raise guardrail_tripwire
+            guardrail = await ensure_narrative_guardrail(
+                ctx,
+                guardrail_narrative,
+                agent=NARRATIVE_AGENTS[_narrative_mode(ctx)],
+            )
+        except OutputGuardrailTripwireTriggered:
+            guardrail_rejected = True
+            # Never publish model-authored rejection details: they can quote
+            # the suppressed narrative. The policy stage is pass/fail here;
+            # the existing deterministic fallback owns user-facing copy.
+            guardrail = GuardrailOutput(
+                level="critical",
+                message=_SAFE_REJECTION_MESSAGE,
+                disclaimer=_SAFE_REJECTION_DISCLAIMER,
+                follow_up_buttons=[],
+            )
+        if not guardrail_rejected and not guardrail.follow_up_buttons:
+            guardrail = GuardrailOutput(
+                level=guardrail.level,
+                message=guardrail.message,
+                disclaimer=guardrail.disclaimer,
+                follow_up_buttons=DEFAULT_FOLLOW_UP_BUTTONS,
+            )
+        session.latest_guardrail = guardrail.model_dump()
+        dur_g = round((_time.monotonic() - _t_guard) * 1000, 1)
+        if trace:
+            trace.add_instant(
+                "llm_complete", "guardrail", label="Safety Check Complete",
+                output_summary=f"level={guardrail.level}, {dur_g:.0f}ms",
+            )
+            trace.steps[-1].duration_ms = dur_g
+
+        _settings_now = get_settings()
+        _selected_agent_obj = NARRATIVE_AGENTS[_narrative_mode(ctx)]
+        _selected_agent = _selected_agent_obj.name
+        _selected_reasoning = _selected_agent_obj.model_settings.reasoning
+        _selected_effort = (
+            _selected_reasoning.effort
+            if _selected_reasoning is not None
+            else _settings_now.narrative_reasoning
         )
-        yield await _emit(
+        _panel_narr_tokens = int(
+            getattr(locals().get("_stream_used"), "reasoning_tokens", 0) or 0
+        )
+        _panel_guard_row = next(
+            r for r in _panel_rows if r["step_id"] == "guardrail"
+        )
+
+        if guardrail_rejected:
+            session.latest_narrative = None
+            session.touch(RuntimeStatus.failed_guardrail)
+            logger.warning("[FORTUNE] %s narrative rejected by output guardrail", session.fortune_id)
+            yield await _emit(
+                bridge.emit_progress("guardrail", "Reading withheld by safety check."),
+            )
+            yield await _emit(
+                bridge.emit_agent_step(
+                    step_id="guardrail",
+                    agent_name=_panel_guard_row["agent_name"],
+                    status="done",
+                    status_reason="rejected",
+                    model_id=_panel_guard_row["model_id"],
+                    sequence=5,
+                    reasoning_effort=_panel_guard_row["reasoning_effort"],
+                    elapsed_ms=int(dur_g),
+                    reasoning_tokens=0,
+                )
+            )
+            yield await _emit(bridge.emit_guardrail(session.latest_guardrail))
+            if trace:
+                yield await _emit(bridge.emit_trace_steps_batch(trace.steps))
+                yield await _emit(bridge.emit_trace_summary(trace.summary()))
+            await flush_pending_spans(run_id=run_id)
+            if run_uuid is not None:
+                try:
+                    await repo.update_run_status(
+                        run_uuid,
+                        "failed_guardrail",
+                        error_message="output_guardrail_tripwire",
+                    )
+                except Exception as exc:
+                    logger.warning("[FORTUNE] failed-guardrail status persistence failed: %s", exc)
+            await _maybe_clear_pending()
+            for msg in bridge.emit_error(guardrail.message or _SAFE_REJECTION_MESSAGE):
+                yield await _emit(msg)
+            return
+
+        # No narrative-bearing frame is yielded until the SDK output guardrail
+        # has passed. Build the exact legacy frame sequence, then release it as
+        # one late batch.
+        narrative_frames: list[str] = []
+        narrative_frames.append(await _emit(
             bridge.emit_agent_step(
                 step_id="narrative",
                 agent_name=_selected_agent or "Narrative",
@@ -799,23 +925,22 @@ async def _event_generator_impl(session, *, request=None, store=None):
                 elapsed_ms=int(dur_n),
                 reasoning_tokens=_panel_narr_tokens,
             )
-        )
-
-        yield await _emit(
+        ))
+        narrative_frames.append(await _emit(
             bridge.emit_narrative_complete(session.latest_narrative),
-        )
+        ))
 
         compat_block = session.latest_narrative.get("compatibility") if session.latest_narrative else None
         if is_compat and compat_block:
             overview = compat_block.get("overview")
             if overview:
-                yield await _emit(bridge.emit_compat_overview(overview))
+                narrative_frames.append(await _emit(bridge.emit_compat_overview(overview)))
             pair_interactions = compat_block.get("pair_interactions") or []
             if pair_interactions:
-                yield await _emit(bridge.emit_compat_pair_interactions(pair_interactions))
+                narrative_frames.append(await _emit(bridge.emit_compat_pair_interactions(pair_interactions)))
             mechanisms = compat_block.get("mechanisms") or []
             if mechanisms:
-                yield await _emit(bridge.emit_compat_mechanisms(mechanisms))
+                narrative_frames.append(await _emit(bridge.emit_compat_mechanisms(mechanisms)))
 
         occasion_block = session.latest_narrative.get("occasion") if session.latest_narrative else None
         is_occasion = function_id == "occasion"
@@ -828,41 +953,44 @@ async def _event_generator_impl(session, *, request=None, store=None):
         )
         if is_occasion and occasion_block:
             if occasion_block.get("top_picks"):
-                yield await _emit(bridge.emit_occasion_top_picks(
+                narrative_frames.append(await _emit(bridge.emit_occasion_top_picks(
                     occasion_block["top_picks"],
                     fallback_mechanisms=occasion_block.get("mechanisms") or [],
-                ))
-                yield await _emit(bridge.emit_occasion_calendar(
+                )))
+                narrative_frames.append(await _emit(bridge.emit_occasion_calendar(
                     occasion_block["top_picks"],
-                ))
+                )))
             if occasion_block.get("analysis"):
-                yield await _emit(bridge.emit_occasion_analysis(occasion_block["analysis"]))
+                narrative_frames.append(await _emit(bridge.emit_occasion_analysis(occasion_block["analysis"])))
             if occasion_block.get("mechanisms"):
-                yield await _emit(bridge.emit_occasion_mechanisms(occasion_block["mechanisms"]))
+                narrative_frames.append(await _emit(bridge.emit_occasion_mechanisms(occasion_block["mechanisms"])))
 
         luck_block = session.latest_narrative.get("luck_cycle") if session.latest_narrative else None
         is_luck = function_id == "cycle"
         if is_luck:
-            yield await _emit(bridge.emit_luck_cycle_timeline(
+            narrative_frames.append(await _emit(bridge.emit_luck_cycle_timeline(
                 luck_pillars=analysis.luck_pillars,
                 annual_pillars=analysis.annual_pillars,
-            ))
-            yield await _emit(bridge.emit_luck_cycle_current_window(
+            )))
+            narrative_frames.append(await _emit(bridge.emit_luck_cycle_current_window(
                 (luck_block or {}).get("current_window") or {},
                 luck_pillars=analysis.luck_pillars,
-            ))
+            )))
             if luck_block and luck_block.get("mechanisms"):
-                yield await _emit(bridge.emit_luck_cycle_mechanisms(luck_block["mechanisms"]))
+                narrative_frames.append(await _emit(bridge.emit_luck_cycle_mechanisms(luck_block["mechanisms"])))
 
         wish_block = session.latest_narrative.get("wish") if session.latest_narrative else None
         is_wish = function_id == "wish"
         if is_wish and wish_block:
             if wish_block.get("verdict"):
-                yield await _emit(bridge.emit_wish_verdict(wish_block["verdict"]))
+                narrative_frames.append(await _emit(bridge.emit_wish_verdict(wish_block["verdict"])))
             if wish_block.get("anchors"):
-                yield await _emit(bridge.emit_wish_anchors(wish_block["anchors"]))
+                narrative_frames.append(await _emit(bridge.emit_wish_anchors(wish_block["anchors"])))
             if wish_block.get("mechanisms"):
-                yield await _emit(bridge.emit_wish_mechanisms(wish_block["mechanisms"]))
+                narrative_frames.append(await _emit(bridge.emit_wish_mechanisms(wish_block["mechanisms"])))
+
+        for frame in narrative_frames:
+            yield frame
 
         if run_uuid is not None:
             try:
@@ -885,12 +1013,6 @@ async def _event_generator_impl(session, *, request=None, store=None):
         yield await _emit(
             bridge.emit_progress("guardrail", "Running safety check..."),
         )
-        if trace:
-            trace.add_instant("llm_start", "guardrail", label="Running Safety Check")
-
-        _panel_guard_row = next(
-            r for r in _panel_rows if r["step_id"] == "guardrail"
-        )
         yield await _emit(
             bridge.emit_agent_step(
                 step_id="guardrail",
@@ -902,27 +1024,8 @@ async def _event_generator_impl(session, *, request=None, store=None):
             )
         )
 
-        _t_guard = _time.monotonic()
-        guardrail = await run_guardrail(ctx, narrative=guardrail_narrative)
-        if not guardrail.follow_up_buttons:
-            guardrail = GuardrailOutput(
-                level=guardrail.level,
-                message=guardrail.message,
-                disclaimer=guardrail.disclaimer,
-                follow_up_buttons=DEFAULT_FOLLOW_UP_BUTTONS,
-            )
-        session.latest_guardrail = guardrail.model_dump()
-
-        dur_g = round((_time.monotonic() - _t_guard) * 1000, 1)
         logger.info("[FORTUNE] %s guardrail complete — level=%s, %.0fms",
                     session.fortune_id, guardrail.level, dur_g)
-
-        if trace:
-            trace.add_instant(
-                "llm_complete", "guardrail", label="Safety Check Complete",
-                output_summary=f"level={guardrail.level}, {dur_g:.0f}ms",
-            )
-            trace.steps[-1].duration_ms = dur_g
 
         yield await _emit(
             bridge.emit_agent_step(
@@ -977,6 +1080,7 @@ async def _event_generator_impl(session, *, request=None, store=None):
             except Exception as exc:
                 logger.warning("[FORTUNE] snapshot/status persistence failed: %s", exc)
 
+        await flush_pending_spans(run_id=run_id)
         for msg in bridge.emit_complete():
             yield await _emit(msg)
 
@@ -1003,5 +1107,6 @@ async def _event_generator_impl(session, *, request=None, store=None):
             except Exception as update_exc:
                 logger.warning("[FORTUNE] error-status update failed: %s", update_exc)
         await _maybe_clear_pending()
+        await flush_pending_spans(run_id=run_id)
         for msg in bridge.emit_error(str(exc)):
             yield await _emit(msg)

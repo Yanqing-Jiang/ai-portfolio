@@ -293,7 +293,9 @@ async def tail_envelopes(
         if not rows:
             record = await get_run_record(run_id, client=redis)
             status = (record or {}).get("status", "")
-            if status in {"complete", "done", "error", "interrupted", "failed"}:
+            if status in {
+                "complete", "done", "failed_guardrail", "error", "interrupted", "failed",
+            }:
                 idle_rounds += 1
                 if idle_rounds >= max_idle_after_terminal:
                     return

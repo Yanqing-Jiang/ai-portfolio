@@ -30,7 +30,6 @@ try:
         _promote_narrative_to_enriched,
         repair_occasion_narrative,
         run_foundation,
-        run_guardrail,
         run_narrative_streamed,
     )
     from .config import get_settings
@@ -55,7 +54,6 @@ except ImportError:  # pragma: no cover
         _promote_narrative_to_enriched,
         repair_occasion_narrative,
         run_foundation,
-        run_guardrail,
         run_narrative_streamed,
     )
     from config import get_settings  # type: ignore[no-redef]
@@ -214,6 +212,7 @@ async def run_and_publish(session, *, store=None, lock_token: str | None = None)
                     return
         status_map = {
             RuntimeStatus.complete: "complete",
+            RuntimeStatus.failed_guardrail: "failed_guardrail",
             RuntimeStatus.error: "error",
             RuntimeStatus.interrupted: "interrupted",
         }

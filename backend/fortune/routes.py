@@ -62,7 +62,6 @@ try:
         _promote_narrative_to_enriched,
         repair_occasion_narrative,
         run_foundation,
-        run_guardrail,
         run_narrative_streamed,
     )
     from .config import get_settings
@@ -99,7 +98,6 @@ except ImportError:
         _promote_narrative_to_enriched,
         repair_occasion_narrative,
         run_foundation,
-        run_guardrail,
         run_narrative_streamed,
     )
     from config import get_settings  # type: ignore[no-redef]

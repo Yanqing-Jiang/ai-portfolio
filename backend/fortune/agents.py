@@ -7,13 +7,25 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any
 
-from agents import Agent, ModelSettings, Runner, RunConfig
+from agents import (
+    Agent,
+    GuardrailFunctionOutput,
+    ModelSettings,
+    OutputGuardrailTripwireTriggered,
+    RunConfig,
+    RunContextWrapper,
+    Runner,
+    output_guardrail,
+)
 from openai.types.shared import Reasoning
 from pydantic import BaseModel, Field
 
 try:
     from .calendar_tool import compute_bazi_chart
-    from .classics import retrieve_classical_references
+    from .classics import (
+        retrieve_classical_references,
+        retrieve_classical_references_tool,
+    )
     from .config import get_settings
     from .naming import canonical_function
     from .bazi_engine import (
@@ -22,7 +34,7 @@ try:
         compute_seasonal_strength, compute_luck_pillars, compute_annual_pillars,
         compute_enhanced_elements, compute_harmony_score, compute_retrodictions,
     )
-    from .trace_collector import TraceCollector
+    from .tracing import get_trace_processor
     from ._foundation_cache import (
         compute_day_chart_cached,
         occasion_preferences,
@@ -31,7 +43,10 @@ try:
     )
 except ImportError:
     from calendar_tool import compute_bazi_chart  # type: ignore[no-redef]
-    from classics import retrieve_classical_references  # type: ignore[no-redef]
+    from classics import (  # type: ignore[no-redef]
+        retrieve_classical_references,
+        retrieve_classical_references_tool,
+    )
     from config import get_settings  # type: ignore[no-redef]
     from naming import canonical_function  # type: ignore[no-redef]
     from bazi_engine import (  # type: ignore[no-redef]
@@ -40,7 +55,7 @@ except ImportError:
         compute_seasonal_strength, compute_luck_pillars, compute_annual_pillars,
         compute_enhanced_elements, compute_harmony_score, compute_retrodictions,
     )
-    from trace_collector import TraceCollector  # type: ignore[no-redef]
+    from tracing import get_trace_processor  # type: ignore[no-redef]
     from _foundation_cache import (  # type: ignore[no-redef]
         compute_day_chart_cached,
         occasion_preferences,
@@ -51,6 +66,7 @@ except ImportError:
 
 FOUNDATION_VERSION = 1
 NARRATIVE_SCHEMA_VERSION = 1
+NARRATIVE_MAX_TURNS = 4
 
 
 # ---------------------------------------------------------------------------
@@ -749,6 +765,56 @@ def _select_annual_pillars_for_prompt(
     return notable[:limit]
 
 
+GUARDRAIL_AGENT: Agent[FortuneRunContext] = Agent(
+    name="fortune_guardrail",
+    model=_model("guardrail_model"),
+    model_settings=_model_settings("guardrail_reasoning", "guardrail_max_tokens"),
+    instructions=GUARDRAIL_INSTRUCTIONS,
+    output_type=GuardrailOutput,
+)
+
+
+@output_guardrail(name="fortune_narrative_safety")
+async def narrative_output_guardrail(
+    wrapper: RunContextWrapper[FortuneRunContext],
+    _agent: Agent[Any],
+    output: Any,
+) -> GuardrailFunctionOutput:
+    """SDK output guardrail: critical policy verdicts trip the run."""
+    policy_runner = wrapper.context.metadata.get("guardrail_runner", run_guardrail)
+    verdict = await policy_runner(wrapper.context, narrative=output)
+    wrapper.context.metadata["guardrail_verdict"] = verdict
+    return GuardrailFunctionOutput(
+        output_info=verdict,
+        tripwire_triggered=verdict.level == "critical",
+    )
+
+
+async def ensure_narrative_guardrail(
+    ctx: FortuneRunContext,
+    output: Any,
+    *,
+    agent: Agent[Any] | None = None,
+) -> GuardrailOutput:
+    """Return the SDK-produced verdict, evaluating via SDK only for test doubles.
+
+    Real Runner results execute ``narrative_output_guardrail`` automatically.
+    Minimal mocked stream results do not, so they use ``OutputGuardrail.run``
+    here instead of a separate hand-rolled policy path.
+    """
+    existing = ctx.metadata.get("guardrail_verdict")
+    if isinstance(existing, GuardrailOutput):
+        return existing
+    selected = agent or NARRATIVE_AGENTS[_narrative_mode(ctx)]
+    result = await narrative_output_guardrail.run(
+        RunContextWrapper(context=ctx), selected, output,
+    )
+    verdict = result.output.output_info
+    if result.output.tripwire_triggered:
+        raise OutputGuardrailTripwireTriggered(result)
+    return GuardrailOutput.model_validate(verdict)
+
+
 def _build_narrative_agent(
     name: str,
     reasoning_setting_key: str,
@@ -774,6 +840,8 @@ def _build_narrative_agent(
         ),
         instructions=NARRATIVE_INSTRUCTIONS,
         output_type=output_type,
+        output_guardrails=[narrative_output_guardrail],
+        tools=[retrieve_classical_references_tool],
     )
 
 
@@ -839,15 +907,6 @@ def _narrative_mode(ctx: FortuneRunContext) -> str:
     return "luck_cycle" if function_id == "cycle" else function_id or "general"
 
 
-GUARDRAIL_AGENT: Agent[FortuneRunContext] = Agent(
-    name="fortune_guardrail",
-    model=_model("guardrail_model"),
-    model_settings=_model_settings("guardrail_reasoning", "guardrail_max_tokens"),
-    instructions=GUARDRAIL_INSTRUCTIONS,
-    output_type=GuardrailOutput,
-)
-
-
 # ---------------------------------------------------------------------------
 # Pipeline functions
 # ---------------------------------------------------------------------------
@@ -874,11 +933,11 @@ def enrich_element_balance(
 async def run_foundation(ctx: FortuneRunContext) -> dict[str, Any]:
     """Deterministic foundation with traced individual steps.
 
-    Each computation is wrapped in a TraceCollector step so the frontend
+    Each computation is wrapped in the unified trace processor so the frontend
     can render a real-time "Glass Box" sidebar showing the THINK -> CALL ->
     RECEIVE -> INTERPRET rhythm.
 
-    Returns foundation dict with an extra "trace" key containing the collector.
+    Returns foundation dict with a run-scoped trace view.
     """
     import time as _time_local
 
@@ -892,7 +951,11 @@ async def run_foundation(ctx: FortuneRunContext) -> dict[str, Any]:
     from .bazi_engine import _normalize_dt
     from datetime import datetime as dt
 
-    trace = TraceCollector()
+    trace = get_trace_processor().begin_run(
+        ctx.run_id,
+        ctx.fortune_id,
+        sensitive_values=[ctx.birth_iso, ctx.question],
+    )
 
     # 1. Four Pillars chart
     with trace.step("tool_call", "foundation", tool_name="compute_bazi_chart",
@@ -1270,7 +1333,7 @@ def _build_occasion_window(
         "end": end.isoformat(),
         "candidate_days": curated,
         # Hint to the model about the prefilter — useful for prompt-side
-        # tuning and surfaces in the trace_collector for debug.
+        # tuning and surfaces in the unified trace projection for debug.
         "prefilter": {
             "method": "deterministic",
             "total_candidates": len(candidate_days),
@@ -1396,7 +1459,7 @@ async def run_narrative(
         }
         if session is not None:
             kwargs["session"] = session
-        result = await Runner.run(agent, **kwargs)
+        result = await Runner.run(agent, max_turns=NARRATIVE_MAX_TURNS, **kwargs)
         sh.attach_result(result)
     return _promote_narrative_to_enriched(result.final_output)
 
@@ -1429,7 +1492,7 @@ async def run_narrative_streamed(
     }
     if session is not None:
         kwargs["session"] = session
-    return Runner.run_streamed(agent, **kwargs)
+    return Runner.run_streamed(agent, max_turns=NARRATIVE_MAX_TURNS, **kwargs)
 
 
 async def run_guardrail(

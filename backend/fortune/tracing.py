@@ -1,300 +1,445 @@
-"""GlassBoxTraceProcessor — durable projection of OpenAI Agents SDK spans.
+"""Unified redacted Glass Box tracing for SDK and deterministic spans.
 
-Registered once at app startup via ``agents.tracing.add_trace_processor``.
-Every agent run (``Runner.run``, ``Runner.run_streamed``) emits spans for
-agent starts/ends, LLM calls, tool calls, and handoffs. This processor:
-
-1. Extracts portable metadata from each span.
-2. Writes a row into ``fortune_trace`` keyed by ``run_id`` (which the caller
-   sets as ``trace_id`` on ``RunConfig``) and ``span_id``.
-3. Fire-and-forget — DB failures are logged but never block the agent loop.
-
-The SSE "live" Glass Box continues to be driven by the existing
-``trace_steps_batch`` emissions in ``routes.py`` for v1; this processor adds
-durable capture so the replay endpoint's ``latest_trace`` snapshot can be
-reconstructed from DB, and so the activity rail can query a complete trace
-after the run completes.
+Every event is reduced to an allowlisted display projection before it is
+scheduled for Redis or Postgres.  The per-run ``RunTrace`` view also preserves
+the legacy A2UI trace-step/summary contract while the v2 stream receives
+first-class ``payload.kind == \"trace\"`` envelopes.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import re
+import time
+import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Generator
+
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
+_ISO_DATE_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}(?:[T ][0-9:.+\-Z]+)?\b")
+_MAX_SUMMARY = 240
 
-def _iso(dt: Any) -> datetime | None:
-    if dt is None:
-        return None
-    if isinstance(dt, datetime):
-        return dt
-    if isinstance(dt, (int, float)):
-        return datetime.fromtimestamp(dt, tz=timezone.utc)
-    if isinstance(dt, str):
+
+class TraceStep(BaseModel):
+    """Legacy display shape, now produced by the unified processor."""
+
+    step_id: str
+    step_type: str
+    agent_name: str
+    tool_name: str | None = None
+    label: str = ""
+    input_summary: str = ""
+    output_summary: str = ""
+    timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    duration_ms: float = 0.0
+    status: str = "pending"
+
+
+def _iso(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, (int, float)):
+        return datetime.fromtimestamp(value, tz=timezone.utc)
+    if isinstance(value, str):
         try:
-            return datetime.fromisoformat(dt.replace("Z", "+00:00"))
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError:
             return None
     return None
 
 
 def _safe_get(obj: Any, *names: str) -> Any:
-    """Return the first attribute/item among ``names`` that exists on ``obj``."""
     for name in names:
-        if obj is None:
-            return None
         if isinstance(obj, dict) and name in obj:
             return obj[name]
-        if hasattr(obj, name):
-            val = getattr(obj, name)
-            if val is not None:
-                return val
+        if obj is not None and hasattr(obj, name):
+            value = getattr(obj, name)
+            if value is not None:
+                return value
     return None
 
 
-def _extract_span_fields(span: Any) -> dict[str, Any]:
-    """Best-effort extraction of span metadata across SDK versions.
-
-    The Agents SDK exposes ``Span`` with a ``span_data`` payload whose shape
-    varies by span type (AgentSpanData, FunctionSpanData, GenerationSpanData,
-    HandoffSpanData, etc.). We pull the subset we care about and stash the
-    raw payload as JSONB for later inspection.
-    """
-    span_data = _safe_get(span, "span_data", "data")
-    span_type_cls = type(span_data).__name__ if span_data is not None else "unknown"
-
-    # Normalize span_type to stable strings.
-    span_type = span_type_cls.lower().replace("spandata", "") or "unknown"
-    if not span_type:
-        span_type = "unknown"
-
-    agent_name = _safe_get(span_data, "agent_name", "name")
-    tool_name = _safe_get(span_data, "tool_name", "function_name", "handoff_target")
-    model = _safe_get(span_data, "model", "model_name")
-    error = _safe_get(span, "error")
-    error_str = None
-    if error is not None:
-        error_str = _safe_get(error, "message") or str(error)
-
-    started_at = _iso(_safe_get(span, "started_at", "start_time", "timestamp"))
-    ended_at = _iso(_safe_get(span, "ended_at", "end_time"))
-
-    return {
-        "trace_id": _safe_get(span, "trace_id"),
-        "span_id": _safe_get(span, "span_id", "id"),
-        "parent_span_id": _safe_get(span, "parent_id", "parent_span_id"),
-        "span_type": span_type,
-        "agent_name": agent_name,
-        "tool_name": tool_name,
-        "model": model,
-        "started_at": started_at,
-        "ended_at": ended_at,
-        "error": error_str,
-    }
+def _bounded_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        try:
+            value = json.dumps(value, ensure_ascii=False, default=str)
+        except Exception:
+            value = str(value)
+    return " ".join(value.split())[:_MAX_SUMMARY]
 
 
-def _span_duration_ms(fields: dict[str, Any]) -> int | None:
-    s, e = fields.get("started_at"), fields.get("ended_at")
-    if s is None or e is None:
-        return None
-    return max(0, int((e - s).total_seconds() * 1000))
+class RunTrace:
+    """Run-scoped facade for deterministic spans and legacy trace frames."""
+
+    def __init__(self, processor: "GlassBoxTraceProcessor", run_id: str, fortune_id: str) -> None:
+        self.processor = processor
+        self.run_id = run_id
+        self.fortune_id = fortune_id
+        self.steps: list[TraceStep] = []
+        self._started = time.monotonic()
+        self._counter = 0
+
+    def _span_id(self, agent_name: str, tool_name: str | None, step_type: str) -> str:
+        self._counter += 1
+        seed = f"{self.run_id}:{self._counter}:{agent_name}:{tool_name or step_type}"
+        return f"ts_{uuid.uuid5(uuid.NAMESPACE_URL, seed).hex[:8]}"
+
+    @contextmanager
+    def step(
+        self,
+        step_type: str,
+        agent_name: str,
+        *,
+        tool_name: str | None = None,
+        label: str = "",
+        input_summary: str = "",
+    ) -> Generator[TraceStep, None, None]:
+        span_id = self._span_id(agent_name, tool_name, step_type)
+        item = TraceStep(
+            step_id=span_id,
+            step_type=step_type,
+            agent_name=agent_name,
+            tool_name=tool_name,
+            label=self.processor.redact(self.run_id, label),
+            input_summary=self.processor.redact(self.run_id, input_summary),
+            status="running",
+        )
+        self.steps.append(item)
+        started = datetime.now(timezone.utc)
+        t0 = time.monotonic()
+        try:
+            yield item
+            item.status = "success"
+        except Exception as exc:
+            item.status = "error"
+            item.output_summary = self.processor.redact(self.run_id, str(exc))
+            raise
+        finally:
+            item.duration_ms = round((time.monotonic() - t0) * 1000, 1)
+            item.output_summary = self.processor.redact(self.run_id, item.output_summary)
+            self.processor.enqueue_manual(
+                run_id=self.run_id,
+                span_id=span_id,
+                phase="complete",
+                agent_name=agent_name,
+                tool_name=tool_name,
+                started_at=started,
+                ended_at=datetime.now(timezone.utc),
+                status=item.status,
+                arg_summary=item.input_summary,
+                result_summary=item.output_summary,
+            )
+
+    def add_instant(
+        self,
+        step_type: str,
+        agent_name: str,
+        *,
+        tool_name: str | None = None,
+        label: str = "",
+        input_summary: str = "",
+        output_summary: str = "",
+    ) -> TraceStep:
+        span_id = self._span_id(agent_name, tool_name, step_type)
+        item = TraceStep(
+            step_id=span_id,
+            step_type=step_type,
+            agent_name=agent_name,
+            tool_name=tool_name,
+            label=self.processor.redact(self.run_id, label),
+            input_summary=self.processor.redact(self.run_id, input_summary),
+            output_summary=self.processor.redact(self.run_id, output_summary),
+            duration_ms=0.0,
+            status="success",
+        )
+        self.steps.append(item)
+        now = datetime.now(timezone.utc)
+        self.processor.enqueue_manual(
+            run_id=self.run_id,
+            span_id=span_id,
+            phase="complete",
+            agent_name=agent_name,
+            tool_name=tool_name,
+            started_at=now,
+            ended_at=now,
+            status="success",
+            arg_summary=item.input_summary,
+            result_summary=item.output_summary,
+        )
+        return item
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "totalDurationMs": round((time.monotonic() - self._started) * 1000, 1),
+            "toolCallCount": sum(s.step_type == "tool_call" for s in self.steps),
+            "llmCallCount": sum(s.step_type == "llm_start" for s in self.steps),
+            "stepCount": len(self.steps),
+        }
 
 
 class GlassBoxTraceProcessor:
-    """Minimal TracingProcessor that projects SDK spans into ``fortune_trace``.
-
-    Not a subclass because the SDK's abstract base class import path has
-    shifted across versions (``agents.tracing.TracingProcessor``). Duck-typing
-    against the expected method names keeps us compatible across minor
-    versions in the 0.13–0.14 range.
-    """
+    """Single SDK/manual trace pathway with pre-enqueue redaction."""
 
     def __init__(self, run_id_resolver=None) -> None:
-        """``run_id_resolver`` (optional) maps ``trace_id`` → database run_id.
-
-        We set ``trace_id=str(run_id)`` on ``RunConfig`` at the route layer,
-        so the default resolver just parses it as a UUID. An override is only
-        needed if we later route multiple concurrent traces through one run.
-        """
         self._resolver = run_id_resolver or self._default_resolver
-        # Track outstanding fire-and-forget writes so ``aflush`` can drain them
-        # on shutdown. Plain set + discard callback avoids GC races on the
-        # tasks (asyncio holds only weak references to bare create_task tasks).
-        self._pending: set[asyncio.Task] = set()
+        self._pending: dict[asyncio.Task, str] = {}
+        self._runs: dict[str, RunTrace] = {}
+        self._sensitive: dict[str, tuple[str, ...]] = {}
 
     @staticmethod
     def _default_resolver(trace_id: str | None) -> str | None:
-        """Parse ``trace_{hex32}`` back to a UUID string the ``fortune_run`` row can match.
-
-        Agents SDK requires ``trace_id`` to start with ``trace_``, so we set
-        it as ``trace_{uuid_without_dashes}`` at the route layer and invert
-        that here. Falls through any other format as-is for forward-compat.
-        """
         if not trace_id:
             return None
-        raw = trace_id
-        if raw.startswith("trace_"):
-            raw = raw[len("trace_"):]
-        # uuid.UUID accepts both hex-only and hyphenated forms.
+        raw = trace_id.removeprefix("trace_")
         try:
-            import uuid as _uuid
-            return str(_uuid.UUID(raw))
+            return str(uuid.UUID(raw))
         except (ValueError, TypeError):
             return trace_id
 
-    # ------------------------------------------------------------------
-    # TracingProcessor protocol
-    # ------------------------------------------------------------------
+    def begin_run(
+        self,
+        run_id: str | None,
+        fortune_id: str,
+        *,
+        sensitive_values: list[str | None] | None = None,
+    ) -> RunTrace:
+        resolved = run_id or fortune_id
+        values = tuple(v for v in (sensitive_values or []) if isinstance(v, str) and v)
+        if values:
+            self._sensitive[resolved] = values
+        trace = self._runs.get(resolved)
+        if trace is None:
+            trace = RunTrace(self, resolved, fortune_id)
+            self._runs[resolved] = trace
+        return trace
 
-    def on_trace_start(self, trace: Any) -> None:  # pragma: no cover - noop
-        pass
+    def redact(self, run_id: str, value: Any) -> str:
+        text = _bounded_text(value)
+        for secret in sorted(self._sensitive.get(run_id, ()), key=len, reverse=True):
+            text = text.replace(secret, "[redacted]")
+            if "T" in secret:
+                text = text.replace(secret.split("T", 1)[0], "[redacted]")
+        return _ISO_DATE_RE.sub("[redacted]", text)[:_MAX_SUMMARY]
 
-    def on_trace_end(self, trace: Any) -> None:  # pragma: no cover - noop
-        pass
-
-    def _schedule(self, coro) -> None:
-        """Fire-and-forget a write while keeping a strong reference so aflush
-        can drain it. Swallows the 'no running loop' case (shutdown path)."""
+    def _schedule(self, run_id: str, projection: dict[str, Any]) -> None:
+        # ``projection`` is already allowlisted and redacted here. Raw SDK
+        # span objects never cross the task boundary.
         try:
-            task = asyncio.get_running_loop().create_task(coro)
+            task = asyncio.get_running_loop().create_task(self._deliver(projection))
         except RuntimeError:
-            coro.close()
             return
-        self._pending.add(task)
-        task.add_done_callback(self._pending.discard)
+        self._pending[task] = run_id
+        task.add_done_callback(self._pending.pop)
+
+    def _projection(
+        self,
+        *,
+        run_id: str,
+        span_id: str,
+        phase: str,
+        span_type: str,
+        agent_name: str | None,
+        tool_name: str | None,
+        started_at: datetime | None,
+        ended_at: datetime | None,
+        status: str,
+        arg_summary: Any = "",
+        result_summary: Any = "",
+        parent_span_id: str | None = None,
+        model: str | None = None,
+    ) -> dict[str, Any]:
+        duration = None
+        if started_at is not None and ended_at is not None:
+            duration = max(0, int((ended_at - started_at).total_seconds() * 1000))
+        return {
+            "eventId": f"{run_id}:{span_id}:{phase}",
+            "runId": run_id,
+            "spanId": span_id,
+            "phase": phase,
+            "parentSpanId": parent_span_id,
+            "spanType": span_type,
+            "agentName": self.redact(run_id, agent_name),
+            "toolName": self.redact(run_id, tool_name),
+            "model": self.redact(run_id, model),
+            "durationMs": duration,
+            "status": status,
+            "argSummary": self.redact(run_id, arg_summary),
+            "resultSummary": self.redact(run_id, result_summary),
+            "startedAt": started_at.isoformat() if started_at else None,
+            "endedAt": ended_at.isoformat() if ended_at else None,
+        }
+
+    def enqueue_manual(self, **fields: Any) -> None:
+        projection = self._projection(span_type="deterministic", **fields)
+        try:
+            from .state import is_v2_pipeline
+            if not is_v2_pipeline():
+                return
+        except Exception:
+            return
+        self._schedule(projection["runId"], projection)
+
+    def on_trace_start(self, trace: Any) -> None:
+        return None
+
+    def on_trace_end(self, trace: Any) -> None:
+        return None
+
+    def _sdk_projection(self, span: Any, phase: str) -> dict[str, Any] | None:
+        data = _safe_get(span, "span_data", "data")
+        run_id = self._resolver(_safe_get(span, "trace_id"))
+        span_id = _safe_get(span, "span_id", "id")
+        if not run_id or not span_id:
+            return None
+        kind = type(data).__name__.lower().replace("spandata", "") or "unknown"
+        error = _safe_get(span, "error")
+        triggered = bool(_safe_get(data, "triggered"))
+        status = "running" if phase == "start" else "error" if error else "rejected" if triggered else "success"
+        # Only function spans expose bounded arg/result summaries. Generation
+        # inputs/outputs contain the full birth profile and question and are
+        # intentionally never projected.
+        is_function = kind == "function"
+        return self._projection(
+            run_id=run_id,
+            span_id=str(span_id),
+            phase=phase,
+            span_type=kind,
+            agent_name=_safe_get(data, "agent_name") or (_safe_get(data, "name") if kind == "agent" else None),
+            tool_name=_safe_get(data, "name") if is_function else None,
+            parent_span_id=_safe_get(span, "parent_id", "parent_span_id"),
+            model=_safe_get(data, "model", "model_name"),
+            started_at=_iso(_safe_get(span, "started_at", "start_time", "timestamp")),
+            ended_at=_iso(_safe_get(span, "ended_at", "end_time")),
+            status=status,
+            arg_summary=_safe_get(data, "input") if is_function else "",
+            result_summary=_safe_get(data, "output") if is_function else "",
+        )
 
     def on_span_start(self, span: Any) -> None:
-        """Write an initial row so partial traces survive a crash before span_end."""
-        fields = _extract_span_fields(span)
-        run_id = self._resolver(fields.get("trace_id"))
-        if not run_id or not fields.get("span_id"):
-            return
-        self._schedule(self._write_span(run_id, fields, is_start=True))
+        projection = self._sdk_projection(span, "start")
+        if projection:
+            self._schedule(projection["runId"], projection)
 
     def on_span_end(self, span: Any) -> None:
-        fields = _extract_span_fields(span)
-        run_id = self._resolver(fields.get("trace_id"))
-        if not run_id or not fields.get("span_id"):
-            return
-        self._schedule(self._write_span(run_id, fields, is_start=False))
+        projection = self._sdk_projection(span, "end")
+        if projection:
+            self._schedule(projection["runId"], projection)
 
-    def shutdown(self) -> None:  # pragma: no cover - sync-side noop
-        # SDK protocol requires a sync method. Real draining happens in
-        # ``aflush`` which the FastAPI shutdown hook awaits directly.
-        pass
+    async def _deliver(self, projection: dict[str, Any]) -> None:
+        await asyncio.gather(
+            self._publish_live(projection),
+            self._write_projection(projection),
+            return_exceptions=True,
+        )
 
-    def force_flush(self) -> None:  # pragma: no cover - sync-side noop
-        pass
-
-    async def aflush(self, timeout: float = 3.0) -> None:
-        """Await outstanding span writes up to ``timeout`` seconds.
-
-        Called from the FastAPI shutdown hook so the tail of a trace makes it
-        to Postgres before the worker exits. Timeout bounds the worst case so
-        shutdown can't hang on a slow/unreachable database.
-        """
-        if not self._pending:
-            return
-        pending = list(self._pending)
+    async def _publish_live(self, projection: dict[str, Any]) -> None:
         try:
-            await asyncio.wait_for(
-                asyncio.gather(*pending, return_exceptions=True),
-                timeout=timeout,
+            from .state import is_v2_pipeline
+            if not is_v2_pipeline():
+                return
+            from . import events
+            await events.publish_envelope(
+                projection["runId"],
+                {
+                    "run_id": projection["runId"],
+                    "payload": {"kind": "trace", "trace": projection},
+                },
             )
-        except asyncio.TimeoutError:
-            logger.warning(
-                "[FORTUNE] trace flush timed out after %.1fs with %d writes pending",
-                timeout, len(self._pending),
-            )
+        except Exception as exc:
+            logger.warning("[FORTUNE] live trace publish failed: %s", exc)
 
-    # ------------------------------------------------------------------
-    # Durable write
-    # ------------------------------------------------------------------
-
-    async def _write_span(
-        self, run_id: str, fields: dict[str, Any], is_start: bool
-    ) -> None:
+    async def _write_projection(self, projection: dict[str, Any]) -> None:
+        try:
+            run_uuid = uuid.UUID(projection["runId"])
+        except (ValueError, TypeError):
+            return
         try:
             from .store import get_repository
-        except ImportError:
-            from store import get_repository  # type: ignore[no-redef]
-        try:
             repo = await get_repository()
             if not repo.available:
                 return
-            import uuid as _uuid
-            try:
-                run_uuid = _uuid.UUID(run_id)
-            except (ValueError, TypeError):
-                return
-            duration_ms = _span_duration_ms(fields)
-            # Upsert by (run_id, span_id). on_span_start inserts; on_span_end
-            # updates ended_at + duration. Using ON CONFLICT for idempotency
-            # in case both fire in unusual orders (e.g., retries).
-            import json as _json
             await repo.pool.execute(
                 """
                 INSERT INTO fortune_trace (
-                    run_id, span_id, parent_span_id, span_type,
-                    agent_name, tool_name, model,
-                    started_at, ended_at, duration_ms, error
-                )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-                ON CONFLICT (run_id, span_id) DO UPDATE SET
-                    ended_at    = COALESCE(EXCLUDED.ended_at, fortune_trace.ended_at),
+                    run_id, span_id, phase, parent_span_id, span_type,
+                    agent_name, tool_name, model, input_json, output_json,
+                    error, started_at, ended_at, duration_ms
+                ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11,$12,$13,$14)
+                ON CONFLICT (run_id, span_id, phase) DO UPDATE SET
+                    ended_at = COALESCE(EXCLUDED.ended_at, fortune_trace.ended_at),
                     duration_ms = COALESCE(EXCLUDED.duration_ms, fortune_trace.duration_ms),
-                    error       = COALESCE(EXCLUDED.error, fortune_trace.error),
-                    agent_name  = COALESCE(fortune_trace.agent_name, EXCLUDED.agent_name),
-                    tool_name   = COALESCE(fortune_trace.tool_name, EXCLUDED.tool_name),
-                    model       = COALESCE(fortune_trace.model, EXCLUDED.model)
+                    error = COALESCE(EXCLUDED.error, fortune_trace.error),
+                    input_json = EXCLUDED.input_json,
+                    output_json = EXCLUDED.output_json
                 """,
                 run_uuid,
-                str(fields["span_id"]),
-                fields.get("parent_span_id") and str(fields["parent_span_id"]),
-                fields.get("span_type") or "unknown",
-                fields.get("agent_name"),
-                fields.get("tool_name"),
-                fields.get("model"),
-                fields.get("started_at"),
-                fields.get("ended_at"),
-                duration_ms,
-                fields.get("error"),
+                projection["spanId"],
+                projection["phase"],
+                projection["parentSpanId"],
+                projection["spanType"],
+                projection["agentName"] or None,
+                projection["toolName"] or None,
+                projection["model"] or None,
+                json.dumps({"summary": projection["argSummary"]}),
+                json.dumps({"summary": projection["resultSummary"], "status": projection["status"]}),
+                projection["resultSummary"] if projection["status"] == "error" else None,
+                _iso(projection["startedAt"]),
+                _iso(projection["endedAt"]),
+                projection["durationMs"],
             )
-        except Exception as exc:  # pragma: no cover - best-effort persistence
+        except Exception as exc:
             logger.warning(
-                "[FORTUNE] trace span persist failed (run_id=%s span=%s): %s",
-                run_id, fields.get("span_id"), exc,
+                "[FORTUNE] trace projection persist failed run=%s span=%s: %s",
+                projection["runId"], projection["spanId"], exc,
             )
+
+    def shutdown(self) -> None:
+        return None
+
+    def force_flush(self) -> None:
+        return None
+
+    async def aflush(self, timeout: float = 3.0, run_id: str | None = None) -> None:
+        pending = [task for task, owner in self._pending.items() if run_id is None or owner == run_id]
+        if not pending:
+            return
+        try:
+            await asyncio.wait_for(asyncio.gather(*pending, return_exceptions=True), timeout=timeout)
+        except asyncio.TimeoutError:
+            logger.warning("[FORTUNE] trace flush timed out with %d events pending", len(pending))
 
 
 _registered = False
 _processor: GlassBoxTraceProcessor | None = None
 
 
+def get_trace_processor() -> GlassBoxTraceProcessor:
+    global _processor
+    if _processor is None:
+        _processor = GlassBoxTraceProcessor()
+    return _processor
+
+
 def ensure_registered() -> None:
-    """Register the processor with the SDK (idempotent, called from startup)."""
-    global _registered, _processor
+    global _registered
     if _registered:
         return
     try:
         from agents import add_trace_processor
-    except ImportError:  # pragma: no cover - SDK not installed in dev shell
-        logger.warning("[FORTUNE] agents SDK not importable; trace processor disabled")
-        return
-    try:
-        _processor = GlassBoxTraceProcessor()
-        add_trace_processor(_processor)
+        add_trace_processor(get_trace_processor())
         _registered = True
         logger.info("[FORTUNE] GlassBoxTraceProcessor registered")
     except Exception as exc:
         logger.error("[FORTUNE] trace processor registration failed: %s", exc)
 
 
-async def flush_pending_spans(timeout: float = 3.0) -> None:
-    """Module-level entry point for shutdown hooks — awaits span writes."""
-    if _processor is None:
-        return
-    await _processor.aflush(timeout=timeout)
+async def flush_pending_spans(timeout: float = 3.0, run_id: str | None = None) -> None:
+    await get_trace_processor().aflush(timeout=timeout, run_id=run_id)

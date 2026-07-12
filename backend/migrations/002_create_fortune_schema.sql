@@ -68,7 +68,7 @@ CREATE TABLE IF NOT EXISTS public.fortune_run (
     run_kind TEXT NOT NULL CHECK (run_kind IN ('initial', 'action')),
     action_type TEXT,
     status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN (
-        'queued', 'streaming', 'done', 'error', 'interrupted'
+        'queued', 'streaming', 'done', 'failed_guardrail', 'error', 'interrupted'
     )),
     agent_session_id TEXT,
     model_used TEXT,
@@ -220,6 +220,7 @@ CREATE TABLE IF NOT EXISTS public.fortune_trace (
     id BIGSERIAL PRIMARY KEY,
     run_id UUID NOT NULL REFERENCES public.fortune_run(id) ON DELETE CASCADE,
     span_id TEXT NOT NULL,
+    phase TEXT NOT NULL DEFAULT 'complete',
     parent_span_id TEXT,
     span_type TEXT NOT NULL,
     agent_name TEXT,
@@ -233,8 +234,8 @@ CREATE TABLE IF NOT EXISTS public.fortune_trace (
     duration_ms INTEGER
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_fortune_trace_run_span
-    ON public.fortune_trace (run_id, span_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_fortune_trace_run_span_phase
+    ON public.fortune_trace (run_id, span_id, phase);
 CREATE INDEX IF NOT EXISTS idx_fortune_trace_run_started
     ON public.fortune_trace (run_id, started_at);
 

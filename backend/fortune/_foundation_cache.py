@@ -3,7 +3,7 @@
 PR3 of the latency refactor — these caches are meant to remove the
 per-request cost of recomputing chart-derived data that depends ONLY on
 inputs we already have at request time. They never cache anything that
-contains mutable runtime state (e.g. the `TraceCollector` object that
+contains mutable runtime state (e.g. the run-scoped trace view that
 ``run_foundation`` returns) — caching that would leak trace steps across
 sessions.
 
