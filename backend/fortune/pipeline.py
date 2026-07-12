@@ -1,8 +1,7 @@
-"""Fortune run pipeline — frame producer shared by v1 SSE and v2 Redis Streams.
+"""Fortune run pipeline — A2UI frame producer + Redis Streams publisher.
 
-Extracted from ``routes.py`` Phase 1. Emits the same A2UI envelope JSON the
-SSE layer has always sent. v1 yields frames directly; v2 publishes to
-``events.py`` and lets ``/stream`` tail the Redis stream.
+Extracted from ``routes.py``. Emits the same A2UI envelope JSON the SSE layer
+has always sent; ``run_and_publish`` XADDs each envelope and ``/stream`` tails.
 """
 
 from __future__ import annotations
@@ -146,9 +145,8 @@ def _build_ask_original_input(req: Any) -> dict[str, Any] | None:
 def _local_seq_allocator() -> Any:
     """Monotonic per-run seq for envelope compatibility with the frontend dedupe.
 
-    Replaces the Postgres ``allocate_seq`` / ``allocate_seq_batch`` machinery.
-    ``fortune_run.last_emitted_seq`` is no longer written from the hot path;
-    resume cursors are Redis stream IDs (v2) or full replay (v1 reconnect).
+    ``fortune_run.last_emitted_seq`` is no longer written; resume cursors are
+    Redis stream IDs. Column drop deferred to a later migration.
     """
     counter = {"n": 0}
 
@@ -174,7 +172,7 @@ async def iter_fortune_sse_frames(session, *, request=None, store=None):
 
 
 async def run_and_publish(session, *, store=None, lock_token: str | None = None) -> None:
-    """v2 background runner: publish each frame envelope to Redis Streams."""
+    """Background runner: publish each frame envelope to Redis Streams."""
     if store is None:
         store = get_run_state()
     run_id = session.run_id or ""

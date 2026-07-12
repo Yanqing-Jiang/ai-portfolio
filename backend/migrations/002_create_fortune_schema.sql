@@ -195,6 +195,9 @@ CREATE INDEX IF NOT EXISTS idx_fortune_message_fortune_created
 CREATE TABLE IF NOT EXISTS public.fortune_snapshot (
     fortune_id UUID PRIMARY KEY REFERENCES public.fortune(id) ON DELETE CASCADE,
     snapshot_version INTEGER NOT NULL DEFAULT 1,
+    -- schema_version: 1 = legacy latest_* only; 2 = also carries data_model.
+    -- Distinct from snapshot_version (per-upsert ETag revision counter).
+    schema_version INTEGER NOT NULL DEFAULT 1,
     latest_overview JSONB,
     latest_pillars JSONB,
     latest_mechanics JSONB,
@@ -202,6 +205,8 @@ CREATE TABLE IF NOT EXISTS public.fortune_snapshot (
     latest_trace JSONB,
     latest_references JSONB,
     latest_retrodictions JSONB,
+    -- Accumulated A2UI FortuneDataModel (camelCase); NULL on schema_version=1 rows.
+    data_model JSONB,
     status TEXT NOT NULL DEFAULT 'partial' CHECK (status IN ('partial', 'done')),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

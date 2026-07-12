@@ -59,6 +59,7 @@ try:
         _snapshot_references,
         _to_jsonable,
     )
+    from .snapshot_model import DataModelAccumulator
 except ImportError:  # pragma: no cover
     from agents import (  # type: ignore[no-redef]
         DEFAULT_FOLLOW_UP_BUTTONS,
@@ -92,6 +93,7 @@ except ImportError:  # pragma: no cover
         _snapshot_references,
         _to_jsonable,
     )
+    from snapshot_model import DataModelAccumulator  # type: ignore[no-redef]
 
 
 async def _events_or_tripwire(stream_result: Any):
@@ -271,6 +273,9 @@ async def _event_generator_impl(session, *, request=None, store=None):
         run_uuid = None
 
     _alloc_seq = _local_seq_allocator()
+    # Server-side mirror of the frontend Zustand dataModel — dual-written into
+    # fortune_snapshot.data_model (schema_version=2) at each checkpoint.
+    data_model_acc = DataModelAccumulator()
 
     async def _emit(payload: str) -> str:
         seq = await _alloc_seq()
@@ -284,6 +289,9 @@ async def _event_generator_impl(session, *, request=None, store=None):
             "seq": seq,
             "payload": inner,
         }
+        # Accumulate every published dataModelUpdate (including buffered
+        # narrative frames, which are only built after the guardrail passes).
+        data_model_acc.apply_payload(inner)
         return f"data: {_json.dumps(env)}\n\n"
 
     pending_cleared = False
@@ -529,6 +537,8 @@ async def _event_generator_impl(session, *, request=None, store=None):
                         {"items": _to_jsonable(retrodictions)}
                         if retrodictions else None
                     ),
+                    data_model=data_model_acc.snapshot(),
+                    schema_version=2,
                 )
             except Exception as exc:
                 logger.warning(
@@ -1002,6 +1012,8 @@ async def _event_generator_impl(session, *, request=None, store=None):
                     pillars=_snapshot_pillars(session, foundation),
                     references=_snapshot_references(foundation),
                     retrodictions={"items": _to_jsonable(retrodictions)} if retrodictions else None,
+                    data_model=data_model_acc.snapshot(),
+                    schema_version=2,
                 )
             except Exception as exc:
                 logger.warning("[FORTUNE] partial snapshot persistence failed: %s", exc)
@@ -1065,6 +1077,16 @@ async def _event_generator_impl(session, *, request=None, store=None):
         )
         session.touch(RuntimeStatus.complete)
 
+        # Fold the terminal completion frames into the accumulator BEFORE the
+        # final upsert so the persisted data_model replays as complete, not
+        # streaming. _emit re-applies them afterwards; the merge is idempotent.
+        complete_msgs = list(bridge.emit_complete())
+        for msg in complete_msgs:
+            try:
+                data_model_acc.apply_payload(_json.loads(msg))
+            except (ValueError, TypeError):
+                pass
+
         if run_uuid is not None:
             try:
                 await repo.upsert_snapshot(
@@ -1075,13 +1097,15 @@ async def _event_generator_impl(session, *, request=None, store=None):
                     pillars=_snapshot_pillars(session, foundation),
                     references=_snapshot_references(foundation),
                     retrodictions={"items": _to_jsonable(retrodictions)} if retrodictions else None,
+                    data_model=data_model_acc.snapshot(),
+                    schema_version=2,
                 )
                 await repo.update_run_status(run_uuid, "done")
             except Exception as exc:
                 logger.warning("[FORTUNE] snapshot/status persistence failed: %s", exc)
 
         await flush_pending_spans(run_id=run_id)
-        for msg in bridge.emit_complete():
+        for msg in complete_msgs:
             yield await _emit(msg)
 
     except Exception as exc:

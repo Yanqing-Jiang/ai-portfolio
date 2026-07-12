@@ -47,7 +47,6 @@ class _Pool:
 
 @pytest.mark.asyncio
 async def test_trace_redaction_canaries_absent_from_live_and_db(monkeypatch):
-    monkeypatch.setenv("FORTUNE_PIPELINE", "v2")
     processor = GlassBoxTraceProcessor()
     pool = _Pool()
     repo = SimpleNamespace(available=True, pool=pool)
@@ -68,7 +67,6 @@ async def test_trace_redaction_canaries_absent_from_live_and_db(monkeypatch):
     )
     with patch("fortune.agents.get_trace_processor", return_value=processor), \
          patch("fortune.store.get_repository", AsyncMock(return_value=repo)), \
-         patch("fortune.state.is_v2_pipeline", return_value=True), \
          patch("fortune.events.publish_envelope", _publish):
         foundation = await run_foundation(ctx)
         trace = foundation["trace"]
@@ -143,7 +141,6 @@ def _rejected_output() -> EnrichedNarrativeOutput:
 
 @pytest.mark.asyncio
 async def test_guardrail_tripwire_never_publishes_or_snapshots_narrative(monkeypatch):
-    monkeypatch.setenv("FORTUNE_PIPELINE", "v1")
     reset_run_state_for_tests()
     store = get_run_state()
     session = FortuneSession(

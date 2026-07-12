@@ -279,12 +279,6 @@ class GlassBoxTraceProcessor:
 
     def enqueue_manual(self, **fields: Any) -> None:
         projection = self._projection(span_type="deterministic", **fields)
-        try:
-            from .state import is_v2_pipeline
-            if not is_v2_pipeline():
-                return
-        except Exception:
-            return
         self._schedule(projection["runId"], projection)
 
     def on_trace_start(self, trace: Any) -> None:
@@ -342,9 +336,6 @@ class GlassBoxTraceProcessor:
 
     async def _publish_live(self, projection: dict[str, Any]) -> None:
         try:
-            from .state import is_v2_pipeline
-            if not is_v2_pipeline():
-                return
             from . import events
             await events.publish_envelope(
                 projection["runId"],

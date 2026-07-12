@@ -78,8 +78,6 @@ try:
         PersonBirthInfo as _StatePersonBirthInfo,
         RuntimeStatus,
         get_run_state,
-        is_v2_pipeline,
-        pipeline_mode,
     )
     from . import events as fortune_events
     from . import pipeline as fortune_pipeline
@@ -114,8 +112,6 @@ except ImportError:
         PersonBirthInfo as _StatePersonBirthInfo,
         RuntimeStatus,
         get_run_state,
-        is_v2_pipeline,
-        pipeline_mode,
     )
     import events as fortune_events  # type: ignore[no-redef]
     import pipeline as fortune_pipeline  # type: ignore[no-redef]
@@ -446,53 +442,51 @@ async def create_fortune(request_body: CreateFortuneRequest, request: Request):
         request=_StateCreateFortuneRequest.model_validate(normalized.model_dump()),
     )
 
-    if is_v2_pipeline():
-        try:
-            await fortune_events.get_events_redis(required=True)
-        except fortune_events.RedisUnavailable as exc:
-            logger.error("[FORTUNE] Redis unavailable at create (v2): %s", exc)
-            raise HTTPException(
-                status_code=503,
-                detail={
-                    "error": "redis_unavailable",
-                    "message": "Fortune service temporarily unavailable. Please retry shortly.",
-                },
-                headers={"Retry-After": "30"},
-            ) from exc
-        try:
-            await store.put(session)
-        except Exception as exc:
-            logger.error("[FORTUNE] state put failed at create (v2): %s", exc)
-            raise HTTPException(
-                status_code=503,
-                detail={
-                    "error": "redis_unavailable",
-                    "message": "Fortune service temporarily unavailable. Please retry shortly.",
-                },
-                headers={"Retry-After": "30"},
-            ) from exc
-        await fortune_events.set_run_record(
-            run_id_str, fortune_id=fortune_id_str, status="queued",
-        )
-        lock_token = await store.acquire_lock(fortune_id_str)
-        if lock_token is None:  # pragma: no cover - new UUID cannot be contended
-            raise HTTPException(
-                status_code=409,
-                detail="This fortune is busy; retry the reading.",
-                headers={"Retry-After": "3"},
-            )
-        # DEBT: run task dies with its owning worker; no runner service/lease.
-        # Upgrade when workers > 1 or deploys must not kill active runs.
-        asyncio.create_task(
-            fortune_pipeline.run_and_publish_safe(
-                session, store=store, lock_token=lock_token,
-            )
-        )
-    else:
+    # Redis is correctness-critical: fail closed at create (no in-proc fallback).
+    try:
+        await fortune_events.get_events_redis(required=True)
+    except fortune_events.RedisUnavailable as exc:
+        logger.error("[FORTUNE] Redis unavailable at create: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "redis_unavailable",
+                "message": "Fortune service temporarily unavailable. Please retry shortly.",
+            },
+            headers={"Retry-After": "30"},
+        ) from exc
+    try:
         await store.put(session)
+    except Exception as exc:
+        logger.error("[FORTUNE] state put failed at create: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "redis_unavailable",
+                "message": "Fortune service temporarily unavailable. Please retry shortly.",
+            },
+            headers={"Retry-After": "30"},
+        ) from exc
+    await fortune_events.set_run_record(
+        run_id_str, fortune_id=fortune_id_str, status="queued",
+    )
+    lock_token = await store.acquire_lock(fortune_id_str)
+    if lock_token is None:  # pragma: no cover - new UUID cannot be contended
+        raise HTTPException(
+            status_code=409,
+            detail="This fortune is busy; retry the reading.",
+            headers={"Retry-After": "3"},
+        )
+    # DEBT: run task dies with its owning worker; no runner service/lease.
+    # Upgrade when workers > 1 or deploys must not kill active runs.
+    asyncio.create_task(
+        fortune_pipeline.run_and_publish_safe(
+            session, store=store, lock_token=lock_token,
+        )
+    )
 
-    logger.info("[FORTUNE] create fortune=%s run=%s focus=%s degraded=%s pipeline=%s",
-                fortune_id_str, run_id_str, normalized.focus, degraded_persistence, pipeline_mode())
+    logger.info("[FORTUNE] create fortune=%s run=%s focus=%s degraded=%s",
+                fortune_id_str, run_id_str, normalized.focus, degraded_persistence)
 
     response_payload = {
         "fortune_id": fortune_id_str,
@@ -643,9 +637,13 @@ async def get_fortune_replay(
         retrodictions_unpacked.get("corrections")
         if isinstance(retrodictions_unpacked, dict) else None
     )
+    schema_version = row.get("schema_version")
+    if schema_version is None:
+        schema_version = 1
     payload = {
         "fortune_id": fortune_id,
         "snapshot_version": snapshot_version,
+        "schema_version": int(schema_version),
         "status": snapshot_status,
         "metadata": _replay_metadata(row),
         "data": {
@@ -658,6 +656,8 @@ async def get_fortune_replay(
             "retrodictions": retrodictions_unpacked,
             "corrections": corrections_block,
         },
+        # Additive v2 field; NULL/absent on schema_version=1 rows (dual-read).
+        "data_model": _unpack_jsonb(row.get("data_model")),
     }
 
     return JSONResponse(
@@ -672,6 +672,7 @@ async def stream_fortune(
     request: Request,
     after: str | None = None,
 ):
+    """Tail Redis Streams for a run. Independent cursors — no consumer groups."""
     await smart_rate_limit(request, scope=RateLimitScope.FORTUNE_STREAM, weight=1)
 
     store = get_run_state()
@@ -680,62 +681,6 @@ async def stream_fortune(
     # Resume cursor: Last-Event-ID header OR ?after=<redis-id>
     last_event_id = request.headers.get("last-event-id") or request.headers.get("Last-Event-ID")
     cursor = after or last_event_id or "0-0"
-
-    if is_v2_pipeline():
-        return await _stream_fortune_v2(fortune_id, request, session, store, cursor)
-
-    if session is None:
-        raise HTTPException(status_code=404, detail="Fortune session not found")
-
-    # v1: single in-flight stream per fortune (process-local lock semantics)
-    if await store.lock_is_held_async(fortune_id):
-        raise HTTPException(
-            status_code=409,
-            detail="A stream is already in progress for this fortune.",
-            headers={"Retry-After": "5"},
-        )
-
-    lock_token = await store.acquire_lock(fortune_id)
-    if lock_token is None:
-        raise HTTPException(
-            status_code=409,
-            detail="A stream is already in progress for this fortune.",
-            headers={"Retry-After": "5"},
-        )
-
-    async def event_generator():
-        try:
-            async for frame in fortune_pipeline.iter_fortune_sse_frames(
-                session, request=request, store=store,
-            ):
-                yield frame
-        finally:
-            # Session object is mutated in-place in the memory overlay; sync once.
-            try:
-                await store.put(session)
-            except Exception:
-                pass
-            await store.release_lock(fortune_id, lock_token)
-
-    return StreamingResponse(
-        with_heartbeat(event_generator()),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache, no-transform",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
-
-
-async def _stream_fortune_v2(
-    fortune_id: str,
-    request: Request,
-    session,
-    store,
-    cursor: str,
-):
-    """Tail Redis Streams for a run. Independent cursors — no consumer groups."""
     run_id = session.run_id if session is not None else None
 
     # Resolve unknown run: Redis run hash via session, else snapshot store.
@@ -883,16 +828,15 @@ async def handle_fortune_action(
         session.touch(RuntimeStatus.initialized)
         await store.put(session)
 
-        if is_v2_pipeline():
-            await fortune_events.set_run_record(
-                new_run_id, fortune_id=fortune_id, status="queued",
+        await fortune_events.set_run_record(
+            new_run_id, fortune_id=fortune_id, status="queued",
+        )
+        asyncio.create_task(
+            fortune_pipeline.run_and_publish_safe(
+                session, store=store, lock_token=lock_token,
             )
-            asyncio.create_task(
-                fortune_pipeline.run_and_publish_safe(
-                    session, store=store, lock_token=lock_token,
-                )
-            )
-            lock_token = None  # background task now owns the writer lock
+        )
+        lock_token = None  # background task now owns the writer lock
 
         return {
             "fortune_id": fortune_id,

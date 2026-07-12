@@ -1,8 +1,7 @@
 """Fortune domain store: Supabase-backed repository for the Ming Engine.
 
-Replaces the in-memory `FortuneStore` from `routes.py`. Durable records live
-in Supabase Postgres via asyncpg; active-run session state stays in-process
-for fast streaming.
+Durable records live in Supabase Postgres via asyncpg; active-run session
+state lives in Redis/memory via ``state.py``.
 
 Connection model
 ----------------
@@ -14,14 +13,10 @@ Public surface
 --------------
 - ``get_fortune_pool()``: lazy singleton asyncpg pool
 - ``FortuneRepository``: CRUD for fortune, fortune_run, fortune_snapshot,
-  fortune_message
-- ``allocate_seq(run_id)``: race-free per-run sequence allocation via
-  ``UPDATE fortune_run SET last_emitted_seq = last_emitted_seq + 1 RETURNING``
-- ``allocate_seq_batch(run_id, count)``: same row-locked atomicity, but
-  reserves a contiguous block of ``count`` seqs in one roundtrip. Caller
-  reconstructs the reserved range as ``[new_max - count + 1, new_max]``
-  and dispenses locally — used by the stream route to amortize DB latency
-  across the ~30 emits per fortune reading.
+  fortune_message, fortune_trace
+- ``last_emitted_seq`` column remains on ``fortune_run`` for a later drop
+  migration (Phase 3+); hot path no longer writes it (Redis stream IDs are
+  the resume cursor). ``allocate_seq`` / ``allocate_seq_batch`` deleted.
 """
 
 from __future__ import annotations
@@ -260,45 +255,6 @@ class FortuneRepository:
             started_at, finished_at,
         )
 
-    async def allocate_seq(self, run_id: UUID) -> int:
-        """Reserve the next replay seq atomically via UPDATE ... RETURNING."""
-        if self.pool is None:
-            return 0
-        row = await self.pool.fetchrow(
-            """
-            UPDATE fortune_run
-            SET last_emitted_seq = last_emitted_seq + 1
-            WHERE id = $1
-            RETURNING last_emitted_seq
-            """,
-            run_id,
-        )
-        return int(row["last_emitted_seq"]) if row else 0
-
-    async def allocate_seq_batch(self, run_id: UUID, count: int) -> int:
-        """Reserve a contiguous block of replay seqs in one Postgres roundtrip.
-
-        Returns the new ``last_emitted_seq`` after the bump. The reserved
-        range is ``[new_max - count + 1, new_max]`` inclusive — the caller
-        dispenses these locally without further DB hits, falling back to a
-        single-step ``allocate_seq`` only when the pool is unavailable. A
-        ``count`` of ≤0 is normalized to 1 so callers can't accidentally
-        burn seqs.
-        """
-        if self.pool is None:
-            return 0
-        n = max(1, int(count))
-        row = await self.pool.fetchrow(
-            """
-            UPDATE fortune_run
-            SET last_emitted_seq = last_emitted_seq + $2
-            WHERE id = $1
-            RETURNING last_emitted_seq
-            """,
-            run_id, n,
-        )
-        return int(row["last_emitted_seq"]) if row else 0
-
     # -- fortune_snapshot ---------------------------------------------------
 
     async def upsert_snapshot(
@@ -313,7 +269,14 @@ class FortuneRepository:
         trace: dict[str, Any] | None = None,
         references: dict[str, Any] | None = None,
         retrodictions: dict[str, Any] | None = None,
+        data_model: dict[str, Any] | None = None,
+        schema_version: int | None = None,
     ) -> None:
+        """Upsert snapshot. Dual-write: legacy ``latest_*`` + optional v2 ``data_model``.
+
+        When ``data_model`` is provided, ``schema_version`` defaults to 2.
+        Legacy-only callers leave both unset so schema_version/data_model stay.
+        """
         if self.pool is None:
             return
         import json
@@ -321,16 +284,20 @@ class FortuneRepository:
         def _j(v: Any) -> Any:
             return json.dumps(v) if v is not None else None
 
+        if data_model is not None and schema_version is None:
+            schema_version = 2
+
         await self.pool.execute(
             """
             INSERT INTO fortune_snapshot (
                 fortune_id, snapshot_version, status,
                 latest_overview, latest_pillars, latest_mechanics,
                 latest_narrative, latest_trace, latest_references,
-                latest_retrodictions
+                latest_retrodictions, schema_version, data_model
             )
             VALUES ($1, 1, $2, $3::jsonb, $4::jsonb, $5::jsonb,
-                    $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb)
+                    $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb,
+                    COALESCE($10, 1), $11::jsonb)
             ON CONFLICT (fortune_id) DO UPDATE SET
                 snapshot_version = fortune_snapshot.snapshot_version + 1,
                 status = EXCLUDED.status,
@@ -349,12 +316,16 @@ class FortuneRepository:
                         THEN fortune_snapshot.latest_retrodictions
                     ELSE COALESCE(fortune_snapshot.latest_retrodictions, '{}'::jsonb)
                          || EXCLUDED.latest_retrodictions
-                END
+                END,
+                schema_version = COALESCE($10, fortune_snapshot.schema_version),
+                data_model = COALESCE(EXCLUDED.data_model, fortune_snapshot.data_model)
             """,
             fortune_id, status,
             _j(overview), _j(pillars), _j(mechanics),
             _j(narrative), _j(trace), _j(references),
             _j(retrodictions),
+            schema_version,
+            _j(data_model),
         )
 
     async def upsert_correction(
@@ -449,10 +420,10 @@ class FortuneRepository:
             return None
         row = await self.pool.fetchrow(
             """
-            SELECT fortune_id, snapshot_version, status,
+            SELECT fortune_id, snapshot_version, schema_version, status,
                    latest_overview, latest_pillars, latest_mechanics,
                    latest_narrative, latest_trace, latest_references,
-                   latest_retrodictions, updated_at
+                   latest_retrodictions, data_model, updated_at
             FROM fortune_snapshot WHERE fortune_id = $1
             """,
             fortune_id,
@@ -484,6 +455,7 @@ class FortuneRepository:
                 f.locale,
                 f.created_at,
                 s.snapshot_version,
+                s.schema_version,
                 s.status            AS snapshot_status,
                 s.latest_overview,
                 s.latest_pillars,
@@ -492,6 +464,7 @@ class FortuneRepository:
                 s.latest_trace,
                 s.latest_references,
                 s.latest_retrodictions,
+                s.data_model,
                 s.updated_at        AS snapshot_updated_at
             FROM fortune f
             LEFT JOIN fortune_snapshot s ON s.fortune_id = f.id

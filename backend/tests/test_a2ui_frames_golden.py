@@ -1,11 +1,11 @@
 """Golden-file contract test for fortune A2UI/SSE frame sequences.
 
-Captures the exact envelope sequence the v1 pipeline emits for a fixed
+Captures the exact envelope sequence the shared pipeline producer emits for a fixed
 mocked run (real deterministic foundation + mocked narrative/guardrail)
 and asserts against a checked-in golden JSON file. Guards the wire
 contract through the Phase 1 refactor.
 
-Both FORTUNE_PIPELINE=v1 and the shared pipeline producer must match.
+Guards the A2UI/SSE frame wire contract across pipeline refactors.
 """
 
 from __future__ import annotations
@@ -222,7 +222,6 @@ async def _collect_pipeline_frames() -> list[dict[str, Any]]:
 
 @pytest.mark.asyncio
 async def test_a2ui_frames_golden_wish_v1(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("FORTUNE_PIPELINE", "v1")
     frames = await _collect_pipeline_frames()
 
     assert frames, "expected at least one SSE frame"

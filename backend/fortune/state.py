@@ -1,8 +1,8 @@
-"""Shared fortune run state (Phase 1) — Redis-backed registry.
+"""Shared fortune run state — Redis-backed registry with memory fallback.
 
-Replaces process-local ``FortuneStore``. On ``FORTUNE_PIPELINE=v2`` Redis is
-required (fail closed at create). On v1 / tests, falls back to an in-memory
-backend so the golden path runs without a live Redis.
+Replaces process-local ``FortuneStore``. Create/stream endpoints require Redis
+(fail closed). Tests and the session store keep an in-memory fallback when
+Redis is absent so pytest stays green without a live Redis.
 
 Keys:
   fortune:session:{fortune_id}  — JSON session blob (TTL 48h)
@@ -85,20 +85,6 @@ class FortuneSession(BaseModel):
     def touch(self, new_status: RuntimeStatus | None = None) -> None:
         if new_status is not None:
             self.status = new_status
-
-
-def pipeline_mode() -> str:
-    """Return ``v1`` (default) or ``v2`` from ``FORTUNE_PIPELINE``."""
-    try:
-        from .config import get_settings
-    except ImportError:  # pragma: no cover
-        from config import get_settings  # type: ignore[no-redef]
-    mode = (getattr(get_settings(), "pipeline", None) or os.getenv("FORTUNE_PIPELINE") or "v1")
-    return str(mode).strip().lower() or "v1"
-
-
-def is_v2_pipeline() -> bool:
-    return pipeline_mode() == "v2"
 
 
 class RedisUnavailable(RuntimeError):
@@ -204,10 +190,9 @@ class RunStateStore:
         self._lock_tokens: dict[str, str] = {}
 
     async def _redis(self, *, required: bool = False) -> Any:
-        # v2 always requires Redis for durable registry; v1 prefers Redis but
-        # falls back to memory so tests/dev without Redis keep working.
-        want_required = required or is_v2_pipeline()
-        return await get_state_redis(required=want_required)
+        # Prefer Redis; memory fallback when absent (pytest / degraded).
+        # Create/stream endpoints enforce Redis themselves (fail closed).
+        return await get_state_redis(required=required)
 
     def _apply_overlay(self, session: FortuneSession) -> FortuneSession:
         overlay = self._overlay.get(session.fortune_id)
@@ -246,8 +231,6 @@ class RunStateStore:
                         ex=CANCEL_TTL_SECONDS,
                     )
             except Exception as exc:
-                if is_v2_pipeline():
-                    raise RedisUnavailable(str(exc)) from exc
                 logger.warning("[FORTUNE-STATE] put redis failed; memory only: %s", exc)
         return session
 
@@ -344,8 +327,7 @@ class RunStateStore:
                 return token
             return None
         except Exception as exc:
-            if is_v2_pipeline():
-                raise RedisUnavailable(str(exc)) from exc
+            logger.warning("[FORTUNE-STATE] acquire_lock redis failed; memory: %s", exc)
             lock = self._memory_locks.setdefault(fortune_id, asyncio.Lock())
             if lock.locked():
                 return None

@@ -165,7 +165,6 @@ async def test_run_record_outside_stream(fake_redis):
 @pytest.mark.asyncio
 async def test_state_memory_fallback_without_redis(monkeypatch):
     reset_run_state_for_tests()
-    monkeypatch.setenv("FORTUNE_PIPELINE", "v1")
 
     async def _none(*, required=False):
         if required:
@@ -189,8 +188,7 @@ async def test_state_memory_fallback_without_redis(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_v2_create_fails_closed_without_redis(monkeypatch):
-    monkeypatch.setenv("FORTUNE_PIPELINE", "v2")
+async def test_create_fails_closed_without_redis(monkeypatch):
     fortune_events._redis_singleton = None
 
     async def _boom(*, required=False):
