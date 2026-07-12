@@ -169,6 +169,8 @@ async function jsonFetch<T>(
 interface BackendReplaySnapshot {
     fortune_id: string;
     snapshot_version?: number;
+    /** Snapshot schema: 2 = data_model present (Phase 3A+). */
+    schema_version?: number;
     status: string;
     metadata: {
         created_at: string;
@@ -185,7 +187,11 @@ interface BackendReplaySnapshot {
         retrodictions?: Record<string, unknown>;
         corrections?: Record<string, unknown>;
     };
+    /** Fully merged A2UI data model (schema_version >= 2). */
+    data_model?: Record<string, unknown> | null;
 }
+
+export type { BackendReplaySnapshot };
 
 export const fortuneClient = {
     async createFortune(req: CreateFortuneRequest): Promise<CreateFortuneResponse> {
@@ -352,9 +358,17 @@ export const fortuneClient = {
      * see the file header for rationale. Auth is forwarded on the query
      * string because EventSource cannot set request headers.
      */
-    buildStreamUrl(fortuneId: string, accessToken: string | null): string {
+    buildStreamUrl(
+        fortuneId: string,
+        accessToken: string | null,
+        opts?: { after?: string | null },
+    ): string {
         const base = `${configService.getBackendUrl()}/api/fortune/${fortuneId}/stream`;
-        return accessToken ? `${base}?token=${encodeURIComponent(accessToken)}` : base;
+        const params = new URLSearchParams();
+        if (accessToken) params.set('token', accessToken);
+        if (opts?.after) params.set('after', opts.after);
+        const qs = params.toString();
+        return qs ? `${base}?${qs}` : base;
     },
 };
 

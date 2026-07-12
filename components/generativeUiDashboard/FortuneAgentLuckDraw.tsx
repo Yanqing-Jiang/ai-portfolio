@@ -21,7 +21,12 @@ import {
     type ReactNode,
 } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { BirthdayScrollPicker } from './BirthdayScrollPicker';
+import {
+    ProfileStep,
+    ConfirmStep,
+    GENDER_OPTIONS,
+    type IntakeProfile,
+} from './fortune/intake';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -52,20 +57,6 @@ export interface FortuneAgentLuckDrawProps {
 // Constants
 // ---------------------------------------------------------------------------
 
-const EARTHLY_BRANCHES = [
-    { branch: '子', time: '23-01', hour: '23:00' },
-    { branch: '丑', time: '01-03', hour: '01:00' },
-    { branch: '寅', time: '03-05', hour: '03:00' },
-    { branch: '卯', time: '05-07', hour: '05:00' },
-    { branch: '辰', time: '07-09', hour: '07:00' },
-    { branch: '巳', time: '09-11', hour: '09:00' },
-    { branch: '午', time: '11-13', hour: '11:00' },
-    { branch: '未', time: '13-15', hour: '13:00' },
-    { branch: '申', time: '15-17', hour: '15:00' },
-    { branch: '酉', time: '17-19', hour: '17:00' },
-    { branch: '戌', time: '19-21', hour: '19:00' },
-    { branch: '亥', time: '21-23', hour: '21:00' },
-] as const;
 
 const FOCUS_OPTIONS = [
     { id: 'career', label: 'Career', glyph: '事' },
@@ -77,11 +68,6 @@ const FOCUS_OPTIONS = [
     { id: 'general', label: 'General', glyph: '運' },
 ] as const;
 
-const GENDER_OPTIONS = [
-    { id: 'male', label: 'Male', icon: '♂' },
-    { id: 'female', label: 'Female', icon: '♀' },
-    { id: 'unknown', label: '—', icon: '' },
-] as const;
 
 const MONTH_SHORT = [
     'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
@@ -1122,6 +1108,12 @@ function SectionThreeProfile({
     onNext,
     canNext,
 }: SectionThreeProps) {
+    const value: IntakeProfile = {
+        birthDate,
+        birthTime,
+        timeUnknown,
+        gender,
+    };
     return (
         <div>
             <SectionHeading
@@ -1130,161 +1122,20 @@ function SectionThreeProfile({
                 title="Who's drawing?"
                 subtitle="The cycle needs an anchor — your arrival into it."
             />
-
-            {/* Birthday */}
             <div style={{ marginTop: 14 }}>
-                <FieldLabel>Birthday</FieldLabel>
-                <BirthdayScrollPicker value={birthDate} onChange={setBirthDate} />
+                <ProfileStep
+                    value={value}
+                    onChange={(next) => {
+                        setBirthDate(next.birthDate);
+                        setBirthTime(next.birthTime);
+                        setTimeUnknown(next.timeUnknown);
+                        setGender(next.gender);
+                    }}
+                    accentRgb="249, 115, 22"
+                    genderHint="(for luck pillar direction)"
+                    timeUnknownLabel="I don't know my birth time"
+                />
             </div>
-
-            {/* Birth time — 12 Earthly Branch pills */}
-            <div style={{ marginTop: 18 }}>
-                <FieldLabel>
-                    Birth time{' '}
-                    <span
-                        style={{
-                            color: 'rgba(148,163,184,0.6)',
-                            fontWeight: 400,
-                        }}
-                    >
-                        (double-hour)
-                    </span>
-                </FieldLabel>
-                <div
-                    style={{
-                        display: 'grid',
-                        gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
-                        gap: 6,
-                    }}
-                >
-                    {EARTHLY_BRANCHES.map((eb) => {
-                        const selected =
-                            birthTime === eb.hour && !timeUnknown;
-                        return (
-                            <button
-                                key={eb.branch}
-                                onClick={() => {
-                                    setBirthTime(eb.hour);
-                                    setTimeUnknown(false);
-                                }}
-                                style={{
-                                    minHeight: 44,
-                                    display: 'flex',
-                                    flexDirection: 'column',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    borderRadius: 10,
-                                    padding: '6px 2px',
-                                    background: selected
-                                        ? 'var(--ming-accent, #b91c1c)'
-                                        : 'rgba(148,163,184,0.06)',
-                                    border: selected
-                                        ? '1px solid var(--ming-accent, #b91c1c)'
-                                        : '1px solid rgba(148,163,184,0.14)',
-                                    color: selected ? '#fff' : '#cbd5e1',
-                                    cursor: 'pointer',
-                                }}
-                            >
-                                <span
-                                    style={{
-                                        fontFamily:
-                                            'var(--ming-font-chinese), serif',
-                                        fontSize: 16,
-                                        lineHeight: 1,
-                                    }}
-                                >
-                                    {eb.branch}
-                                </span>
-                                <span
-                                    style={{
-                                        fontSize: 10,
-                                        opacity: 0.65,
-                                        marginTop: 2,
-                                    }}
-                                >
-                                    {eb.time}
-                                </span>
-                            </button>
-                        );
-                    })}
-                </div>
-                <button
-                    onClick={() => {
-                        setTimeUnknown(!timeUnknown);
-                        if (!timeUnknown) setBirthTime(null);
-                    }}
-                    style={{
-                        marginTop: 8,
-                        width: '100%',
-                        minHeight: 44,
-                        borderRadius: 10,
-                        background: timeUnknown
-                            ? 'rgba(148,163,184,0.18)'
-                            : 'rgba(148,163,184,0.05)',
-                        border: timeUnknown
-                            ? '1px solid rgba(148,163,184,0.4)'
-                            : '1px solid rgba(148,163,184,0.12)',
-                        color: '#94a3b8',
-                        fontSize: 13,
-                        cursor: 'pointer',
-                    }}
-                >
-                    I don't know my birth time
-                </button>
-            </div>
-
-            {/* Gender */}
-            <div style={{ marginTop: 18 }}>
-                <FieldLabel>
-                    Gender{' '}
-                    <span
-                        style={{
-                            color: 'rgba(148,163,184,0.6)',
-                            fontWeight: 400,
-                        }}
-                    >
-                        (for luck pillar direction)
-                    </span>
-                </FieldLabel>
-                <div
-                    style={{
-                        display: 'grid',
-                        gridTemplateColumns: 'repeat(3, minmax(0,1fr))',
-                        gap: 8,
-                    }}
-                >
-                    {GENDER_OPTIONS.map((opt) => {
-                        const active = gender === opt.id;
-                        return (
-                            <button
-                                key={opt.id}
-                                onClick={() => setGender(opt.id)}
-                                style={{
-                                    minHeight: 44,
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    gap: 6,
-                                    borderRadius: 10,
-                                    background: active
-                                        ? 'rgba(148,163,184,0.16)'
-                                        : 'rgba(148,163,184,0.05)',
-                                    border: active
-                                        ? '1.5px solid rgba(148,163,184,0.42)'
-                                        : '1px solid rgba(148,163,184,0.12)',
-                                    color: active ? '#e2e8f0' : '#94a3b8',
-                                    fontSize: 13.5,
-                                    cursor: 'pointer',
-                                }}
-                            >
-                                {opt.icon ? <span>{opt.icon}</span> : null}
-                                <span>{opt.label}</span>
-                            </button>
-                        );
-                    })}
-                </div>
-            </div>
-
             <PrimaryButton disabled={!canNext} onClick={onNext}>
                 Next →
             </PrimaryButton>
@@ -1321,98 +1172,41 @@ function SectionFourDraw({
                 title="Pull the cycle"
                 subtitle="One breath, one draw. The rings will close."
             />
-
-            {/* Recap card */}
-            <div
-                style={{
-                    marginTop: 14,
-                    marginBottom: 24,
-                    padding: '14px 16px',
-                    borderRadius: 14,
-                    background: 'rgba(148,163,184,0.04)',
-                    border: '1px solid rgba(212,175,55,0.14)',
-                }}
+            <ConfirmStep
+                accentRgb="249, 115, 22"
+                rows={[
+                    { label: 'Horizon', value: horizonSummary },
+                    { label: 'Focus', value: focusSummary },
+                    { label: 'You', value: profileSummary },
+                ]}
+                hideDefaultCta
             >
-                <RecapRow label="Horizon" value={horizonSummary} />
-                <RecapRow label="Focus" value={focusSummary} />
-                <RecapRow label="You" value={profileSummary} last />
-            </div>
-
-            {/* Ember-like CTA */}
-            <div
-                style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    marginTop: 8,
-                }}
-            >
-                <EmberButton
-                    disabled={!canDraw}
-                    drawing={drawing}
-                    onClick={onDraw}
-                />
                 <div
                     style={{
-                        marginTop: 14,
-                        fontSize: 12,
-                        color: 'rgba(148,163,184,0.6)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        marginTop: 8,
                     }}
                 >
-                    {drawing
-                        ? 'The cycle is closing…'
-                        : 'Tap once. The draw is singular.'}
+                    <EmberButton
+                        disabled={!canDraw}
+                        drawing={drawing}
+                        onClick={onDraw}
+                    />
+                    <div
+                        style={{
+                            marginTop: 14,
+                            fontSize: 12,
+                            color: 'rgba(148,163,184,0.6)',
+                        }}
+                    >
+                        {drawing
+                            ? 'The cycle is closing…'
+                            : 'Tap once. The draw is singular.'}
+                    </div>
                 </div>
-            </div>
-        </div>
-    );
-}
-
-function RecapRow({
-    label,
-    value,
-    last,
-}: {
-    label: string;
-    value: string;
-    last?: boolean;
-}) {
-    return (
-        <div
-            style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'baseline',
-                padding: '8px 0',
-                borderBottom: last
-                    ? 'none'
-                    : '1px dashed rgba(148,163,184,0.12)',
-                gap: 12,
-            }}
-        >
-            <span
-                style={{
-                    fontSize: 11,
-                    color: 'rgba(148,163,184,0.7)',
-                    textTransform: 'uppercase',
-                    letterSpacing: 0.4,
-                    flexShrink: 0,
-                }}
-            >
-                {label}
-            </span>
-            <span
-                style={{
-                    fontSize: 13,
-                    color: '#e2e8f0',
-                    textAlign: 'right',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                }}
-            >
-                {value || '—'}
-            </span>
+            </ConfirmStep>
         </div>
     );
 }
@@ -1652,22 +1446,6 @@ function SectionHeading({
                 {subtitle}
             </p>
         </div>
-    );
-}
-
-function FieldLabel({ children }: { children: ReactNode }) {
-    return (
-        <label
-            style={{
-                display: 'block',
-                fontSize: 12.5,
-                fontWeight: 500,
-                color: '#cbd5e1',
-                marginBottom: 6,
-            }}
-        >
-            {children}
-        </label>
     );
 }
 

@@ -29,3 +29,6 @@ export { VerdictProgressiveGauge } from './VerdictProgressiveGauge';
 export { AgentPhaseStrip } from './AgentPhaseStrip';
 export { HeroPickCard } from './HeroPickCard';
 export { LuckFilmStrip } from './LuckFilmStrip';
+
+export { AskTab } from './AskTab';
+export { WhyTab } from './WhyTab';

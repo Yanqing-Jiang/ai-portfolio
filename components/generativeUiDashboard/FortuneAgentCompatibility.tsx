@@ -11,31 +11,22 @@
  *   3. Person B (mirrors A, visually distinct accent)
  *   4. Synastry preview + CTA → onComplete(payload)
  *
- * Reuses: BirthdayScrollPicker, EARTHLY_BRANCHES pattern from MingEnginePage.
+ * Uses shared ProfileStep / ConfirmStep from fortune/intake.
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { BirthdayScrollPicker } from './BirthdayScrollPicker';
+import {
+    ProfileStep,
+    ConfirmStep,
+    EMPTY_INTAKE_PROFILE,
+    type IntakeProfile,
+} from './fortune/intake';
 
 // ---------------------------------------------------------------------------
-// Constants (copied from MingEnginePage to avoid new primitives)
+// Constants
 // ---------------------------------------------------------------------------
 
-const EARTHLY_BRANCHES = [
-    { branch: '子', time: '23-01', hour: '23:00' },
-    { branch: '丑', time: '01-03', hour: '01:00' },
-    { branch: '寅', time: '03-05', hour: '03:00' },
-    { branch: '卯', time: '05-07', hour: '05:00' },
-    { branch: '辰', time: '07-09', hour: '07:00' },
-    { branch: '巳', time: '09-11', hour: '09:00' },
-    { branch: '午', time: '11-13', hour: '11:00' },
-    { branch: '未', time: '13-15', hour: '13:00' },
-    { branch: '申', time: '15-17', hour: '15:00' },
-    { branch: '酉', time: '17-19', hour: '17:00' },
-    { branch: '戌', time: '19-21', hour: '19:00' },
-    { branch: '亥', time: '21-23', hour: '21:00' },
-] as const;
 
 const RELATIONSHIPS = [
     { id: 'romantic', label: 'Romantic', glyph: '緣' },
@@ -44,11 +35,6 @@ const RELATIONSHIPS = [
     { id: 'friend', label: 'Friend', glyph: '友' },
 ] as const;
 
-const GENDER_OPTIONS = [
-    { id: 'male', label: 'Male', icon: '♂' },
-    { id: 'female', label: 'Female', icon: '♀' },
-    { id: 'unknown', label: 'Prefer not to say', icon: '—' },
-] as const;
 
 // Mock heavenly-stem glyphs for the synastry preview (purely decorative)
 const PREVIEW_STEMS_A = ['甲', '丙', '戊', '庚'];
@@ -58,12 +44,7 @@ const PREVIEW_STEMS_B = ['乙', '丁', '己', '辛'];
 // Types
 // ---------------------------------------------------------------------------
 
-interface PersonData {
-    birthDate: string;
-    birthTime: string | null;
-    timeUnknown: boolean;
-    gender: string;
-}
+type PersonData = IntakeProfile;
 
 interface Props {
     onBack?: () => void;
@@ -110,7 +91,6 @@ interface PersonFormProps {
 }
 
 function PersonForm({ value, onChange, accent }: PersonFormProps) {
-    // Rose for A (warm), teal for B (cool) — creates the "pairing" visual contrast
     const accentColor = accent === 'rose'
         ? 'var(--ming-accent, #e11d48)'
         : 'var(--ming-gold, #0d9488)';
@@ -122,116 +102,14 @@ function PersonForm({ value, onChange, accent }: PersonFormProps) {
         : 'rgba(13, 148, 136, 0.55)';
 
     return (
-        <div className="flex flex-col gap-5">
-            {/* Birthday */}
-            <div>
-                <label className="mb-1.5 block text-sm font-medium text-slate-300">
-                    Birthday
-                </label>
-                <BirthdayScrollPicker
-                    value={value.birthDate}
-                    onChange={(d) => onChange({ ...value, birthDate: d })}
-                />
-            </div>
-
-            {/* Earthly-branch birth time pills */}
-            <div>
-                <label className="mb-1.5 block text-sm font-medium text-slate-300">
-                    Birth Time
-                </label>
-                <div className="grid grid-cols-4 gap-1.5">
-                    {EARTHLY_BRANCHES.map((eb) => {
-                        const active = value.birthTime === eb.hour && !value.timeUnknown;
-                        return (
-                            <button
-                                key={eb.branch}
-                                type="button"
-                                aria-pressed={active}
-                                aria-label={`${eb.branch} ${eb.time}`}
-                                className="flex min-h-[44px] flex-col items-center justify-center rounded-lg px-1 py-1.5 text-center transition-colors"
-                                style={{
-                                    background: active ? accentBg : 'rgba(148, 163, 184, 0.08)',
-                                    border: active
-                                        ? `1px solid ${accentBorder}`
-                                        : '1px solid rgba(148, 163, 184, 0.15)',
-                                    color: active ? accentColor : '#cbd5e1',
-                                }}
-                                onClick={() =>
-                                    onChange({
-                                        ...value,
-                                        birthTime: eb.hour,
-                                        timeUnknown: false,
-                                    })
-                                }
-                            >
-                                <span
-                                    className="text-base leading-none"
-                                    style={{ fontFamily: 'var(--ming-font-chinese)' }}
-                                >
-                                    {eb.branch}
-                                </span>
-                                <span className="mt-0.5 text-[10px] opacity-60">{eb.time}</span>
-                            </button>
-                        );
-                    })}
-                </div>
-
-                <button
-                    type="button"
-                    aria-pressed={value.timeUnknown}
-                    className="mt-2 w-full min-h-[44px] rounded-lg px-3 py-2 text-sm transition-colors"
-                    style={{
-                        background: value.timeUnknown
-                            ? 'rgba(148, 163, 184, 0.2)'
-                            : 'rgba(148, 163, 184, 0.06)',
-                        border: value.timeUnknown
-                            ? '1px solid rgba(148, 163, 184, 0.4)'
-                            : '1px solid rgba(148, 163, 184, 0.1)',
-                        color: '#94a3b8',
-                    }}
-                    onClick={() =>
-                        onChange({
-                            ...value,
-                            timeUnknown: !value.timeUnknown,
-                            birthTime: value.timeUnknown ? value.birthTime : null,
-                        })
-                    }
-                >
-                    {value.timeUnknown ? '✓ Birth time unknown' : "I don't know the birth time"}
-                </button>
-            </div>
-
-            {/* Gender */}
-            <div>
-                <label className="mb-1.5 block text-sm font-medium text-slate-300">
-                    Gender <span className="text-slate-500 font-normal">(for luck cycle)</span>
-                </label>
-                <div className="grid grid-cols-3 gap-2">
-                    {GENDER_OPTIONS.map((opt) => {
-                        const active = value.gender === opt.id;
-                        return (
-                            <button
-                                key={opt.id}
-                                type="button"
-                                aria-pressed={active}
-                                className="flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-sm transition-colors"
-                                style={{
-                                    background: active ? accentBg : 'rgba(148, 163, 184, 0.06)',
-                                    border: active
-                                        ? `1.5px solid ${accentBorder}`
-                                        : '1px solid rgba(148, 163, 184, 0.12)',
-                                    color: active ? accentColor : '#94a3b8',
-                                }}
-                                onClick={() => onChange({ ...value, gender: opt.id })}
-                            >
-                                <span className="text-base">{opt.icon}</span>
-                                <span className="font-medium">{opt.label}</span>
-                            </button>
-                        );
-                    })}
-                </div>
-            </div>
-        </div>
+        <ProfileStep
+            value={value}
+            onChange={onChange}
+            accentColor={accentColor}
+            accentBg={accentBg}
+            accentBorder={accentBorder}
+            genderHint="(for luck cycle)"
+        />
     );
 }
 
@@ -423,18 +301,8 @@ function Section({ step, currentStep, title, subtitle, children, sectionRef }: S
 export function FortuneAgentCompatibility({ onBack, onComplete }: Props) {
     const [currentStep, setCurrentStep] = useState<StepIndex>(0);
     const [relationship, setRelationship] = useState<string | null>(null);
-    const [personA, setPersonA] = useState<PersonData>({
-        birthDate: '',
-        birthTime: null,
-        timeUnknown: false,
-        gender: 'unknown',
-    });
-    const [personB, setPersonB] = useState<PersonData>({
-        birthDate: '',
-        birthTime: null,
-        timeUnknown: false,
-        gender: 'unknown',
-    });
+    const [personA, setPersonA] = useState<PersonData>({ ...EMPTY_INTAKE_PROFILE });
+    const [personB, setPersonB] = useState<PersonData>({ ...EMPTY_INTAKE_PROFILE });
 
     // Refs for smooth scroll-into-view on step change
     const sec1Ref = useRef<HTMLDivElement>(null!);
@@ -744,24 +612,25 @@ export function FortuneAgentCompatibility({ onBack, onComplete }: Props) {
                         title="The reading is ready."
                         subtitle="Four pillars vs four pillars — we'll read the harmony and the sparks."
                     >
-                        <SynastryPreview />
-
-                        <motion.button
-                            type="button"
-                            onClick={handleComplete}
-                            initial={{ opacity: 0, y: 10 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            transition={{ delay: 0.6 }}
-                            whileTap={{ scale: 0.98 }}
-                            className="mt-2 w-full min-h-[52px] rounded-xl px-4 py-3.5 text-base font-semibold transition-opacity"
-                            style={{
-                                background:
-                                    'linear-gradient(135deg, var(--ming-accent, #e11d48) 0%, var(--ming-gold, #eab308) 100%)',
-                                color: '#fff',
-                            }}
-                        >
-                            Reveal our reading →
-                        </motion.button>
+                        <ConfirmStep hideDefaultCta accentRgb="225, 29, 72">
+                            <SynastryPreview />
+                            <motion.button
+                                type="button"
+                                onClick={handleComplete}
+                                initial={{ opacity: 0, y: 10 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                transition={{ delay: 0.6 }}
+                                whileTap={{ scale: 0.98 }}
+                                className="mt-2 w-full min-h-[52px] rounded-xl px-4 py-3.5 text-base font-semibold transition-opacity"
+                                style={{
+                                    background:
+                                        'linear-gradient(135deg, var(--ming-accent, #e11d48) 0%, var(--ming-gold, #eab308) 100%)',
+                                    color: '#fff',
+                                }}
+                            >
+                                Reveal our reading →
+                            </motion.button>
+                        </ConfirmStep>
                     </Section>
                 )}
             </main>

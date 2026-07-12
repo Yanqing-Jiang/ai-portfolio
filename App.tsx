@@ -21,10 +21,7 @@ import { FortuneAgentCompatibility } from './components/generativeUiDashboard/Fo
 import { FortuneAgentLuckyDay } from './components/generativeUiDashboard/FortuneAgentLuckyDay';
 import { FortuneAgentLuckDraw } from './components/generativeUiDashboard/FortuneAgentLuckDraw';
 import { FortuneAgentCustomWish } from './components/generativeUiDashboard/FortuneAgentCustomWish';
-import { FortuneAgentCompatibilityResult } from './components/generativeUiDashboard/FortuneAgentCompatibilityResult';
-import { FortuneAgentOccasionResult } from './components/generativeUiDashboard/FortuneAgentOccasionResult';
-import { FortuneAgentCycleResult } from './components/generativeUiDashboard/FortuneAgentCycleResult';
-import { FortuneAgentCustomWishResult } from './components/generativeUiDashboard/FortuneAgentCustomWishResult';
+import { FortuneResultShell } from './components/generativeUiDashboard/FortuneResultShell';
 import { AskDemoPage } from './components/generativeUiDashboard/fortune/AskDemoPage';
 import { ConsultingPage } from './components/consulting/ConsultingPage';
 import BlogIndexPage from './components/blog/BlogIndexPage';
@@ -111,7 +108,7 @@ const FortuneAgentCompatibilityResultRoute: React.FC = () => {
   const { state } = useLocation();
   const { fortuneId } = useParams<{ fortuneId?: string }>();
   if (!state && !fortuneId) return <Navigate to={fortuneIntakeRoute('compatibility')} replace />;
-  return <FortuneAgentCompatibilityResult onBack={() => navigate(fortuneIntakeRoute('compatibility'))} inputPayload={state} />;
+  return <FortuneResultShell functionId="compatibility" onBack={() => navigate(fortuneIntakeRoute('compatibility'))} />;
 };
 
 const FortuneAgentOccasionResultRoute: React.FC = () => {
@@ -119,7 +116,7 @@ const FortuneAgentOccasionResultRoute: React.FC = () => {
   const { state } = useLocation();
   const { fortuneId } = useParams<{ fortuneId?: string }>();
   if (!state && !fortuneId) return <Navigate to={fortuneIntakeRoute('occasion')} replace />;
-  return <FortuneAgentOccasionResult onBack={() => navigate(fortuneIntakeRoute('occasion'))} inputPayload={state} />;
+  return <FortuneResultShell functionId="occasion" onBack={() => navigate(fortuneIntakeRoute('occasion'))} />;
 };
 
 const FortuneAgentCycleResultRoute: React.FC = () => {
@@ -127,7 +124,7 @@ const FortuneAgentCycleResultRoute: React.FC = () => {
   const { state } = useLocation();
   const { fortuneId } = useParams<{ fortuneId?: string }>();
   if (!state && !fortuneId) return <Navigate to={fortuneIntakeRoute('cycle')} replace />;
-  return <FortuneAgentCycleResult onBack={() => navigate(fortuneIntakeRoute('cycle'))} inputPayload={state} />;
+  return <FortuneResultShell functionId="cycle" onBack={() => navigate(fortuneIntakeRoute('cycle'))} />;
 };
 
 const FortuneAgentCustomWishResultRoute: React.FC = () => {
@@ -135,7 +132,7 @@ const FortuneAgentCustomWishResultRoute: React.FC = () => {
   const { state } = useLocation();
   const { fortuneId } = useParams<{ fortuneId?: string }>();
   if (!state && !fortuneId) return <Navigate to={fortuneIntakeRoute('wish')} replace />;
-  return <FortuneAgentCustomWishResult onBack={() => navigate(fortuneIntakeRoute('wish'))} />;
+  return <FortuneResultShell functionId="wish" onBack={() => navigate(fortuneIntakeRoute('wish'))} />;
 };
 
 // Function: ProjectRoute - mounted by the /project/:id route; looks up the requested project and renders ProjectView or redirects home if missing; exists to keep route elements thin.

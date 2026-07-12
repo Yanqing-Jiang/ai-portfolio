@@ -28,6 +28,14 @@ import type {
     FortuneStatus,
 } from '../lib/fortuneTypes';
 
+export interface TraceEvent {
+    id?: string;
+    run_id?: string;
+    fortune_id?: string;
+    payload: Record<string, unknown>;
+    receivedAt: string;
+}
+
 export interface AskTurn {
     id: string;
     role: 'user' | 'agent';
@@ -67,6 +75,9 @@ interface FortuneStateShape {
     /** Sticky flag: once an ask turn returned without memory, we surface a hint. */
     askMemoryEverDegraded: boolean;
 
+    /** Live Glass Box trace envelopes (payload.kind==='trace'); Phase 4 renders. */
+    traceEvents: TraceEvent[];
+
     // Actions
     setFortune: (fortuneId: string, runId: string, opts?: { persistenceDegraded?: boolean; functionId?: FortuneFunctionId }) => void;
     setRunId: (runId: string) => void;
@@ -79,6 +90,7 @@ interface FortuneStateShape {
     applyPatch: (path: string, value: unknown) => void;
     /** Hydrate the full data model from a replay snapshot. */
     hydrateFromReplay: (replay: FortuneReplayResponse) => void;
+    appendTraceEvent: (event: TraceEvent) => void;
     setAskInput: (v: string) => void;
     beginAsk: (userTurn: AskTurn) => void;
     finishAsk: (agentTurn: AskTurn) => void;
@@ -87,7 +99,7 @@ interface FortuneStateShape {
     reset: () => void;
 }
 
-type ActionKeys = 'setFortune' | 'setRunId' | 'setStatus' | 'setNarrativeReady' | 'applyPatch' | 'hydrateFromReplay' | 'setAskInput' | 'beginAsk' | 'finishAsk' | 'failAsk' | 'clearAskHistory' | 'reset';
+type ActionKeys = 'setFortune' | 'setRunId' | 'setStatus' | 'setNarrativeReady' | 'applyPatch' | 'hydrateFromReplay' | 'appendTraceEvent' | 'setAskInput' | 'beginAsk' | 'finishAsk' | 'failAsk' | 'clearAskHistory' | 'reset';
 
 const INITIAL: Omit<FortuneStateShape, ActionKeys> = {
     fortuneId: null,
@@ -102,6 +114,7 @@ const INITIAL: Omit<FortuneStateShape, ActionKeys> = {
     askLoading: false,
     askHistory: [],
     askMemoryEverDegraded: false,
+    traceEvents: [],
 };
 
 export const useFortuneStore = create<FortuneStateShape>()(
@@ -119,6 +132,7 @@ export const useFortuneStore = create<FortuneStateShape>()(
                     // "Verifying safety…" banner doesn't bleed across
                     // sessions during a same-tab create→create flow.
                     s.narrativeReady = false;
+                    s.traceEvents = [];
                 }
                 s.fortuneId = fortuneId;
                 s.runId = runId;
@@ -190,6 +204,14 @@ export const useFortuneStore = create<FortuneStateShape>()(
                 // the "Verifying safety…" banner during hydration.
                 const narrativeBlock = (replay.data_model as { narrative?: { isComplete?: boolean } } | null)?.narrative;
                 s.narrativeReady = !!narrativeBlock?.isComplete;
+            }),
+
+        appendTraceEvent: (event) =>
+            set((s) => {
+                s.traceEvents.push(event);
+                if (s.traceEvents.length > 500) {
+                    s.traceEvents.splice(0, s.traceEvents.length - 500);
+                }
             }),
 
         setAskInput: (v) =>
