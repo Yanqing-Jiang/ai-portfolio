@@ -221,6 +221,11 @@ class GlassBoxTraceProcessor:
             self._runs[resolved] = trace
         return trace
 
+    def evict_run(self, run_id: str) -> None:
+        """Drop process-local run/sensitive maps after flush — Redis/DB traces remain."""
+        self._runs.pop(run_id, None)
+        self._sensitive.pop(run_id, None)
+
     def redact(self, run_id: str, value: Any) -> str:
         text = _bounded_text(value)
         for secret in sorted(self._sensitive.get(run_id, ()), key=len, reverse=True):

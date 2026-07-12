@@ -356,6 +356,8 @@ async def _event_generator_impl(session, *, request=None, store=None):
         except Exception as exc:
             logger.warning("[FORTUNE] run status update failed: %s", exc)
 
+    guardrail_passed = False
+    narrative_set_this_run = False
     try:
         session.touch(RuntimeStatus.streaming)
         _t_start = _time.monotonic()
@@ -755,6 +757,7 @@ async def _event_generator_impl(session, *, request=None, store=None):
             ctx,
             narrative.model_dump(),
         )
+        narrative_set_this_run = True
         guardrail_narrative = EnrichedNarrativeOutput.model_validate(
             session.latest_narrative,
         )
@@ -919,6 +922,8 @@ async def _event_generator_impl(session, *, request=None, store=None):
             for msg in bridge.emit_error(guardrail.message or _SAFE_REJECTION_MESSAGE):
                 yield await _emit(msg)
             return
+
+        guardrail_passed = True
 
         # No narrative-bearing frame is yielded until the SDK output guardrail
         # has passed. Build the exact legacy frame sequence, then release it as
@@ -1109,6 +1114,8 @@ async def _event_generator_impl(session, *, request=None, store=None):
             yield await _emit(msg)
 
     except Exception as exc:
+        if not guardrail_passed and narrative_set_this_run:
+            session.latest_narrative = None
         logger.exception("[FORTUNE] %s stream error: %s", session.fortune_id, exc)
         try:
             from .agent_logging import log_stream_end as _log_stream_end

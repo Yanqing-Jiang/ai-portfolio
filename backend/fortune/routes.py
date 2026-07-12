@@ -35,45 +35,18 @@ except ImportError:
     from ..sse_utils import with_heartbeat  # type: ignore[no-redef]
 
 try:
-    from generative_ui.clarification import (
-        ClarificationField,
-        ClarificationOption,
-        ClarificationRequest,
-        clarification_to_sse_event,
-    )
-except ImportError:
-    from ..generative_ui.clarification import (  # type: ignore[no-redef]
-        ClarificationField,
-        ClarificationOption,
-        ClarificationRequest,
-        clarification_to_sse_event,
-    )
-
-try:
     from .agents import (
-        DEFAULT_FOLLOW_UP_BUTTONS,
-        EnrichedNarrativeOutput,
         FOUNDATION_VERSION,
         FortuneRunContext,
-        GUARDRAIL_AGENT,
-        GuardrailOutput,
-        NARRATIVE_AGENTS,
         NARRATIVE_SCHEMA_VERSION,
         NarrativeOutput,
-        _narrative_mode,
-        _promote_narrative_to_enriched,
-        repair_occasion_narrative,
-        run_foundation,
-        run_narrative_streamed,
     )
     from .config import get_settings
-    from .stream_bridge import FortuneStreamBridge
     from .store import get_repository, FortuneRepository
     from .triage import ALLOWED_ACTION_IDS, normalize_action_focus, run_triage
     from .session_store import get_ask_session, list_conversation_turns
     from .simulator import simulate_birth_time
     from .naming import canonical_function
-    from ._thinking_heartbeat import HeartbeatTick, iter_with_heartbeats
     from .state import (
         CreateFortuneRequest as _StateCreateFortuneRequest,
         FortuneSession,
@@ -85,29 +58,17 @@ try:
     from . import pipeline as fortune_pipeline
 except ImportError:
     from agents import (  # type: ignore[no-redef]
-        DEFAULT_FOLLOW_UP_BUTTONS,
-        EnrichedNarrativeOutput,
         FOUNDATION_VERSION,
         FortuneRunContext,
-        GUARDRAIL_AGENT,
-        GuardrailOutput,
-        NARRATIVE_AGENTS,
         NARRATIVE_SCHEMA_VERSION,
         NarrativeOutput,
-        _narrative_mode,
-        _promote_narrative_to_enriched,
-        repair_occasion_narrative,
-        run_foundation,
-        run_narrative_streamed,
     )
     from config import get_settings  # type: ignore[no-redef]
-    from stream_bridge import FortuneStreamBridge  # type: ignore[no-redef]
     from store import get_repository, FortuneRepository  # type: ignore[no-redef]
     from triage import ALLOWED_ACTION_IDS, normalize_action_focus, run_triage  # type: ignore[no-redef]
     from session_store import get_ask_session, list_conversation_turns  # type: ignore[no-redef]
     from simulator import simulate_birth_time  # type: ignore[no-redef]
     from naming import canonical_function  # type: ignore[no-redef]
-    from _thinking_heartbeat import HeartbeatTick, iter_with_heartbeats  # type: ignore[no-redef]
     from state import (  # type: ignore[no-redef]
         CreateFortuneRequest as _StateCreateFortuneRequest,
         FortuneSession,
@@ -264,28 +225,6 @@ def _snapshot_mechanics(session: "FortuneSession", analysis: Any) -> dict[str, A
 
 def _snapshot_references(foundation: dict[str, Any]) -> dict[str, Any]:
     return {"items": _to_jsonable(foundation.get("references", []))}
-
-
-def _build_clarification(fortune_id: str) -> ClarificationRequest:
-    return ClarificationRequest(
-        request_id=f"fortune_focus_{fortune_id}",
-        title="Choose a reading focus",
-        subtitle="Birth data received. Choose how the reading should be framed.",
-        fields=[
-            ClarificationField(
-                field_id="focus",
-                input_type="single_choice",
-                label="Reading focus",
-                options=[
-                    ClarificationOption(id="career_focus", label="Career Deep Dive"),
-                    ClarificationOption(id="relationship_focus", label="Compatibility Check"),
-                    ClarificationOption(id="year_forecast", label="Explore This Year Luck"),
-                ],
-                required=True,
-            )
-        ],
-        skip_allowed=True,
-    )
 
 
 def _build_ask_original_input(req: "CreateFortuneRequest | None") -> dict[str, Any] | None:
@@ -945,86 +884,94 @@ async def _ask_fortune_locked(
     # Persist a new run row so Ask turns show up in the Activity Rail distinctly.
     new_run_id = str(uuid.uuid4())
     try:
-        run_rec = await repo.create_run(
-            fortune_id=uuid.UUID(fortune_id),
-            run_kind="ask",
-        )
-        if run_rec:
-            new_run_id = str(run_rec.id)
-    except Exception as exc:
-        logger.warning("[FORTUNE] ask run persistence failed: %s", exc)
-
-    settings = get_settings()
-    ctx = FortuneRunContext(
-        fortune_id=fortune_id,
-        surface_id=(fortune_session.surface_id if fortune_session else settings.default_surface_id),
-        run_id=new_run_id,
-        question=request_body.question,
-        focus=(req_src.focus if req_src else None),
-        tone=(req_src.tone if req_src else None),
-        birth_iso=(req_src.birth_iso if req_src else ""),
-        timezone=(req_src.timezone if (req_src and req_src.timezone) else settings.default_timezone),
-        birth_time_unknown=(req_src.birth_time_unknown if req_src else False),
-        gender=(req_src.gender if (req_src and req_src.gender) else "unknown"),
-    )
-
-    # Try to attach durable ask-session memory. If Supabase is unreachable the
-    # answer is still useful (stateless triage) — mark degraded_memory so the
-    # client can hint at the loss of continuity.
-    degraded_memory = False
-    ask_session = None
-    try:
-        ask_session = await get_ask_session(fortune_id)
-        if ask_session is None:
-            degraded_memory = True
-    except Exception as exc:
-        logger.warning("[FORTUNE] ask-session acquisition failed: %s", exc)
-        degraded_memory = True
-
-    try:
-        narrative = await run_triage(
-            ctx,
-            foundation=foundation,
-            question=request_body.question,
-            session=ask_session,
-            original_input=_build_ask_original_input(req_src),
-            latest_narrative=latest_narrative,
-            ask_mode=True,
-        )
-    except Exception as exc:
-        logger.exception("[FORTUNE] /ask triage failed: %s", exc)
         try:
-            await repo.update_run_status(
-                uuid.UUID(new_run_id), "error", error_message=str(exc)[:500],
+            run_rec = await repo.create_run(
+                fortune_id=uuid.UUID(fortune_id),
+                run_kind="ask",
             )
+            if run_rec:
+                new_run_id = str(run_rec.id)
+        except Exception as exc:
+            logger.warning("[FORTUNE] ask run persistence failed: %s", exc)
+
+        settings = get_settings()
+        ctx = FortuneRunContext(
+            fortune_id=fortune_id,
+            surface_id=(fortune_session.surface_id if fortune_session else settings.default_surface_id),
+            run_id=new_run_id,
+            question=request_body.question,
+            focus=(req_src.focus if req_src else None),
+            tone=(req_src.tone if req_src else None),
+            birth_iso=(req_src.birth_iso if req_src else ""),
+            timezone=(req_src.timezone if (req_src and req_src.timezone) else settings.default_timezone),
+            birth_time_unknown=(req_src.birth_time_unknown if req_src else False),
+            gender=(req_src.gender if (req_src and req_src.gender) else "unknown"),
+        )
+
+        # Try to attach durable ask-session memory. If Supabase is unreachable the
+        # answer is still useful (stateless triage) — mark degraded_memory so the
+        # client can hint at the loss of continuity.
+        degraded_memory = False
+        ask_session = None
+        try:
+            ask_session = await get_ask_session(fortune_id)
+            if ask_session is None:
+                degraded_memory = True
+        except Exception as exc:
+            logger.warning("[FORTUNE] ask-session acquisition failed: %s", exc)
+            degraded_memory = True
+
+        try:
+            narrative = await run_triage(
+                ctx,
+                foundation=foundation,
+                question=request_body.question,
+                session=ask_session,
+                original_input=_build_ask_original_input(req_src),
+                latest_narrative=latest_narrative,
+                ask_mode=True,
+            )
+        except Exception as exc:
+            logger.exception("[FORTUNE] /ask triage failed: %s", exc)
+            try:
+                await repo.update_run_status(
+                    uuid.UUID(new_run_id), "error", error_message=str(exc)[:500],
+                )
+            except Exception:
+                pass
+            raise HTTPException(status_code=500, detail="Ask run failed.")
+
+        # Mark the run complete. No snapshot upsert — /ask turns layer on top of
+        # the existing fortune_snapshot rather than replacing it.
+        try:
+            await repo.update_run_status(uuid.UUID(new_run_id), "done")
+        except Exception as exc:
+            logger.warning("[FORTUNE] ask run status update failed: %s", exc)
+
+        return AskResponse(
+            fortune_id=fortune_id,
+            run_id=new_run_id,
+            narrative=narrative.model_dump(),
+            degraded_memory=degraded_memory,
+            chain_status="disabled",
+        )
+    finally:
+        # Evict after triage/status work; never raise from cleanup.
+        try:
+            from .tracing import get_trace_processor
+            get_trace_processor().evict_run(new_run_id)
         except Exception:
             pass
-        raise HTTPException(status_code=500, detail="Ask run failed.")
-
-    # Mark the run complete. No snapshot upsert — /ask turns layer on top of
-    # the existing fortune_snapshot rather than replacing it.
-    try:
-        await repo.update_run_status(uuid.UUID(new_run_id), "done")
-    except Exception as exc:
-        logger.warning("[FORTUNE] ask run status update failed: %s", exc)
-
-    return AskResponse(
-        fortune_id=fortune_id,
-        run_id=new_run_id,
-        narrative=narrative.model_dump(),
-        degraded_memory=degraded_memory,
-        chain_status="disabled",
-    )
 
 
 @router.post("/{fortune_id}/cancel")
 async def cancel_fortune(fortune_id: str, request: Request):
     """Pause/cancel an in-flight reading.
 
-    Sets ``session.cancel_requested = True``. The SSE stream loop polls this
-    flag between SDK events and calls ``stream_result.cancel()`` gracefully,
-    then closes the stream. Idempotent: calling it on a completed session is
-    a no-op.
+    Writes the Redis cancel flag (and session.cancel_requested) via
+    ``store.request_cancel``. The worker-owned publisher task
+    (``run_and_publish``) polls that flag between stages and exits the run
+    as interrupted. Idempotent: calling it on a completed session is a no-op.
     """
     store = get_run_state()
     session = await store.get(fortune_id)

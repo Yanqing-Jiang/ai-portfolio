@@ -225,6 +225,15 @@ async def run_and_publish(session, *, store=None, lock_token: str | None = None)
     finally:
         if owns_lock:
             await store.release_lock(fortune_id, lock_token)
+        try:
+            store.evict_local(fortune_id)
+        except Exception:
+            pass
+        try:
+            from .tracing import get_trace_processor
+            get_trace_processor().evict_run(run_id)
+        except Exception:
+            pass
 
 
 async def run_and_publish_safe(session, *, store=None, lock_token: str | None = None) -> None:

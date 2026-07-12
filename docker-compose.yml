@@ -58,9 +58,11 @@ services:
     deploy:
       resources:
         limits:
-          # The backend runs one gunicorn worker because active Fortune streams
-          # use process-local state. CPU headroom still benefits calculations
-          # and concurrent async requests within that worker.
+          # The backend runs one gunicorn worker because fortune runs are
+          # worker-owned: the publisher task lives in the worker that accepted
+          # /create and dies with it (see the DEBT marker in fortune/routes.py;
+          # upgrade path is a Redis consumer-group runner service). CPU headroom
+          # still benefits calculations and concurrent async requests.
           memory: 4G
           cpus: "8.0"
     logging:

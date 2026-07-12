@@ -33,7 +33,7 @@ LOCK_KEY_PREFIX = "fortune:lock:"
 CANCEL_KEY_PREFIX = "fortune:cancel:"
 
 SESSION_TTL_SECONDS = 48 * 60 * 60
-LOCK_TTL_SECONDS = 600  # pipeline stages can be long; refreshed while held
+LOCK_TTL_SECONDS = 1800  # must outlive OpenAI HTTP ceiling (1200s in main.py)
 CANCEL_TTL_SECONDS = 48 * 60 * 60
 
 
@@ -274,6 +274,11 @@ class RunStateStore:
         except Exception as exc:
             logger.debug("[FORTUNE-STATE] delete failed: %s", exc)
 
+    def evict_local(self, fortune_id: str) -> None:
+        """Drop process-local session/overlay only — Redis/snapshot stay for replay/Ask."""
+        self._memory.pop(fortune_id, None)
+        self._overlay.pop(fortune_id, None)
+
     async def request_cancel(self, fortune_id: str) -> bool:
         session = await self.get(fortune_id)
         if session is None:
@@ -371,20 +376,6 @@ class RunStateStore:
             logger.debug("[FORTUNE-STATE] release_lock failed: %s", exc)
         finally:
             self._lock_tokens.pop(fortune_id, None)
-
-    async def refresh_lock(self, fortune_id: str, token: str, *, ttl: int = LOCK_TTL_SECONDS) -> bool:
-        redis = await self._redis(required=False)
-        if redis is None:
-            return self._lock_tokens.get(fortune_id) == token
-        key = f"{LOCK_KEY_PREFIX}{fortune_id}"
-        try:
-            current = await redis.get(key)
-            if current != token:
-                return False
-            await redis.expire(key, ttl)
-            return True
-        except Exception:
-            return False
 
     def lock_is_held(self, fortune_id: str) -> bool:
         """Best-effort sync probe for v1 409 checks (memory path)."""
