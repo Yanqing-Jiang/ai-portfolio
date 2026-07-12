@@ -94,7 +94,7 @@ advice.
 ASK_AGENT: Agent[FortuneRunContext] = Agent(
     name="fortune_ask",
     model=_model("narrative_model"),
-    model_settings=_model_settings("ask_reasoning"),
+    model_settings=_model_settings("ask_reasoning", "ask_max_tokens"),
     instructions=ASK_INSTRUCTIONS,
     output_type=EnrichedNarrativeOutput,
 )

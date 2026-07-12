@@ -97,6 +97,11 @@ class FortuneSettings(BaseSettings):
     narrative_max_tokens_luck_cycle: Optional[int] = 4500
     narrative_max_tokens_wish: Optional[int] = 6000
     guardrail_max_tokens: Optional[int] = 1200
+    # Ask answers are ~1-2k tokens; the cap exists so a degenerate
+    # generation (observed 2026-07-12: luna emitted a complete answer then
+    # whitespace-looped for ~15 min holding the fortune lock) dies at the
+    # token budget instead of the 1200s HTTP ceiling.
+    ask_max_tokens: Optional[int] = 6000
 
     # Compatibility service tier remains optional.
     # ``narrative_service_tier_compatibility`` accepts ``"priority"`` (10-25%
