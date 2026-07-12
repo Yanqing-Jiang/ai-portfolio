@@ -674,7 +674,7 @@ export const OracleChat: React.FC<OracleChatProps> = ({
                                     key={s}
                                     type="button"
                                     onClick={() => onInputChange(s)}
-                                    className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[11px] text-slate-300 hover:bg-white/[0.07]"
+                                    className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-slate-300 hover:bg-white/[0.07]"
                                 >
                                     <span className="text-slate-500">{meta.icon}</span>
                                     <span className="text-[10px] uppercase tracking-widest text-slate-500">
@@ -696,7 +696,7 @@ export const OracleChat: React.FC<OracleChatProps> = ({
                             key={s}
                             type="button"
                             onClick={() => onInputChange(s)}
-                            className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[11px] text-slate-400 hover:text-slate-200 hover:bg-white/[0.06] transition-colors"
+                            className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-slate-400 transition-colors hover:bg-white/[0.06] hover:text-slate-200"
                         >
                             {s}
                         </button>
@@ -712,8 +712,16 @@ export const OracleChat: React.FC<OracleChatProps> = ({
                     placeholder="Ask the oracle..."
                     disabled={disabled || isLoading}
                     rows={1}
-                    className="flex-1 resize-none rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-white/20"
+                    className="flex-1 resize-none rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none"
                     style={{ maxHeight: 100, minHeight: 38 }}
+                    onFocus={(e) => {
+                        e.currentTarget.style.borderColor = `${accentColor}88`;
+                        e.currentTarget.style.boxShadow = `0 0 0 2px ${accentColor}33`;
+                    }}
+                    onBlur={(e) => {
+                        e.currentTarget.style.borderColor = '';
+                        e.currentTarget.style.boxShadow = '';
+                    }}
                 />
                 <button
                     type="button"

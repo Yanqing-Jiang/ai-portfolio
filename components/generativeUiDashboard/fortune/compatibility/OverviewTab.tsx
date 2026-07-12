@@ -4,7 +4,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { ChevronDown, ArrowDown, ShieldCheck, AlertCircle } from 'lucide-react';
 import { useFortuneStore } from '../../stores/fortuneStore';
 import { DualRingGauge, StreamingText, GuardrailBanner } from '../shared';
-import { FLOW_ACCENTS, GLASS } from '../designTokens';
+import { FLOW_ACCENTS, OBSERVATORY_SERIF, OBSERVATORY_MONO, observatoryAccent } from '../designTokens';
 import { tabContentVariants, slideDown } from '../animations';
 
 const ACCENT = FLOW_ACCENTS.compatibility;
@@ -28,52 +28,63 @@ export const OverviewTab: React.FC<{ isReplay?: boolean }> = ({ isReplay = false
       exit="exit"
       className="space-y-8 pb-10"
     >
-      {/* Hero Score Section */}
-      <div className="flex flex-col items-center pt-4">
-        <motion.div
-          initial={{ scale: 0.8, opacity: 0 }}
-          animate={{ scale: 1, opacity: 1 }}
-          transition={{ type: 'spring', damping: 15, stiffness: 100 }}
-          className="relative w-[65vw] max-w-[280px] aspect-square flex items-center justify-center"
+      {/* Hero Score Section — Observatory accent wash */}
+      <div
+        className="relative flex flex-col items-center gap-4 overflow-hidden rounded-2xl border p-6 text-center"
+        style={{
+          borderColor: observatoryAccent(ACCENT.primary).heroBorder,
+          background: observatoryAccent(ACCENT.primary).heroWash,
+        }}
+      >
+        <div
+          className="text-[40px] font-bold leading-none"
+          style={{ fontFamily: OBSERVATORY_SERIF, color: ACCENT.primary }}
         >
+          {Math.round(overview.score)}
+          <small
+            className="mt-1 block text-[8px] font-semibold uppercase tracking-[0.25em] text-[#8a8f98]"
+            style={{ fontFamily: OBSERVATORY_MONO }}
+          >
+            Harmony
+          </small>
+        </div>
+
+        <div className="relative mx-auto w-[55vw] max-w-[220px] aspect-square">
           <DualRingGauge
             score={overview.score}
             personAName={compat?.personA?.name || 'Person A'}
             personBName={compat?.personB?.name || 'Person B'}
             accentColor={ACCENT.primary}
-            size={240}
+            size={200}
             isReplay={isReplay}
           />
-        </motion.div>
+        </div>
 
-        <motion.div
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 1 }}
-          className="mt-6 flex flex-col items-center gap-2"
+        <div
+          className="rounded-full border px-4 py-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.15em]"
+          style={{
+            color: ACCENT.primary,
+            borderColor: observatoryAccent(ACCENT.primary).tabBorder,
+            background: observatoryAccent(ACCENT.primary).tabBg,
+          }}
         >
-          <div className="px-4 py-1.5 rounded-full bg-rose-500/10 border border-rose-500/20 text-[10px] font-bold uppercase tracking-widest text-rose-400">
-            {overview.relationship} Compatibility
-          </div>
-          <motion.div
-            animate={{ y: [0, 5, 0] }}
-            transition={{ repeat: Infinity, duration: 2 }}
-            className="text-slate-500"
-          >
-            <ArrowDown size={14} />
-          </motion.div>
-        </motion.div>
-      </div>
+          {overview.relationship} Compatibility
+        </div>
 
-      {/* Summary Narrative */}
-      <div className={`${GLASS} p-5 relative overflow-hidden group`}>
-        <div className="absolute top-0 left-0 w-1 h-full bg-rose-500/50" />
         <StreamingText
           text={overview.summary}
           isStreaming={false}
           isReplay={isReplay}
-          className="text-[15px] leading-relaxed text-slate-200"
+          className="max-w-md text-[12.5px] leading-relaxed text-[#9aa0a8]"
         />
+
+        <motion.div
+          animate={{ y: [0, 5, 0] }}
+          transition={{ repeat: Infinity, duration: 2 }}
+          className="text-slate-500"
+        >
+          <ArrowDown size={14} />
+        </motion.div>
       </div>
 
       {/* Strengths & Frictions Split Panel */}

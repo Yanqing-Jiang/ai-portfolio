@@ -81,11 +81,3 @@ export const FORTUNE_THEMES: Record<FortunePurposeId, FortuneTheme> = {
     accentWash: 'rgba(96, 165, 250, 0.06)',
   },
 };
-
-/** Gold is shared across all purposes for classical citations + brand anchor. */
-export const FORTUNE_GOLD = '#eab308';
-export const FORTUNE_GOLD_SOFT = 'rgba(234, 179, 8, 0.28)';
-export const FORTUNE_INK = '#0c0a14';
-export const FORTUNE_IVORY = '#f8fafc';
-export const FORTUNE_CHINESE_FONT =
-  "'Noto Serif SC', 'Songti SC', 'Songti TC', Georgia, serif";

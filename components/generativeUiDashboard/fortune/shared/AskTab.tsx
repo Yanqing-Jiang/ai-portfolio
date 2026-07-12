@@ -10,7 +10,7 @@ import { useFortuneAsk } from '../../hooks/useFortuneAsk';
 import { MemoryPanel } from './MemoryPanel';
 import { useFortuneStore } from '../../stores/fortuneStore';
 import { OracleChat, type OracleChatMessage } from './OracleChat';
-import { FLOW_ACCENTS, GLASS } from '../designTokens';
+import { FLOW_ACCENTS, OBSERVATORY_MONO, accentAlpha } from '../designTokens';
 import { tabContentVariants } from '../animations';
 import type { FortuneFunctionId, OccasionPick } from '../../lib/fortuneTypes';
 import type { CanonicalFortuneFunction } from '../../../../lib/fortuneRoutes';
@@ -193,7 +193,11 @@ export const AskTab: React.FC<AskTabProps> = ({ functionId, question }) => {
         {topPicks.length > 0 && (
           <div>
             <div
-              className={`${GLASS} flex items-center justify-between gap-3 border-amber-500/20 bg-amber-500/[0.03] p-3`}
+              className="flex items-center justify-between gap-3 rounded-xl border p-3"
+              style={{
+                borderColor: accentAlpha(accent.primary, 0.25),
+                background: accentAlpha(accent.primary, 0.04),
+              }}
             >
               <div className="flex min-w-0 items-center gap-3">
                 <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-amber-500/20 bg-amber-500/10">
@@ -246,7 +250,10 @@ export const AskTab: React.FC<AskTabProps> = ({ functionId, question }) => {
         exit="exit"
         className="space-y-4"
       >
-        <div className={`${GLASS} relative flex items-center gap-4 overflow-hidden p-4`}>
+        <div
+          className="relative flex items-center gap-4 overflow-hidden rounded-xl border border-white/[0.06] bg-white/[0.02] p-4"
+          style={{ fontFamily: OBSERVATORY_MONO }}
+        >
           <div className="absolute right-0 top-0 p-1 opacity-5">
             <Brain size={60} />
           </div>

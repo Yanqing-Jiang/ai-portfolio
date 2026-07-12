@@ -4,6 +4,7 @@
  * FLOW_ACCENTS: per-function accent colors (wish=teal, compat=rose, luck=indigo, occasion=amber).
  * ELEMENT_COLORS: Five Elements palette with Tailwind classes + hex.
  * BASE_THEME: dark navy foundation shared across all functions.
+ * OBSERVATORY_*: Phase 5 shared visual tokens (Observatory + trace ledger).
  *
  * Gold (#eab308) is RESERVED for classical citations — never used for buttons or accents.
  */
@@ -67,10 +68,100 @@ export const BASE_THEME = {
 } as const;
 
 // ---------------------------------------------------------------------------
-// Glassmorphism helper
+// Glassmorphism helper (legacy surfaces still used by Why/Calendar/etc.)
 // ---------------------------------------------------------------------------
 
 export const GLASS = 'bg-white/5 backdrop-blur-lg border border-white/10 rounded-2xl';
+
+// ---------------------------------------------------------------------------
+// Observatory (Phase 5) — shared style tokens
+// Define once; consume from shell / panels / hero cards. No per-function copies.
+// ---------------------------------------------------------------------------
+
+export const OBSERVATORY_SERIF =
+  "'Songti SC', 'Noto Serif SC', Georgia, serif";
+
+export const OBSERVATORY_MONO =
+  "ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace";
+
+/** Parse #rgb / #rrggbb into rgba() string. */
+export function accentAlpha(hex: string, alpha: number): string {
+  const raw = hex.replace('#', '');
+  const full =
+    raw.length === 3
+      ? raw
+          .split('')
+          .map((c) => c + c)
+          .join('')
+      : raw.padEnd(6, '0').slice(0, 6);
+  const n = Number.parseInt(full, 16);
+  if (!Number.isFinite(n)) return `rgba(212,175,55,${alpha})`;
+  const r = (n >> 16) & 255;
+  const g = (n >> 8) & 255;
+  const b = n & 255;
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+export interface ObservatoryAccentStyles {
+  primary: string;
+  softBorder: string;
+  wash: string;
+  tabBg: string;
+  tabBorder: string;
+  focusRing: string;
+  pulse: string;
+  heroBorder: string;
+  heroWash: string;
+  score: string;
+}
+
+/** Map a FLOW_ACCENTS primary (or any hex) into Observatory surface tokens. */
+export function observatoryAccent(primary: string): ObservatoryAccentStyles {
+  return {
+    primary,
+    softBorder: accentAlpha(primary, 0.28),
+    wash: accentAlpha(primary, 0.07),
+    tabBg: accentAlpha(primary, 0.06),
+    tabBorder: accentAlpha(primary, 0.3),
+    focusRing: accentAlpha(primary, 0.45),
+    pulse: primary,
+    heroBorder: accentAlpha(primary, 0.25),
+    heroWash: `linear-gradient(120deg, ${accentAlpha(primary, 0.08)}, ${accentAlpha(primary, 0.02)})`,
+    score: primary,
+  };
+}
+
+/** KPI band card — mock A `.kpi` */
+export const OBS_KPI_CARD =
+  'rounded-xl border border-white/[0.07] bg-white/[0.02] p-3.5 sm:p-3.5';
+
+export const OBS_KPI_VALUE =
+  'block text-[20px] sm:text-[22px] font-semibold leading-none text-[#f4e9c8]';
+
+export const OBS_KPI_LABEL =
+  'mt-2 block font-mono text-[9px] font-semibold uppercase tracking-[0.2em] text-[#7a7f88]';
+
+/** Quiet / secondary pick card — mock A `.pick.minor` */
+export const OBS_QUIET_CARD =
+  'flex items-center gap-4 rounded-2xl border border-white/[0.08] bg-white/[0.02] p-4';
+
+/** Pill tab base — mock A `.tab` */
+export const OBS_TAB =
+  'relative rounded-full border border-transparent px-4 py-2.5 font-mono text-[11px] font-semibold uppercase tracking-[0.15em] text-[#8a8f98] transition-colors';
+
+/** Ledger / execution-trace mono strip */
+export const OBS_LEDGER =
+  'rounded-xl border border-white/[0.06] bg-[#070808]/80 font-mono';
+
+export const OBS_LEDGER_HEADER =
+  'px-4 py-3 text-[9px] font-semibold uppercase tracking-[0.2em]';
+
+export const OBS_LEDGER_ROW =
+  'flex items-baseline justify-between gap-3 px-4 py-1 text-[10.5px] leading-[1.9] text-[#5c6963]';
+
+/** Compact session-memory strip */
+export const OBS_MEMORY_STRIP =
+  'overflow-hidden rounded-xl border border-white/[0.06] bg-white/[0.02] font-mono';
 
 // ---------------------------------------------------------------------------
 // Score thresholds — color by score value

@@ -1,212 +1,288 @@
 /**
- * FortuneAgentResultShell — shared mobile-first layout for all 4 result pages
- * (Compatibility / Occasion / Cycle / Custom Wish).
+ * FortuneAgentResultShell — Observatory chrome for all 4 result pages.
  *
- * Design intent:
- * - Each result page inherits its function's accent + gradient from
- *   fortuneAgentTheme.ts, so the visual story from hub → input → result
- *   stays continuous.
- * - Top-sticky floating glass pill for tabs (ceremonial, not SaaS-y).
- * - Label-only tabs in Noto Serif SC; the active tab glows with the
- *   function's accent color (layoutId spring animation).
- * - The 4th tab is always "Ask" — conversational follow-up.
- * - Safe-area aware so iOS home indicator doesn't clip the bottom chrome.
- *
- * References:
- * - ~/homer/output/gemini/fortune-mobile-tabs-ux-2026-04-15-1400.md
- * - fortuneAgentTheme.ts
+ * Phase 5 visual direction (mock A + B ledger rail):
+ * - Top status bar: fortune://{fn}/{id} · model · LIVE/REPLAY/GUARDRAIL
+ * - Kicker (CJK · label) + serif tldr headline + context sub-line
+ * - KPI band (4 cards)
+ * - Pill tabs (mono uppercase)
+ * - Optional desktop Glass Box rail; mobile keeps inline placement
  */
 
 import React from 'react';
-import { motion } from 'framer-motion';
+import { motion, useReducedMotion } from 'framer-motion';
 import { ArrowLeft } from 'lucide-react';
+import type { FortunePurposeId } from './fortuneAgentTheme';
+import type { ResultKpi } from './fortune/shell/resultConfig';
 import {
-    FORTUNE_THEMES,
-    FORTUNE_GOLD,
-    FORTUNE_CHINESE_FONT,
-    type FortunePurposeId,
-} from './fortuneAgentTheme';
+  OBSERVATORY_SERIF,
+  OBSERVATORY_MONO,
+  OBS_KPI_CARD,
+  OBS_KPI_VALUE,
+  OBS_KPI_LABEL,
+  OBS_TAB,
+  observatoryAccent,
+  accentAlpha,
+} from './fortune/designTokens';
 
 export interface FortuneTab {
-    id: string;
-    label: string;
+  id: string;
+  label: string;
 }
 
+export type ShellRunState = 'live' | 'replay' | 'guardrail_failed';
+
 interface FortuneAgentResultShellProps {
-    purpose: FortunePurposeId;
-    /** Short label shown next to the glyph badge (e.g. "Compatibility Reading"). */
-    eyebrow: string;
-    /** Optional subtitle below the eyebrow (truncates on mobile). */
-    subtitle?: string;
-    tabs: FortuneTab[];
-    activeTabId: string;
-    onTabChange: (id: string) => void;
-    onBack?: () => void;
-    children: React.ReactNode;
+  purpose: FortunePurposeId;
+  /** Accent primary hex from FLOW_ACCENTS (not FORTUNE_THEMES). */
+  accentPrimary: string;
+  glyph: string;
+  kicker: string;
+  headline: string;
+  contextLine?: string;
+  kpis: ResultKpi[];
+  statusPath: string;
+  modelId?: string;
+  runState: ShellRunState;
+  tabs: FortuneTab[];
+  activeTabId: string;
+  onTabChange: (id: string) => void;
+  onBack?: () => void;
+  /** Desktop (≥lg) sticky execution-trace rail. */
+  rail?: React.ReactNode;
+  /** Mobile / compact chrome above main (Glass Box + pause). */
+  mobileChrome?: React.ReactNode;
+  children: React.ReactNode;
+}
+
+function StateChip({
+  runState,
+  accent,
+  reduceMotion,
+}: {
+  runState: ShellRunState;
+  accent: string;
+  reduceMotion: boolean | null;
+}) {
+  if (runState === 'guardrail_failed') {
+    return (
+      <span className="inline-flex items-center gap-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.2em] text-rose-400">
+        Guardrail Failed
+      </span>
+    );
+  }
+  if (runState === 'replay') {
+    return (
+      <span className="inline-flex items-center gap-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.2em] text-[#8a8f98]">
+        Replay
+      </span>
+    );
+  }
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.2em]"
+      style={{ color: accent }}
+    >
+      <motion.span
+        aria-hidden
+        className="inline-block h-1.5 w-1.5 rounded-full"
+        style={{ background: accent }}
+        animate={reduceMotion ? undefined : { opacity: [1, 0.3, 1] }}
+        transition={reduceMotion ? undefined : { duration: 1.4, repeat: Infinity, ease: 'easeInOut' }}
+      />
+      Live
+    </span>
+  );
 }
 
 export const FortuneAgentResultShell: React.FC<FortuneAgentResultShellProps> = ({
-    purpose,
-    eyebrow,
-    subtitle,
-    tabs,
-    activeTabId,
-    onTabChange,
-    onBack,
-    children,
+  purpose,
+  accentPrimary,
+  glyph,
+  kicker,
+  headline,
+  contextLine,
+  kpis,
+  statusPath,
+  modelId,
+  runState,
+  tabs,
+  activeTabId,
+  onTabChange,
+  onBack,
+  rail,
+  mobileChrome,
+  children,
 }) => {
-    const theme = FORTUNE_THEMES[purpose];
-    const gradient = `linear-gradient(180deg, ${theme.gradient[0]} 0%, ${theme.gradient[1]} 55%, #0c0a14 100%)`;
+  const reduceMotion = useReducedMotion();
+  const obs = observatoryAccent(accentPrimary);
+  const gradient = `radial-gradient(1200px 500px at 70% -10%, ${accentAlpha(accentPrimary, 0.07)}, transparent 60%), #0a0c10`;
 
-    return (
-        <div
-            className="min-h-screen text-[#f8fafc] selection:bg-[#eab308]/30"
-            style={{ background: gradient }}
-        >
-            {/* ----- Top bar: glyph badge + back button ----- */}
-            <div
-                className="sticky top-0 z-40 backdrop-blur-md"
+  return (
+    <div
+      className="relative min-h-screen overflow-x-hidden text-[#e8e6e1] selection:bg-white/20"
+      style={{ background: gradient }}
+    >
+      {/* Oversized CJK watermark */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute -right-8 -top-10 select-none text-[clamp(140px,28vw,280px)] font-black leading-none"
+        style={{
+          fontFamily: OBSERVATORY_SERIF,
+          color: accentAlpha(accentPrimary, 0.05),
+        }}
+      >
+        {glyph}
+      </div>
+
+      {/* ----- Status bar ----- */}
+      <div
+        className="sticky top-0 z-40 border-b border-white/[0.06] backdrop-blur-md"
+        style={{
+          background: 'rgba(10, 12, 16, 0.82)',
+          paddingTop: 'env(safe-area-inset-top, 0px)',
+        }}
+      >
+        <div className="mx-auto flex w-full max-w-[1100px] items-center justify-between gap-3 px-4 py-2.5">
+          <div className="hidden min-w-0 items-center gap-2 sm:flex">
+            <span
+              className="truncate font-mono text-[10px] uppercase tracking-[0.18em] text-[#5fbf8f]/90"
+              style={{ fontFamily: OBSERVATORY_MONO }}
+              title={statusPath}
+            >
+              {statusPath}
+              {modelId ? ` · ${modelId}` : ''}
+            </span>
+          </div>
+          <div className="flex flex-1 items-center justify-end gap-3 sm:flex-none">
+            <StateChip runState={runState} accent={obs.primary} reduceMotion={reduceMotion} />
+            {onBack && (
+              <button
+                type="button"
+                onClick={onBack}
+                aria-label="Back"
+                className="inline-flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-[10px] font-bold uppercase tracking-[0.16em] transition-colors"
                 style={{
-                    background: 'rgba(12, 10, 20, 0.72)',
-                    borderBottom: `1px solid ${theme.accentSoft}`,
-                    paddingTop: 'env(safe-area-inset-top, 0px)',
+                  borderColor: obs.softBorder,
+                  color: obs.primary,
+                  background: 'rgba(10,12,16,0.4)',
                 }}
-            >
-                <div className="mx-auto flex w-full max-w-[560px] items-center justify-between px-4 py-2.5">
-                    <div className="flex items-center gap-2.5 min-w-0">
-                        <div
-                            className="flex h-8 w-8 flex-none items-center justify-center rounded-lg border"
-                            style={{
-                                borderColor: theme.accentSoft,
-                                background: theme.accentWash,
-                            }}
-                        >
-                            <span
-                                style={{
-                                    fontFamily: FORTUNE_CHINESE_FONT,
-                                    color: theme.accent,
-                                    fontSize: 18,
-                                    lineHeight: 1,
-                                }}
-                            >
-                                {theme.glyph}
-                            </span>
-                        </div>
-                        <div className="min-w-0">
-                            <h1
-                                className="text-[11px] font-bold uppercase tracking-[0.2em] truncate"
-                                style={{ color: theme.accent }}
-                            >
-                                {eyebrow}
-                            </h1>
-                            {subtitle && (
-                                <p className="text-[10px] uppercase tracking-[0.18em] text-white/45 truncate">
-                                    {subtitle}
-                                </p>
-                            )}
-                        </div>
-                    </div>
-
-                    {onBack && (
-                        <button
-                            type="button"
-                            onClick={onBack}
-                            aria-label="Back"
-                            className="inline-flex h-9 items-center gap-1.5 rounded-full border px-3 text-[10px] font-bold uppercase tracking-[0.18em] transition-colors"
-                            style={{
-                                minHeight: 36,
-                                borderColor: theme.accentSoft,
-                                color: theme.accent,
-                                background: 'rgba(12,10,20,0.4)',
-                            }}
-                        >
-                            <ArrowLeft className="w-3.5 h-3.5" />
-                            Back
-                        </button>
-                    )}
-                </div>
-
-                {/* ----- Floating glass pill tab bar ----- */}
-                <div className="px-4 pb-3 pt-1">
-                    <nav
-                        role="tablist"
-                        aria-label={`${eyebrow} sections`}
-                        className="mx-auto flex w-full max-w-[420px] items-center justify-between gap-1 rounded-full border px-1.5 py-1 backdrop-blur-xl"
-                        style={{
-                            borderColor: theme.accentSoft,
-                            background: 'rgba(12, 10, 20, 0.55)',
-                            boxShadow: `0 10px 30px -20px ${theme.accentGlow}`,
-                        }}
-                    >
-                        {tabs.map((t) => {
-                            const active = activeTabId === t.id;
-                            return (
-                                <button
-                                    key={t.id}
-                                    type="button"
-                                    role="tab"
-                                    aria-selected={active}
-                                    onClick={() => onTabChange(t.id)}
-                                    className="relative flex-1 py-2 text-[11px] font-medium tracking-[0.16em] transition-colors"
-                                    style={{
-                                        fontFamily: FORTUNE_CHINESE_FONT,
-                                        color: active ? '#fff' : 'rgba(248,250,252,0.5)',
-                                        minHeight: 36,
-                                    }}
-                                >
-                                    {active && (
-                                        <motion.span
-                                            layoutId={`fortune-tab-${purpose}`}
-                                            className="absolute inset-0 rounded-full"
-                                            style={{
-                                                background: `linear-gradient(180deg, ${theme.accent}33, ${theme.accent}11)`,
-                                                boxShadow: `0 0 18px -4px ${theme.accentGlow}`,
-                                                border: `1px solid ${theme.accentSoft}`,
-                                            }}
-                                            transition={{
-                                                type: 'spring',
-                                                bounce: 0.2,
-                                                duration: 0.55,
-                                            }}
-                                        />
-                                    )}
-                                    <span className="relative z-10">{t.label}</span>
-                                </button>
-                            );
-                        })}
-                    </nav>
-                </div>
-            </div>
-
-            {/* ----- Main content ----- */}
-            <main
-                className="mx-auto w-full max-w-[560px] px-4"
-                style={{
-                    paddingTop: 16,
-                    paddingBottom:
-                        'max(env(safe-area-inset-bottom, 0px) + 32px, 40px)',
-                }}
-            >
-                {children}
-            </main>
-
-            {/* ----- Ambient gold glyph watermark ----- */}
-            <div
-                aria-hidden
-                className="pointer-events-none fixed bottom-4 left-0 right-0 flex justify-center"
-                style={{ opacity: 0.06 }}
-            >
-                <span
-                    style={{
-                        fontFamily: FORTUNE_CHINESE_FONT,
-                        color: FORTUNE_GOLD,
-                        fontSize: 56,
-                        lineHeight: 1,
-                    }}
-                >
-                    {theme.glyph}
-                </span>
-            </div>
+              >
+                <ArrowLeft className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Back</span>
+              </button>
+            )}
+          </div>
         </div>
-    );
+      </div>
+
+      {/* ----- Body: main + optional rail ----- */}
+      <div className="relative mx-auto grid w-full max-w-[1100px] grid-cols-1 gap-0 lg:grid-cols-[minmax(0,1fr)_300px]">
+        <main
+          className="min-w-0 px-4 pt-6"
+          style={{
+            paddingBottom: 'max(env(safe-area-inset-bottom, 0px) + 32px, 40px)',
+          }}
+        >
+          {/* Kicker — glyph lives in the watermark; kicker already opens with the CJK title */}
+          <div
+            className="font-mono text-[10px] font-bold uppercase tracking-[0.35em]"
+            style={{ color: obs.primary, fontFamily: OBSERVATORY_MONO }}
+          >
+            {kicker}
+          </div>
+
+          {/* Serif display headline */}
+          <h1
+            className="mt-2.5 max-w-3xl text-[clamp(22px,5vw,34px)] font-semibold leading-[1.15] text-[#f4e9c8]"
+            style={{ fontFamily: OBSERVATORY_SERIF }}
+          >
+            {headline}
+          </h1>
+
+          {contextLine && (
+            <p className="mt-1.5 max-w-2xl text-[13px] leading-relaxed text-[#8a8f98]">
+              {contextLine}
+            </p>
+          )}
+
+          {/* KPI band — 2×2 on mobile, 4-col on sm+ */}
+          {kpis.length > 0 && (
+            <motion.div
+              className="mt-7 grid grid-cols-2 gap-3 sm:grid-cols-4"
+              initial={reduceMotion ? false : { opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={
+                reduceMotion
+                  ? { duration: 0 }
+                  : { duration: 0.45, staggerChildren: 0.06, delayChildren: 0.05 }
+              }
+            >
+              {kpis.map((k) => (
+                <motion.div
+                  key={k.label}
+                  className={OBS_KPI_CARD}
+                  initial={reduceMotion ? false : { opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                >
+                  <b className={OBS_KPI_VALUE}>{k.value}</b>
+                  <span className={OBS_KPI_LABEL}>{k.label}</span>
+                </motion.div>
+              ))}
+            </motion.div>
+          )}
+
+          {/* Pill tabs */}
+          <nav
+            role="tablist"
+            aria-label={`${purpose} sections`}
+            className="mt-7 flex flex-wrap gap-1 border-t border-white/[0.06] pt-4"
+          >
+            {tabs.map((t) => {
+              const active = activeTabId === t.id;
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => onTabChange(t.id)}
+                  className={OBS_TAB}
+                  style={
+                    active
+                      ? {
+                          color: obs.primary,
+                          borderColor: obs.tabBorder,
+                          background: obs.tabBg,
+                          fontFamily: OBSERVATORY_MONO,
+                        }
+                      : { fontFamily: OBSERVATORY_MONO }
+                  }
+                >
+                  {t.label}
+                </button>
+              );
+            })}
+          </nav>
+
+          {/* Mobile glass / pause chrome */}
+          {mobileChrome && <div className="mt-5 lg:hidden">{mobileChrome}</div>}
+
+          <div className="mt-5">{children}</div>
+        </main>
+
+        {/* Desktop execution-trace rail */}
+        {rail && (
+          <aside
+            className="relative hidden border-l border-white/[0.06] lg:block"
+            aria-label="Execution trace"
+          >
+            <div className="sticky top-[44px] max-h-[calc(100dvh-44px)] overflow-y-auto p-3">
+              {rail}
+            </div>
+          </aside>
+        )}
+      </div>
+    </div>
+  );
 };

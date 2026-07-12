@@ -12,7 +12,7 @@ import {
   WeighingTicker,
   VerdictProgressiveGauge
 } from '../shared';
-import { FLOW_ACCENTS, GLASS } from '../designTokens';
+import { FLOW_ACCENTS, OBSERVATORY_SERIF, OBSERVATORY_MONO, observatoryAccent } from '../designTokens';
 import { staggerContainer, tabContentVariants, pickVariants } from '../animations';
 import type { Retrodiction, WishModel } from '../../lib/fortuneTypes';
 
@@ -68,21 +68,42 @@ export const VerdictTab: React.FC<{ isReplay?: boolean; question?: string }> = (
         </motion.div>
       )}
 
-      {/* 2. Verdict hero card */}
-      <div className={`${GLASS} p-6 flex flex-col items-center text-center space-y-4 overflow-hidden relative`}>
-        {/* Subtle background glow */}
-        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-32 h-32 blur-[60px] opacity-20 rounded-full" style={{ backgroundColor: ACCENT.primary }} />
-        
-        <VerdictProgressiveGauge 
-          finalScore={score} 
-          streamedFraction={streamedFraction} 
-          accentColor={ACCENT.primary}
-          isReplay={isReplay}
+      {/* 2. Verdict hero card — Observatory accent wash */}
+      <div
+        className="relative flex flex-col items-center gap-4 overflow-hidden rounded-2xl border p-6 text-center"
+        style={{
+          borderColor: observatoryAccent(ACCENT.primary).heroBorder,
+          background: observatoryAccent(ACCENT.primary).heroWash,
+        }}
+      >
+        <div
+          className="absolute -right-6 -top-8 h-28 w-28 rounded-full opacity-20 blur-3xl"
+          style={{ backgroundColor: ACCENT.primary }}
+          aria-hidden
         />
 
-        <div className="space-y-1 z-10">
+        {typeof score === 'number' && score > 0 ? (
+          <div style={{ fontFamily: OBSERVATORY_SERIF, color: ACCENT.primary }}>
+            <div className="text-[40px] font-bold leading-none">{Math.round(score)}</div>
+            <small
+              className="mt-1 block text-[8px] font-semibold uppercase tracking-[0.25em] text-[#8a8f98]"
+              style={{ fontFamily: OBSERVATORY_MONO }}
+            >
+              Score
+            </small>
+          </div>
+        ) : (
+          <VerdictProgressiveGauge
+            finalScore={score}
+            streamedFraction={streamedFraction}
+            accentColor={ACCENT.primary}
+            isReplay={isReplay}
+          />
+        )}
+
+        <div className="z-10 space-y-1">
           <VerdictBadge score={score} isReplay={isReplay} />
-          <WeighingTicker 
+          <WeighingTicker
             currentMechanism={currentMechanismName}
             count={currentFactorIdx}
             total={totalFactors}
@@ -92,10 +113,10 @@ export const VerdictTab: React.FC<{ isReplay?: boolean; question?: string }> = (
         </div>
 
         {verdict?.summary && (
-          <motion.p 
+          <motion.p
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            className="text-sm leading-relaxed text-slate-300 max-w-xs"
+            className="max-w-sm text-[12.5px] leading-relaxed text-[#9aa0a8]"
           >
             {verdict.summary}
           </motion.p>

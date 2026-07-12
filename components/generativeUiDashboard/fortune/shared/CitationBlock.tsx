@@ -1,13 +1,11 @@
 import React from 'react';
 import type { Citation } from '../../lib/fortuneTypes';
-import { CITATION_GOLD } from '../designTokens';
+import { CITATION_GOLD, OBSERVATORY_SERIF } from '../designTokens';
 
 interface CitationBlockProps {
   citation: Citation;
   showChinese?: boolean;
 }
-
-const FORTUNE_CHINESE_FONT = "'Noto Serif SC', 'Songti SC', 'Songti TC', Georgia, serif";
 
 export const CitationBlock: React.FC<CitationBlockProps> = ({
   citation,
@@ -38,7 +36,7 @@ export const CitationBlock: React.FC<CitationBlockProps> = ({
       {showChinese && (
         <p
           className="text-sm leading-relaxed text-slate-300"
-          style={{ fontFamily: FORTUNE_CHINESE_FONT }}
+          style={{ fontFamily: OBSERVATORY_SERIF }}
         >
           「{citation.quote}」
         </p>

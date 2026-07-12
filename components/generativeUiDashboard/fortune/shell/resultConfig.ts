@@ -1,11 +1,18 @@
 /**
  * Per-function result-page config keyed by canonical ids from lib/fortuneRoutes.ts.
+ * Phase 5: Observatory chrome metadata + KPI extractors (no new backend fields).
  */
 import type { CanonicalFortuneFunction } from '../../../../lib/fortuneRoutes';
 import { fortuneIntakeRoute } from '../../../../lib/fortuneRoutes';
 import type { FortunePurposeId } from '../../fortuneAgentTheme';
-import type { FortuneFunctionId } from '../../lib/fortuneTypes';
+import type {
+  FortuneDataModel,
+  FortuneFunctionId,
+  LuckPillar,
+  OccasionPick,
+} from '../../lib/fortuneTypes';
 import type { FortuneTab } from '../../FortuneAgentResultShell';
+import { FORTUNE_THEMES } from '../../fortuneAgentTheme';
 
 export interface FortuneResultConfig {
   canonicalId: CanonicalFortuneFunction;
@@ -17,10 +24,21 @@ export interface FortuneResultConfig {
   eyebrow: string;
   /** Static subtitle; wish overrides via location.state.question. */
   subtitle?: string;
+  /** CJK glyph watermark / kicker prefix (from FORTUNE_THEMES). */
+  glyph: string;
+  /** CJK title used in kicker, e.g. 擇日. */
+  cjkTitle: string;
+  /** English function label in kicker. */
+  functionLabel: string;
   tabs: FortuneTab[];
   defaultTab: string;
   loadingMessage: string;
   spinnerClass: string;
+}
+
+export interface ResultKpi {
+  value: string;
+  label: string;
 }
 
 export const FORTUNE_RESULT_CONFIG: Record<
@@ -33,6 +51,9 @@ export const FORTUNE_RESULT_CONFIG: Record<
     sessionFunctionId: 'wish',
     baseRoute: fortuneIntakeRoute('wish'),
     eyebrow: 'Custom Wish',
+    glyph: FORTUNE_THEMES['custom-wish'].glyph,
+    cjkTitle: '問卜',
+    functionLabel: 'Custom Wish',
     tabs: [
       { id: 'Verdict', label: 'Verdict' },
       { id: 'Anchor', label: 'Anchor' },
@@ -50,6 +71,9 @@ export const FORTUNE_RESULT_CONFIG: Record<
     baseRoute: fortuneIntakeRoute('cycle'),
     eyebrow: 'Cycle Reading',
     subtitle: '運勢 · Year & Month',
+    glyph: FORTUNE_THEMES['luck-draw'].glyph,
+    cjkTitle: '運勢',
+    functionLabel: 'Cycle Reading',
     tabs: [
       { id: 'Now', label: 'Now' },
       { id: 'Timeline', label: 'Timeline' },
@@ -67,6 +91,9 @@ export const FORTUNE_RESULT_CONFIG: Record<
     baseRoute: fortuneIntakeRoute('compatibility'),
     eyebrow: 'Compatibility',
     subtitle: '兩命 · Two Charts',
+    glyph: FORTUNE_THEMES.compatibility.glyph,
+    cjkTitle: '兩命',
+    functionLabel: 'Compatibility',
     tabs: [
       { id: 'Overview', label: 'Overview' },
       { id: 'Pillars', label: 'Pillars' },
@@ -84,6 +111,9 @@ export const FORTUNE_RESULT_CONFIG: Record<
     baseRoute: fortuneIntakeRoute('occasion'),
     eyebrow: 'Occasion',
     subtitle: '擇日 · Auspicious Date',
+    glyph: FORTUNE_THEMES['lucky-day'].glyph,
+    cjkTitle: '擇日',
+    functionLabel: 'Auspicious Date',
     tabs: [
       { id: 'TopPicks', label: 'Top Picks' },
       { id: 'Calendar', label: 'Calendar' },
@@ -95,3 +125,193 @@ export const FORTUNE_RESULT_CONFIG: Record<
     spinnerClass: 'border-amber-500/30 border-t-amber-500',
   },
 };
+
+function dash(v: unknown): string {
+  if (v === null || v === undefined || v === '') return '—';
+  return String(v);
+}
+
+function asKpi(model: FortuneDataModel | null | undefined): Record<string, unknown> {
+  return (model?.kpi as Record<string, unknown> | undefined) || {};
+}
+
+const ELEMENT_CJK: Record<string, string> = {
+  Wood: '木',
+  Fire: '火',
+  Earth: '土',
+  Metal: '金',
+  Water: '水',
+};
+
+function dayMasterLabel(model: FortuneDataModel | null | undefined): string {
+  const kpi = asKpi(model);
+  const chinese = kpi.dayMasterChinese as string | undefined;
+  const element = (kpi.dayMasterElement as string | undefined) || '';
+  const latin = (kpi.dayMaster as string | undefined) || model?.pillars?.day?.stem || '';
+  const elCjk = ELEMENT_CJK[element] || '';
+  if (chinese && elCjk) return `${chinese} ${elCjk}`;
+  if (chinese) return chinese;
+  if (latin && element) return `${latin}`;
+  return dash(latin || chinese);
+}
+
+function formatHours(hours?: string[]): string {
+  if (!hours || hours.length === 0) return '—';
+  return hours.slice(0, 2).join(' · ');
+}
+
+function nextPeakYear(model: FortuneDataModel | null | undefined): string {
+  const years =
+    model?.narrative?.yearPredictions ||
+    model?.luckCycle?.timeline?.years ||
+    model?.annualPillars?.items ||
+    [];
+  const now = new Date().getFullYear();
+  let best: { year: number; score: number } | null = null;
+  for (const y of years) {
+    const year = typeof (y as { year?: number }).year === 'number' ? (y as { year: number }).year : NaN;
+    if (!Number.isFinite(year) || year < now) continue;
+    const score =
+      typeof (y as { confidence?: number }).confidence === 'number'
+        ? (y as { confidence: number }).confidence
+        : typeof (y as { score?: number }).score === 'number'
+          ? (y as { score: number }).score
+          : 0;
+    if (!best || score > best.score) best = { year, score };
+  }
+  return best ? String(best.year) : '—';
+}
+
+function wishConfidence(model: FortuneDataModel | null | undefined): string {
+  const preds = model?.narrative?.yearPredictions;
+  if (preds && preds.length > 0) {
+    const avg =
+      preds.reduce((s, p) => s + (typeof p.confidence === 'number' ? p.confidence : 0), 0) /
+      preds.length;
+    if (avg > 0) return `${Math.round(avg * 100)}%`;
+  }
+  const seasonal = asKpi(model).seasonalScore;
+  if (typeof seasonal === 'number') return `${Math.round(seasonal)}%`;
+  const score = model?.wish?.verdict?.score ?? asKpi(model).harmonyScore;
+  if (typeof score === 'number') return `${Math.round(score)}`;
+  return '—';
+}
+
+/** 4 KPI cards per function — values already present on dataModel only. */
+export function buildResultKpis(
+  canonicalId: CanonicalFortuneFunction,
+  dataModel: FortuneDataModel | null | undefined,
+): ResultKpi[] {
+  const kpi = asKpi(dataModel);
+
+  if (canonicalId === 'occasion') {
+    const picks = (dataModel?.occasion?.topPicks || []) as OccasionPick[];
+    const windowDays = dataModel?.occasion?.calendar?.days?.length;
+    const top = picks[0];
+    return [
+      { value: dash(top?.score), label: 'Top score' },
+      { value: dayMasterLabel(dataModel), label: 'Day master' },
+      {
+        value:
+          windowDays && picks.length
+            ? `${picks.length} / ${windowDays}`
+            : dash(picks.length || undefined),
+        label: 'Days qualified',
+      },
+      { value: formatHours(top?.bestHours), label: 'Prime hours' },
+    ];
+  }
+
+  if (canonicalId === 'cycle') {
+    const window = dataModel?.luckCycle?.currentWindow;
+    const decades = (dataModel?.luckPillars?.items ||
+      dataModel?.luckCycle?.timeline?.decades ||
+      []) as LuckPillar[];
+    const current =
+      window?.decade ||
+      decades.find((d) => d.isCurrent)?.stem ||
+      (kpi.currentCycle as string | undefined);
+    return [
+      {
+        value: dash(window?.score ?? kpi.harmonyScore),
+        label: 'Vitality score',
+      },
+      { value: dayMasterLabel(dataModel), label: 'Day master' },
+      { value: dash(current), label: 'Current decade' },
+      { value: nextPeakYear(dataModel), label: 'Next peak year' },
+    ];
+  }
+
+  if (canonicalId === 'compatibility') {
+    const overview = dataModel?.compatibility?.overview;
+    return [
+      { value: dash(overview?.score ?? kpi.harmonyScore), label: 'Harmony score' },
+      { value: dash(overview?.relationship), label: 'Relationship' },
+      { value: dash(overview?.strengths?.length), label: 'Strengths' },
+      { value: dash(overview?.frictions?.length), label: 'Frictions' },
+    ];
+  }
+
+  // wish
+  const insights =
+    dataModel?.narrative?.insights?.length ??
+    dataModel?.wish?.anchors?.length ??
+    dataModel?.wish?.mechanisms?.length ??
+    0;
+  return [
+    {
+      value: dash(dataModel?.wish?.verdict?.score ?? kpi.harmonyScore),
+      label: 'Harmony score',
+    },
+    { value: dayMasterLabel(dataModel), label: 'Day master' },
+    { value: dash(insights || undefined), label: 'Insight count' },
+    { value: wishConfidence(dataModel), label: 'Confidence' },
+  ];
+}
+
+/** Display headline: narrative tldr, else function-specific title fallback. */
+export function buildResultHeadline(
+  canonicalId: CanonicalFortuneFunction,
+  dataModel: FortuneDataModel | null | undefined,
+  fallbackTitle?: string,
+): string {
+  const tldr = dataModel?.narrative?.tldr?.trim();
+  if (tldr) return tldr;
+
+  if (canonicalId === 'occasion') {
+    const top = dataModel?.occasion?.topPicks?.[0];
+    if (top?.oneLineReason) return top.oneLineReason;
+  }
+  if (canonicalId === 'cycle') {
+    const summary = dataModel?.luckCycle?.currentWindow?.summary?.trim();
+    if (summary) return summary;
+  }
+  if (canonicalId === 'compatibility') {
+    const summary = dataModel?.compatibility?.overview?.summary?.trim();
+    if (summary) return summary;
+  }
+  if (canonicalId === 'wish') {
+    const title = dataModel?.wish?.verdict?.title?.trim();
+    if (title) return title;
+    const summary = dataModel?.wish?.verdict?.summary?.trim();
+    if (summary) return summary;
+  }
+
+  return fallbackTitle || 'Reading in progress…';
+}
+
+/** Model id from dataModel.meta when present (omit otherwise). */
+export function readModelId(dataModel: FortuneDataModel | null | undefined): string | undefined {
+  const meta = dataModel?.meta as Record<string, unknown> | undefined;
+  if (!meta) return undefined;
+  for (const key of ['modelId', 'model', 'narrativeModel', 'narrative_model'] as const) {
+    const v = meta[key];
+    if (typeof v === 'string' && v.trim()) return v.trim();
+  }
+  return undefined;
+}
+
+export function shortFortuneId(fortuneId: string | null | undefined): string {
+  if (!fortuneId) return '--------';
+  return fortuneId.replace(/-/g, '').slice(0, 8);
+}

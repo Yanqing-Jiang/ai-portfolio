@@ -1,19 +1,28 @@
 /**
  * FortuneResultShell — ONE config-driven result page for all 4 functions.
- * Replaces FortuneAgent{CustomWish,Cycle,Compatibility,Occasion}Result wrappers.
+ * Phase 5: Observatory chrome + desktop Glass Box rail.
  */
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence } from 'framer-motion';
 import { useLocation } from 'react-router-dom';
+import { useShallow } from 'zustand/react/shallow';
 import {
   FortuneAgentResultShell,
+  type ShellRunState,
 } from './FortuneAgentResultShell';
 import { useFortuneSession } from './hooks/useFortuneSession';
+import { useFortuneStore } from './stores/fortuneStore';
 import { GlassBoxPanel } from './fortune/shared/GlassBoxPanel';
 import { AskTab } from './fortune/shared/AskTab';
 import { WhyTab } from './fortune/shared/WhyTab';
 import { FLOW_ACCENTS } from './fortune/designTokens';
-import { FORTUNE_RESULT_CONFIG } from './fortune/shell/resultConfig';
+import {
+  FORTUNE_RESULT_CONFIG,
+  buildResultHeadline,
+  buildResultKpis,
+  readModelId,
+  shortFortuneId,
+} from './fortune/shell/resultConfig';
 import type { CanonicalFortuneFunction } from '../../lib/fortuneRoutes';
 
 import { VerdictTab } from './fortune/wish/VerdictTab';
@@ -63,6 +72,38 @@ function renderFunctionTab(
   return null;
 }
 
+
+function useIsLg(): boolean {
+  const [isLg, setIsLg] = useState(false);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mq = window.matchMedia('(min-width: 1024px)');
+    const update = () => setIsLg(mq.matches);
+    update();
+    mq.addEventListener('change', update);
+    return () => mq.removeEventListener('change', update);
+  }, []);
+  return isLg;
+}
+
+function resolveRunState(opts: {
+  isReplay: boolean;
+  status: string;
+  guardrailSeverity?: string | null;
+}): ShellRunState {
+  const sev = (opts.guardrailSeverity || '').toLowerCase();
+  if (sev === 'error' || sev === 'failed' || sev === 'reject' || sev === 'rejected') {
+    return 'guardrail_failed';
+  }
+  if (opts.isReplay && opts.status !== 'streaming' && opts.status !== 'loading') {
+    return 'replay';
+  }
+  if (opts.status === 'streaming' || opts.status === 'loading') {
+    return 'live';
+  }
+  return opts.isReplay ? 'replay' : 'live';
+}
+
 export const FortuneResultShell: React.FC<FortuneResultShellProps> = ({
   functionId,
   onBack,
@@ -77,40 +118,84 @@ export const FortuneResultShell: React.FC<FortuneResultShellProps> = ({
     baseRoute: config.baseRoute,
   });
 
-  const { isReplay, status, error, cancel, pausing } = session;
+  const { isReplay, status, error, cancel, pausing, fortuneId } = session;
+  const dataModel = useFortuneStore(useShallow((s) => s.dataModel));
 
-  const subtitle =
-    functionId === 'wish' ? question : config.subtitle;
+  const accent = FLOW_ACCENTS[config.sessionFunctionId];
+  const modelId = readModelId(dataModel);
+  const kpis = useMemo(
+    () => buildResultKpis(functionId, dataModel),
+    [functionId, dataModel],
+  );
+  const headline = useMemo(
+    () => buildResultHeadline(functionId, dataModel, config.eyebrow),
+    [functionId, dataModel, config.eyebrow],
+  );
+
+  const contextLine =
+    functionId === 'wish' ? question || config.subtitle : config.subtitle;
+
+  const occasionType = dataModel?.occasion?.analysis?.occasionType;
+  const kicker =
+    functionId === 'occasion' && occasionType
+      ? `${config.cjkTitle} · ${config.functionLabel} — ${occasionType}`
+      : `${config.cjkTitle} · ${config.functionLabel}`;
+
+  const guardrail = dataModel?.guardrail;
+  const runState = resolveRunState({
+    isReplay,
+    status,
+    guardrailSeverity: guardrail?.severity || guardrail?.level || null,
+  });
+
+  const statusPath = `fortune://${config.canonicalId}/${shortFortuneId(fortuneId)}`;
+  const isLg = useIsLg();
+
+  const pauseBar =
+    status === 'streaming' ? (
+      <div className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2">
+        <span className="text-[11px] text-slate-400">Reading in progress…</span>
+        <button
+          type="button"
+          onClick={cancel}
+          disabled={pausing}
+          className="text-[11px] font-semibold text-slate-300 hover:text-white disabled:opacity-50"
+        >
+          {pausing ? 'Pausing…' : 'Pause'}
+        </button>
+      </div>
+    ) : null;
+
+  // Single GlassBox instance — rail on ≥lg, inline drawer below.
+  const glass = !error ? (
+    <div className="space-y-3">
+      <GlassBoxPanel accent={accent.primary} variant={isLg ? 'rail' : 'inline'} />
+      {pauseBar}
+    </div>
+  ) : null;
+
+  const mobileChrome = isLg ? null : glass;
+  const rail = isLg ? glass : null;
 
   return (
     <FortuneAgentResultShell
       purpose={config.purpose}
-      eyebrow={config.eyebrow}
-      subtitle={subtitle}
+      accentPrimary={accent.primary}
+      glyph={config.glyph}
+      kicker={kicker}
+      headline={headline}
+      contextLine={contextLine}
+      kpis={kpis}
+      statusPath={statusPath}
+      modelId={modelId}
+      runState={runState}
       tabs={config.tabs}
       activeTabId={activeTab}
       onTabChange={setActiveTab}
       onBack={onBack}
+      rail={rail}
+      mobileChrome={mobileChrome}
     >
-      {!error && (
-        <div className="mb-4 space-y-3">
-          <GlassBoxPanel accent={FLOW_ACCENTS[config.sessionFunctionId].primary} />
-          {status === 'streaming' && (
-            <div className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2">
-              <span className="text-[11px] text-slate-400">Reading in progress…</span>
-              <button
-                type="button"
-                onClick={cancel}
-                disabled={pausing}
-                className="text-[11px] font-semibold text-slate-300 hover:text-white disabled:opacity-50"
-              >
-                {pausing ? 'Pausing…' : 'Pause'}
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-
       {error && (
         <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-4 text-center text-sm text-red-400">
           {error}

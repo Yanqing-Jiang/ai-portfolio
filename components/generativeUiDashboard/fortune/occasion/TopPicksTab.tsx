@@ -58,8 +58,8 @@ export const TopPicksTab: React.FC<{ isReplay?: boolean }> = ({ isReplay = false
                 isReplay={isReplay}
               />
 
-              {/* Ranks 2-5 */}
-              <div key="supporting" className="flex flex-col gap-3">
+              {/* Ranks 2+ — quiet cards, 2-col on sm+ */}
+              <div key="supporting" className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
                 {picks.slice(1, 5).map((pick, idx) => (
                   <ExpandablePickCard
                     key={`${pick.date || 'pick'}-${pick.rank ?? idx + 2}-${idx}`}

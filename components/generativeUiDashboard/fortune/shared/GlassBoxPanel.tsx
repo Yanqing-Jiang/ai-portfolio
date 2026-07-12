@@ -1,29 +1,26 @@
 /**
- * GlassBoxPanel — Execution Trace for fortune result pages.
+ * GlassBoxPanel — Execution Trace ledger (Phase 5 / mock B).
  *
  * Live: fortuneStore.traceEvents (SSE payload.kind==='trace').
  * Replay: GET /api/fortune/{id}/trace when live events are empty.
  *
- * Label is "Execution Trace" (SDK agent/tool/generation/guardrail spans),
- * not "thinking"/"reasoning". Collapsed by default.
+ * variant="inline" (default): collapsible drawer for mobile / Phase-4 placement.
+ * variant="rail": always-open sticky side ledger for ≥lg screens.
  */
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
-import {
-  Bot,
-  ChevronDown,
-  ChevronRight,
-  Loader2,
-  Shield,
-  Sparkles,
-  Wrench,
-  Zap,
-} from 'lucide-react';
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
+import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { fortuneClient } from '../../lib/fortuneClient';
 import { useFortuneStore, type TraceProjection } from '../../stores/fortuneStore';
-import { GLASS } from '../designTokens';
+import {
+  OBS_LEDGER,
+  OBS_LEDGER_HEADER,
+  OBS_LEDGER_ROW,
+  OBSERVATORY_MONO,
+  accentAlpha,
+} from '../designTokens';
 
 function asProjection(raw: unknown): TraceProjection | null {
   if (!raw || typeof raw !== 'object') return null;
@@ -49,38 +46,80 @@ function asProjection(raw: unknown): TraceProjection | null {
   };
 }
 
-function spanIcon(spanType: string | null | undefined) {
-  const key = (spanType || '').toLowerCase();
-  if (key.includes('function') || key.includes('tool')) return Wrench;
-  if (key.includes('guard')) return Shield;
-  if (key.includes('generation') || key.includes('response')) return Sparkles;
-  if (key.includes('agent')) return Bot;
-  return Zap;
+function spanKey(p: TraceProjection): string {
+  // Backend emits one event per span phase: `{run_id}:{span_id}:start|end`.
+  if (p.spanId) return `${p.runId || ''}:${p.spanId}`;
+  return p.eventId.replace(/:(start|end)$/, '');
 }
 
-function statusClass(status: string | null | undefined): string {
-  switch ((status || '').toLowerCase()) {
-    case 'running':
-    case 'pending':
-      return 'bg-amber-400 animate-pulse';
-    case 'error':
-    case 'rejected':
-      return 'bg-rose-500';
-    case 'success':
-    case 'done':
-      return 'bg-emerald-400';
-    default:
-      return 'bg-slate-500';
+/** Collapse per-phase events into one ledger row per span. The end event's
+ * terminal fields (duration, status, summaries) win; a span with only a
+ * start event so far is still running and pulses. */
+function coalesceSpans(events: TraceProjection[]): TraceProjection[] {
+  const byKey = new Map<string, TraceProjection>();
+  for (const ev of events) {
+    const key = spanKey(ev);
+    const prev = byKey.get(key);
+    if (!prev) {
+      byKey.set(key, ev);
+      continue;
+    }
+    const [start, end] = ev.phase === 'end' || ev.durationMs != null ? [prev, ev] : [ev, prev];
+    byKey.set(key, {
+      ...start,
+      eventId: key,
+      phase: end.phase ?? start.phase,
+      spanType: end.spanType ?? start.spanType,
+      agentName: end.agentName ?? start.agentName,
+      toolName: end.toolName ?? start.toolName,
+      model: end.model ?? start.model,
+      durationMs: end.durationMs ?? start.durationMs,
+      status: end.status ?? start.status,
+      argSummary: end.argSummary ?? start.argSummary,
+      resultSummary: end.resultSummary ?? start.resultSummary,
+      startedAt: start.startedAt ?? end.startedAt,
+      endedAt: end.endedAt ?? start.endedAt,
+    });
   }
+  const spans = [...byKey.values()];
+  spans.sort((a, b) => {
+    if (a.startedAt && b.startedAt && a.startedAt !== b.startedAt) {
+      return a.startedAt < b.startedAt ? -1 : 1;
+    }
+    return 0;
+  });
+  return spans;
+}
+
+function formatDuration(ms: number | null | undefined): string {
+  if (typeof ms !== 'number' || ms <= 0) return '';
+  if (ms >= 1000) {
+    const s = ms / 1000;
+    return s >= 10 ? `${Math.round(s)}s` : `${s.toFixed(1)}s`;
+  }
+  return `${Math.round(ms)}ms`;
+}
+
+function spanLabel(step: TraceProjection): string {
+  return step.toolName || step.spanType || step.phase || step.model || 'span';
+}
+
+function isActiveStatus(status: string | null | undefined): boolean {
+  const s = (status || '').toLowerCase();
+  return s === 'running' || s === 'pending' || s === 'streaming';
 }
 
 interface GlassBoxPanelProps {
   accent?: string;
+  /** inline = collapsible (mobile); rail = always open desktop ledger */
+  variant?: 'inline' | 'rail';
 }
 
 export const GlassBoxPanel: React.FC<GlassBoxPanelProps> = ({
-  accent = '#94a3b8',
+  accent = '#39d98a',
+  variant = 'inline',
 }) => {
+  const reduceMotion = useReducedMotion();
   const { fortuneId, status, traceEvents, hydrateTraceProjections } = useFortuneStore(
     useShallow((s) => ({
       fortuneId: s.fortuneId,
@@ -90,9 +129,13 @@ export const GlassBoxPanel: React.FC<GlassBoxPanelProps> = ({
     })),
   );
 
-  const [open, setOpen] = useState(false);
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const isRail = variant === 'rail';
+  const [open, setOpen] = useState(isRail);
   const [loadingReplay, setLoadingReplay] = useState(false);
+
+  useEffect(() => {
+    if (isRail) setOpen(true);
+  }, [isRail]);
 
   const projections = useMemo(() => {
     const out: TraceProjection[] = [];
@@ -100,7 +143,7 @@ export const GlassBoxPanel: React.FC<GlassBoxPanelProps> = ({
       const trace = asProjection(ev.payload?.trace);
       if (trace) out.push(trace);
     }
-    return out;
+    return coalesceSpans(out);
   }, [traceEvents]);
 
   useEffect(() => {
@@ -119,7 +162,7 @@ export const GlassBoxPanel: React.FC<GlassBoxPanelProps> = ({
           .filter((e): e is TraceProjection => !!e);
         if (mapped.length > 0) hydrateTraceProjections(mapped);
       } catch {
-        // Replay is best-effort; live stream may still populate later.
+        // Replay is best-effort.
       } finally {
         if (!cancelled) setLoadingReplay(false);
       }
@@ -140,179 +183,145 @@ export const GlassBoxPanel: React.FC<GlassBoxPanelProps> = ({
     [projections],
   );
 
-  const grouped = useMemo(() => {
-    const groups: Array<{ agent: string; items: TraceProjection[] }> = [];
-    let current: { agent: string; items: TraceProjection[] } | null = null;
-    for (const p of projections) {
-      const agent = p.agentName || 'pipeline';
-      if (!current || current.agent !== agent) {
-        current = { agent, items: [p] };
-        groups.push(current);
-      } else {
-        current.items.push(p);
-      }
-    }
-    return groups;
-  }, [projections]);
+  const headerText = loadingReplay
+    ? 'EXECUTION TRACE · LOADING…'
+    : `EXECUTION TRACE · ${projections.length} SPAN${projections.length === 1 ? '' : 'S'}${
+        totalMs > 0 ? ` · ${formatDuration(totalMs)}` : ''
+      }`;
+
+  const rows = (
+    <div
+      className={isRail ? 'max-h-[calc(100dvh-120px)] overflow-y-auto pb-3' : 'max-h-72 overflow-y-auto pb-3'}
+      style={{ fontFamily: OBSERVATORY_MONO }}
+    >
+      {projections.length === 0 ? (
+        <div className="flex items-center justify-center gap-2 px-4 py-6 text-[10.5px] text-[#5c6963]">
+          {loadingReplay || isLive ? (
+            <>
+              <Loader2 size={12} className="animate-spin" style={{ color: accent }} />
+              {isLive ? 'Waiting for spans…' : 'Loading trace…'}
+            </>
+          ) : (
+            'No execution spans recorded.'
+          )}
+        </div>
+      ) : (
+        projections.map((step) => {
+          const active = isActiveStatus(step.status);
+          const ms = formatDuration(step.durationMs);
+          return (
+            <div
+              key={step.eventId}
+              className={OBS_LEDGER_ROW}
+              style={active ? { color: accent } : undefined}
+            >
+              <span className="min-w-0 truncate">
+                <b
+                  className="font-medium"
+                  style={{ color: active ? accent : '#9fb3a8' }}
+                >
+                  {step.agentName || 'pipeline'}
+                </b>{' '}
+                <span>{spanLabel(step)}</span>
+                {active && (
+                  <motion.span
+                    aria-hidden
+                    className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full align-middle"
+                    style={{ background: accent }}
+                    animate={reduceMotion ? undefined : { opacity: [1, 0.25, 1] }}
+                    transition={
+                      reduceMotion
+                        ? undefined
+                        : { duration: 1.2, repeat: Infinity, ease: 'easeInOut' }
+                    }
+                  />
+                )}
+              </span>
+              {ms ? (
+                <span
+                  className="flex-none"
+                  style={{ color: active ? accentAlpha(accent, 0.7) : '#39707f' }}
+                >
+                  {ms}
+                </span>
+              ) : (
+                <span className="flex-none text-transparent">·</span>
+              )}
+            </div>
+          );
+        })
+      )}
+    </div>
+  );
+
+  if (isRail) {
+    return (
+      <div className={`${OBS_LEDGER} overflow-hidden`} style={{ borderColor: '#1c2420' }}>
+        <div className={OBS_LEDGER_HEADER} style={{ color: accent, fontFamily: OBSERVATORY_MONO }}>
+          <span className="inline-flex items-center gap-2">
+            {isLive && (
+              <motion.span
+                aria-hidden
+                className="inline-block h-1.5 w-1.5 rounded-full"
+                style={{ background: accent }}
+                animate={reduceMotion ? undefined : { opacity: [1, 0.3, 1] }}
+                transition={
+                  reduceMotion
+                    ? undefined
+                    : { duration: 1.4, repeat: Infinity, ease: 'easeInOut' }
+                }
+              />
+            )}
+            {headerText}
+          </span>
+        </div>
+        {rows}
+      </div>
+    );
+  }
 
   return (
-    <div className={`${GLASS} overflow-hidden border-white/10`}>
+    <div className={`${OBS_LEDGER} overflow-hidden`} style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
+        className={`flex w-full items-center justify-between gap-3 text-left ${OBS_LEDGER_HEADER}`}
+        style={{ color: accent, fontFamily: OBSERVATORY_MONO }}
         aria-expanded={open}
       >
-        <div className="flex min-w-0 items-center gap-2.5">
-          {isLive ? (
-            <span
-              className="h-1.5 w-1.5 flex-none rounded-full animate-pulse"
-              style={{ background: accent }}
+        <span className="inline-flex min-w-0 items-center gap-2 truncate">
+          {isLive && (
+            <motion.span
               aria-hidden
+              className="inline-block h-1.5 w-1.5 flex-none rounded-full"
+              style={{ background: accent }}
+              animate={reduceMotion ? undefined : { opacity: [1, 0.3, 1] }}
+              transition={
+                reduceMotion
+                  ? undefined
+                  : { duration: 1.4, repeat: Infinity, ease: 'easeInOut' }
+              }
             />
-          ) : (
-            <Zap size={13} style={{ color: accent }} className="flex-none" />
           )}
-          <div className="min-w-0">
-            <div className="text-[11px] font-semibold tracking-wide text-slate-200">
-              Execution Trace
-              {isLive && (
-                <span className="ml-2 text-[10px] font-normal uppercase tracking-wider text-amber-300/80">
-                  streaming
-                </span>
-              )}
-            </div>
-            <div className="text-[10px] font-mono uppercase tracking-wider text-slate-500">
-              {loadingReplay
-                ? 'Loading…'
-                : `${projections.length} span${projections.length === 1 ? '' : 's'}${
-                    totalMs > 0 ? ` · ${Math.round(totalMs)}ms` : ''
-                  }`}
-            </div>
-          </div>
-        </div>
+          <span className="truncate">{headerText}</span>
+        </span>
         {open ? (
-          <ChevronDown size={14} className="text-slate-500" />
+          <ChevronDown size={14} className="text-[#5c6963]" />
         ) : (
-          <ChevronRight size={14} className="text-slate-500" />
+          <ChevronRight size={14} className="text-[#5c6963]" />
         )}
       </button>
 
       <AnimatePresence initial={false}>
         {open && (
           <motion.div
-            initial={{ height: 0, opacity: 0 }}
+            initial={reduceMotion ? false : { height: 0, opacity: 0 }}
             animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.2 }}
-            className="overflow-hidden border-t border-white/5"
+            exit={reduceMotion ? undefined : { height: 0, opacity: 0 }}
+            transition={{ duration: reduceMotion ? 0 : 0.2 }}
+            className="overflow-hidden border-t border-white/[0.05]"
           >
-            <div className="max-h-72 space-y-3 overflow-y-auto px-4 py-3">
-              {projections.length === 0 ? (
-                <div className="flex items-center justify-center gap-2 py-6 text-xs text-slate-500">
-                  {loadingReplay || isLive ? (
-                    <>
-                      <Loader2 size={12} className="animate-spin" />
-                      {isLive ? 'Waiting for spans…' : 'Loading trace…'}
-                    </>
-                  ) : (
-                    'No execution spans recorded.'
-                  )}
-                </div>
-              ) : (
-                grouped.map((group) => (
-                  <div key={group.agent} className="space-y-1">
-                    <div className="px-0.5 text-[9px] font-bold uppercase tracking-[0.18em] text-slate-500">
-                      {group.agent}
-                    </div>
-                    {group.items.map((step) => {
-                      const Icon = spanIcon(step.spanType);
-                      const isOpen = !!expanded[step.eventId];
-                      const hasDetail = !!(step.argSummary || step.resultSummary);
-                      return (
-                        <div key={step.eventId}>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              hasDetail &&
-                              setExpanded((prev) => ({
-                                ...prev,
-                                [step.eventId]: !prev[step.eventId],
-                              }))
-                            }
-                            className={`flex w-full items-start gap-2.5 rounded-lg px-1.5 py-1.5 text-left ${
-                              hasDetail ? 'hover:bg-white/[0.03]' : 'cursor-default'
-                            }`}
-                            aria-expanded={hasDetail ? isOpen : undefined}
-                          >
-                            <span
-                              className="mt-0.5 inline-flex h-5 w-5 flex-none items-center justify-center rounded-md"
-                              style={{
-                                background: `${accent}22`,
-                                color: accent,
-                              }}
-                            >
-                              <Icon size={11} />
-                            </span>
-                            <span
-                              className={`mt-1.5 h-1.5 w-1.5 flex-none rounded-full ${statusClass(
-                                step.status,
-                              )}`}
-                            />
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-baseline justify-between gap-2">
-                                <p className="truncate text-[12px] text-slate-100">
-                                  {step.toolName || step.spanType || step.phase || 'span'}
-                                  {step.phase ? (
-                                    <span className="ml-1.5 text-[10px] text-slate-500">
-                                      · {step.phase}
-                                    </span>
-                                  ) : null}
-                                </p>
-                                {typeof step.durationMs === 'number' && step.durationMs > 0 && (
-                                  <span className="flex-none font-mono text-[10px] text-slate-500">
-                                    {Math.round(step.durationMs)}ms
-                                  </span>
-                                )}
-                              </div>
-                              <div className="text-[10px] text-slate-500">
-                                {step.status || 'unknown'}
-                                {step.model ? ` · ${step.model}` : ''}
-                              </div>
-                            </div>
-                          </button>
-                          <AnimatePresence initial={false}>
-                            {isOpen && hasDetail && (
-                              <motion.div
-                                initial={{ opacity: 0, height: 0 }}
-                                animate={{ opacity: 1, height: 'auto' }}
-                                exit={{ opacity: 0, height: 0 }}
-                                className="overflow-hidden pl-9 pr-1"
-                              >
-                                <div className="mb-1 space-y-1 rounded-md border border-white/5 bg-black/20 p-2 font-mono text-[10px] text-slate-400">
-                                  {step.argSummary ? (
-                                    <div>
-                                      <span className="text-slate-600">in </span>
-                                      {step.argSummary}
-                                    </div>
-                                  ) : null}
-                                  {step.resultSummary ? (
-                                    <div>
-                                      <span className="text-slate-600">out </span>
-                                      {step.resultSummary}
-                                    </div>
-                                  ) : null}
-                                </div>
-                              </motion.div>
-                            )}
-                          </AnimatePresence>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ))
-              )}
-            </div>
+            {rows}
           </motion.div>
         )}
       </AnimatePresence>

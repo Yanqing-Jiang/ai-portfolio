@@ -1,17 +1,17 @@
 /**
- * MemoryPanel — Session Memory inspector for the Ask tab.
+ * MemoryPanel — compact SESSION MEMORY strip (Phase 5 / ledger-aligned).
  *
  * Hydrates from GET /conversation on mount and appends local Ask turns so
  * the panel demos SQLAlchemySession continuity without ops noise.
  */
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
-import { ChevronDown, ChevronRight, MessageSquare } from 'lucide-react';
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { fortuneClient } from '../../lib/fortuneClient';
 import { useFortuneStore } from '../../stores/fortuneStore';
-import { GLASS } from '../designTokens';
+import { OBS_MEMORY_STRIP, OBSERVATORY_MONO } from '../designTokens';
 
 interface MemoryTurn {
   role: 'user' | 'assistant';
@@ -21,6 +21,7 @@ interface MemoryTurn {
 }
 
 export const MemoryPanel: React.FC = () => {
+  const reduceMotion = useReducedMotion();
   const { fortuneId, askHistory } = useFortuneStore(
     useShallow((s) => ({
       fortuneId: s.fortuneId,
@@ -74,8 +75,6 @@ export const MemoryPanel: React.FC = () => {
       local: true,
     }));
 
-    // Prefer remote history; append local turns that aren't already present
-    // (remote may lag until next tab open after an Ask).
     if (remote.length === 0) return local;
 
     const remoteKeys = new Set(
@@ -88,63 +87,52 @@ export const MemoryPanel: React.FC = () => {
   }, [remote, askHistory]);
 
   return (
-    <div className={`${GLASS} overflow-hidden border-white/10`}>
+    <div className={OBS_MEMORY_STRIP}>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
+        className="flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left"
+        style={{ fontFamily: OBSERVATORY_MONO }}
         aria-expanded={open}
       >
-        <div className="flex min-w-0 items-center gap-2.5">
-          <MessageSquare size={13} className="flex-none text-slate-400" />
-          <div className="min-w-0">
-            <div className="text-[11px] font-semibold tracking-wide text-slate-200">
-              Session Memory · {turns.length} turn{turns.length === 1 ? '' : 's'}
-            </div>
-            <div className="truncate text-[10px] text-slate-500">
-              Follow-ups run with full session memory — earlier turns shape later answers.
-            </div>
-          </div>
+        <div className="min-w-0 text-[10px] font-semibold uppercase tracking-[0.2em] text-[#9fb3a8]">
+          Session Memory · {turns.length} Turn{turns.length === 1 ? '' : 's'}
         </div>
         {open ? (
-          <ChevronDown size={14} className="text-slate-500" />
+          <ChevronDown size={14} className="text-[#5c6963]" />
         ) : (
-          <ChevronRight size={14} className="text-slate-500" />
+          <ChevronRight size={14} className="text-[#5c6963]" />
         )}
       </button>
 
       <AnimatePresence initial={false}>
         {open && (
           <motion.div
-            initial={{ height: 0, opacity: 0 }}
+            initial={reduceMotion ? false : { height: 0, opacity: 0 }}
             animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.18 }}
-            className="overflow-hidden border-t border-white/5"
+            exit={reduceMotion ? undefined : { height: 0, opacity: 0 }}
+            transition={{ duration: reduceMotion ? 0 : 0.18 }}
+            className="overflow-hidden border-t border-white/[0.05]"
           >
-            <div className="max-h-48 space-y-2 overflow-y-auto px-4 py-3">
+            <div className="max-h-48 space-y-1.5 overflow-y-auto px-4 py-3" style={{ fontFamily: OBSERVATORY_MONO }}>
               {turns.length === 0 ? (
-                <p className="py-3 text-center text-[11px] text-slate-500">
+                <p className="py-2 text-center text-[10.5px] text-[#5c6963]">
                   No prior turns yet. Ask a follow-up to seed session memory.
                 </p>
               ) : (
                 turns.map((t, i) => (
                   <div
                     key={`${t.role}-${i}-${t.at}`}
-                    className="rounded-lg border border-white/5 bg-black/20 px-3 py-2"
+                    className="border-b border-white/[0.04] py-1.5 last:border-0"
                   >
-                    <div className="mb-1 flex items-center justify-between gap-2">
-                      <span className="text-[9px] font-bold uppercase tracking-wider text-slate-500">
+                    <div className="mb-0.5 flex items-center justify-between gap-2 text-[9px] uppercase tracking-[0.16em] text-[#5c6963]">
+                      <span>
                         {t.role}
                         {t.local ? ' · live' : ''}
                       </span>
-                      {t.at ? (
-                        <span className="font-mono text-[9px] text-slate-600">
-                          {t.at.slice(11, 19) || t.at}
-                        </span>
-                      ) : null}
+                      {t.at ? <span>{t.at.slice(11, 19) || t.at}</span> : null}
                     </div>
-                    <p className="line-clamp-3 text-[11px] leading-relaxed text-slate-300">
+                    <p className="line-clamp-2 text-[10.5px] leading-relaxed text-[#b9c4bd]">
                       {t.text}
                     </p>
                   </div>
