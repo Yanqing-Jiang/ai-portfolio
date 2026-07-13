@@ -119,10 +119,12 @@ if [ -n "$MIGRATIONS" ]; then
   while IFS= read -r migration; do
     migration_name=$(basename "$migration")
     log "applying migration ${migration_name} before backend restart..."
+    # Detach the container command from the loop's stdin; otherwise it can
+    # consume the remaining migration filenames and silently skip them.
     if ! docker compose run --rm --no-deps -T \
       -v "$REPO_DIR/backend:/workspace:ro" \
       backend python /workspace/scripts/apply_migration.py \
-      "/workspace/migrations/${migration_name}" >>"$LOG_FILE" 2>&1; then
+      "/workspace/migrations/${migration_name}" </dev/null >>"$LOG_FILE" 2>&1; then
       log "FATAL: migration ${migration_name} failed; backend deployment blocked"
       exit 1
     fi
