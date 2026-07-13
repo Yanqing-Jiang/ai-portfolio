@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -24,7 +25,7 @@ from fortune.agents import (
 )
 from fortune.routes import AskRequest, ask_fortune
 from fortune.state import get_run_state, reset_run_state_for_tests
-from fortune.triage import ASK_AGENT, run_triage
+from fortune.triage import ASK_AGENT, _build_triage_prompt, run_triage
 
 
 class _MemorySession:
@@ -162,7 +163,9 @@ async def test_concurrent_ask_returns_409_busy(monkeypatch) -> None:
         with pytest.raises(HTTPException) as exc_info:
             await ask_fortune(
                 "busy-fortune",
-                AskRequest(question="Can you answer now?"),
+                AskRequest(
+                    question="Can you answer now?", client_request_id=uuid.uuid4(),
+                ),
                 MagicMock(),
             )
         assert exc_info.value.status_code == 409
@@ -170,3 +173,40 @@ async def test_concurrent_ask_returns_409_busy(monkeypatch) -> None:
         assert exc_info.value.headers == {"Retry-After": "3"}
     finally:
         await store.release_lock("busy-fortune", token)
+
+
+def test_selected_section_is_projected_from_trusted_narrative() -> None:
+    ctx = FortuneRunContext(
+        fortune_id="same",
+        surface_id="fortune_main",
+        focus="custom_wish",
+        question="What does this mean?",
+    )
+    prompt = _build_triage_prompt(
+        ctx,
+        {"pillars": {"day": {"stem": "Metal"}}},
+        action_id=None,
+        question="What does this mean?",
+        latest_narrative={
+            "tldr": "Stored summary",
+            "wish": {
+                "verdict": "Proceed carefully",
+                "anchors": [
+                    {"id": "anchor-1", "label": "Choose timing"},
+                    {"id": "anchor-2", "label": "Keep scope small"},
+                ],
+            },
+        },
+        selected_section={
+            "section_id": "anchor",
+            "selection_id": "anchor-1",
+            "data": "untrusted browser payload must be ignored",
+        },
+    )
+
+    payload = json.loads(prompt)
+    selected = payload["intent"]["selected_section"]
+    assert selected["section_id"] == "anchor"
+    assert selected["selection_id"] == "anchor-1"
+    assert selected["data"] == {"id": "anchor-1", "label": "Choose timing"}
+    assert "untrusted browser payload" not in prompt

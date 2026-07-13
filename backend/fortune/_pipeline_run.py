@@ -50,7 +50,7 @@ try:
     from ._thinking_heartbeat import HeartbeatTick, iter_with_heartbeats
     from .state import RuntimeStatus
     from .tracing import flush_pending_spans
-    from .session_store import get_ask_session
+    from .session_store import BufferedAskSession, get_ask_session
     from .pipeline import (
         _build_ask_original_input,
         _local_seq_allocator,
@@ -84,7 +84,7 @@ except ImportError:  # pragma: no cover
     from _thinking_heartbeat import HeartbeatTick, iter_with_heartbeats  # type: ignore[no-redef]
     from state import RuntimeStatus  # type: ignore[no-redef]
     from tracing import flush_pending_spans  # type: ignore[no-redef]
-    from session_store import get_ask_session  # type: ignore[no-redef]
+    from session_store import BufferedAskSession, get_ask_session  # type: ignore[no-redef]
     from pipeline import (  # type: ignore[no-redef]
         _build_ask_original_input,
         _local_seq_allocator,
@@ -297,6 +297,9 @@ async def _event_generator_impl(session, *, request=None, store=None):
     pending_cleared = False
     pending_action = session.pending_action_id
     pending_question = session.pending_action_question
+    # An action is an optional refinement of an already completed reading.
+    # Keep the approved narrative intact unless the action itself succeeds.
+    prior_narrative = session.latest_narrative if pending_action else None
 
     async def _maybe_clear_pending() -> None:
         nonlocal pending_cleared
@@ -527,7 +530,7 @@ async def _event_generator_impl(session, *, request=None, store=None):
                 )
             )
 
-        if run_uuid is not None:
+        if run_uuid is not None and not pending_action:
             try:
                 await repo.upsert_snapshot(
                     uuid.UUID(fortune_id_str),
@@ -540,6 +543,7 @@ async def _event_generator_impl(session, *, request=None, store=None):
                         if retrodictions else None
                     ),
                     data_model=data_model_acc.snapshot(),
+                    request_context=_build_ask_original_input(session.request),
                     schema_version=2,
                 )
             except Exception as exc:
@@ -569,6 +573,7 @@ async def _event_generator_impl(session, *, request=None, store=None):
             return
 
         guardrail_tripwire: OutputGuardrailTripwireTriggered | None = None
+        action_ask_session: BufferedAskSession | None = None
         if pending_action:
             yield await _emit(
                 bridge.emit_progress(
@@ -581,7 +586,9 @@ async def _event_generator_impl(session, *, request=None, store=None):
                     input_summary=f"action={pending_action}",
                 )
                 yield await _emit(bridge.emit_trace_steps_batch(trace.steps))
-            sdk_session = await get_ask_session(session.fortune_id)
+            durable_action_session = await get_ask_session(session.fortune_id)
+            if durable_action_session is not None:
+                action_ask_session = BufferedAskSession(durable_action_session)
             _t_narrative = _time.monotonic()
             logger.info(
                 "[FORTUNE] %s triage start — action=%s",
@@ -607,7 +614,7 @@ async def _event_generator_impl(session, *, request=None, store=None):
                 question=pending_question,
                 original_input=_build_ask_original_input(session.request),
                 latest_narrative=session.latest_narrative,
-                session=sdk_session,
+                session=action_ask_session,
             )
             cancel_msg = await _cancel_event("narrative", trace)
             if cancel_msg:
@@ -860,6 +867,26 @@ async def _event_generator_impl(session, *, request=None, store=None):
                 follow_up_buttons=DEFAULT_FOLLOW_UP_BUTTONS,
             )
         session.latest_guardrail = guardrail.model_dump()
+
+        # Action turns use the same durable conversation as Ask. The Agents
+        # SDK writes a turn before our explicit policy check, so keep the turn
+        # buffered until it is approved. A rejection stores only deterministic
+        # safe text; the raw model answer is discarded permanently.
+        if action_ask_session is not None:
+            if guardrail_rejected:
+                action_ask_session.discard()
+                await action_ask_session.add_items([
+                    {
+                        "role": "user",
+                        "content": pending_question or pending_action or "Follow-up action",
+                    },
+                    {
+                        "role": "assistant",
+                        "content": guardrail.message or _SAFE_REJECTION_MESSAGE,
+                    },
+                ])
+            await action_ask_session.commit()
+
         dur_g = round((_time.monotonic() - _t_guard) * 1000, 1)
         if trace:
             trace.add_instant(
@@ -885,8 +912,10 @@ async def _event_generator_impl(session, *, request=None, store=None):
         )
 
         if guardrail_rejected:
-            session.latest_narrative = None
-            session.touch(RuntimeStatus.failed_guardrail)
+            session.latest_narrative = prior_narrative if pending_action else None
+            session.touch(
+                RuntimeStatus.complete if pending_action else RuntimeStatus.failed_guardrail
+            )
             logger.warning("[FORTUNE] %s narrative rejected by output guardrail", session.fortune_id)
             yield await _emit(
                 bridge.emit_progress("guardrail", "Reading withheld by safety check."),
@@ -1007,7 +1036,7 @@ async def _event_generator_impl(session, *, request=None, store=None):
         for frame in narrative_frames:
             yield frame
 
-        if run_uuid is not None:
+        if run_uuid is not None and not pending_action:
             try:
                 await repo.upsert_snapshot(
                     uuid.UUID(fortune_id_str),
@@ -1018,6 +1047,7 @@ async def _event_generator_impl(session, *, request=None, store=None):
                     references=_snapshot_references(foundation),
                     retrodictions={"items": _to_jsonable(retrodictions)} if retrodictions else None,
                     data_model=data_model_acc.snapshot(),
+                    request_context=_build_ask_original_input(session.request),
                     schema_version=2,
                 )
             except Exception as exc:
@@ -1103,6 +1133,7 @@ async def _event_generator_impl(session, *, request=None, store=None):
                     references=_snapshot_references(foundation),
                     retrodictions={"items": _to_jsonable(retrodictions)} if retrodictions else None,
                     data_model=data_model_acc.snapshot(),
+                    request_context=_build_ask_original_input(session.request),
                     schema_version=2,
                 )
                 await repo.update_run_status(run_uuid, "done")
@@ -1115,7 +1146,7 @@ async def _event_generator_impl(session, *, request=None, store=None):
 
     except Exception as exc:
         if not guardrail_passed and narrative_set_this_run:
-            session.latest_narrative = None
+            session.latest_narrative = prior_narrative if pending_action else None
         logger.exception("[FORTUNE] %s stream error: %s", session.fortune_id, exc)
         try:
             from .agent_logging import log_stream_end as _log_stream_end
@@ -1129,7 +1160,7 @@ async def _event_generator_impl(session, *, request=None, store=None):
             ok=False,
             error=str(exc),
         )
-        session.touch(RuntimeStatus.error)
+        session.touch(RuntimeStatus.complete if pending_action else RuntimeStatus.error)
         if run_uuid is not None:
             try:
                 await repo.update_run_status(

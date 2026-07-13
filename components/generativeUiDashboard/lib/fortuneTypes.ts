@@ -16,6 +16,24 @@ export type FortuneFunctionId = 'wish' | 'luck-cycle' | 'compatibility' | 'lucky
 export type ElementType = 'Wood' | 'Fire' | 'Earth' | 'Metal' | 'Water';
 export type FortuneStatus = 'idle' | 'loading' | 'streaming' | 'complete' | 'error';
 
+/** Allowlisted locator for the reading section a follow-up refers to. */
+export type AskSectionId =
+  | 'verdict'
+  | 'anchor'
+  | 'why'
+  | 'now'
+  | 'timeline'
+  | 'overview'
+  | 'pillars'
+  | 'top_picks'
+  | 'calendar';
+
+export interface AskContext {
+  sectionId: AskSectionId;
+  sectionLabel: string;
+  selectionId?: string;
+}
+
 // ---------------------------------------------------------------------------
 // Birth profile (shared across all create requests)
 // ---------------------------------------------------------------------------
@@ -127,6 +145,14 @@ export interface AskTurn {
   runId?: string;
   narrative?: unknown;
   degradedMemory?: boolean;
+  error?: boolean;
+  retryable?: boolean;
+  retryQuestion?: string;
+  askContext?: AskContext;
+  /** Stable across ambiguous transport retries. */
+  clientRequestId?: string;
+  /** Optimistic user turn not yet represented by durable conversation history. */
+  pending?: boolean;
 }
 
 // ---------------------------------------------------------------------------

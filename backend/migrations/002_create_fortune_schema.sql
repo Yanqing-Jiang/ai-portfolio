@@ -65,7 +65,7 @@ CREATE OR REPLACE TRIGGER fortune_updated_at
 CREATE TABLE IF NOT EXISTS public.fortune_run (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     fortune_id UUID NOT NULL REFERENCES public.fortune(id) ON DELETE CASCADE,
-    run_kind TEXT NOT NULL CHECK (run_kind IN ('initial', 'action')),
+    run_kind TEXT NOT NULL CHECK (run_kind IN ('initial', 'action', 'ask')),
     action_type TEXT,
     status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN (
         'queued', 'streaming', 'done', 'failed_guardrail', 'error', 'interrupted'
@@ -94,6 +94,16 @@ ALTER TABLE public.fortune_run
     ADD COLUMN IF NOT EXISTS last_emitted_seq INTEGER NOT NULL DEFAULT 0;
 
 -- Composite unique key lets child tables prove run_id belongs to fortune_id.
+-- Drop dependent event FKs before rebuilding the composite parent key.  This
+-- keeps the bootstrap idempotent on databases that already have the final FK.
+ALTER TABLE IF EXISTS public.fortune_event
+    DROP CONSTRAINT IF EXISTS fortune_event_run_id_fkey;
+ALTER TABLE IF EXISTS public.fortune_event
+    DROP CONSTRAINT IF EXISTS fortune_event_run_fortune_fkey;
+ALTER TABLE IF EXISTS public.fortune_message
+    DROP CONSTRAINT IF EXISTS fortune_message_run_id_fkey;
+ALTER TABLE IF EXISTS public.fortune_message
+    DROP CONSTRAINT IF EXISTS fortune_message_run_fortune_fkey;
 ALTER TABLE public.fortune_run
     DROP CONSTRAINT IF EXISTS fortune_run_id_fortune_id_key;
 ALTER TABLE public.fortune_run
@@ -107,6 +117,8 @@ ALTER TABLE public.fortune_run
         (run_kind = 'initial' AND action_type IS NULL)
         OR
         (run_kind = 'action' AND action_type IS NOT NULL)
+        OR
+        (run_kind = 'ask' AND action_type IS NULL)
     );
 
 ALTER TABLE public.fortune_run
@@ -140,10 +152,6 @@ CREATE TABLE IF NOT EXISTS public.fortune_event (
 );
 
 -- Drop the old single-column FK if it exists (pre-patch migrations had it).
-ALTER TABLE public.fortune_event
-    DROP CONSTRAINT IF EXISTS fortune_event_run_id_fkey;
-ALTER TABLE public.fortune_event
-    DROP CONSTRAINT IF EXISTS fortune_event_run_fortune_fkey;
 ALTER TABLE public.fortune_event
     ADD CONSTRAINT fortune_event_run_fortune_fkey
     FOREIGN KEY (run_id, fortune_id)

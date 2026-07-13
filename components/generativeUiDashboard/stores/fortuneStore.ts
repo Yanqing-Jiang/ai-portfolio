@@ -26,6 +26,8 @@ import type {
     FortuneDataModel,
     FortuneReplayResponse,
     FortuneStatus,
+    AskContext,
+    AskTurn,
 } from '../lib/fortuneTypes';
 
 export interface TraceEvent {
@@ -55,21 +57,12 @@ export interface TraceProjection {
     endedAt?: string | null;
 }
 
-export interface AskTurn {
-    id: string;
-    role: 'user' | 'agent';
-    content: string;
-    timestampISO: string;
-    /** Present on agent turns sourced from /ask — used by Glass Box drawer. */
-    runId?: string;
-    /** Narrative payload on agent turns; string `content` is a render fallback. */
-    narrative?: unknown;
-    /** True when the turn was answered without ask-session memory. */
-    degradedMemory?: boolean;
-}
+export type { AskTurn } from '../lib/fortuneTypes';
 
 interface FortuneStateShape {
     fortuneId: string | null;
+    /** Monotonic navigation token; changes even when navigation returns A→B→A. */
+    fortuneGeneration: number;
     /** Most recent run_id — rotates on /action and /ask. */
     runId: string | null;
     /** True when backend reported X-Fortune-Persistence: degraded. */
@@ -118,15 +111,18 @@ interface FortuneStateShape {
     setAskInput: (v: string) => void;
     beginAsk: (userTurn: AskTurn) => void;
     finishAsk: (agentTurn: AskTurn) => void;
-    failAsk: (errorMessage: string) => void;
+    failAsk: (errorMessage: string, retryQuestion: string, askContext: AskContext | undefined, clientRequestId: string, retryable: boolean) => void;
+    retryAsk: (clientRequestId?: string) => void;
+    hydrateAskHistory: (turns: AskTurn[]) => void;
     clearAskHistory: () => void;
     reset: () => void;
 }
 
-type ActionKeys = 'setFortune' | 'setRunId' | 'setStatus' | 'setNarrativeReady' | 'applyPatch' | 'hydrateFromReplay' | 'appendTraceEvent' | 'hydrateTraceProjections' | 'setBirthTimeUnknown' | 'setAskInput' | 'beginAsk' | 'finishAsk' | 'failAsk' | 'clearAskHistory' | 'reset';
+type ActionKeys = 'setFortune' | 'setRunId' | 'setStatus' | 'setNarrativeReady' | 'applyPatch' | 'hydrateFromReplay' | 'appendTraceEvent' | 'hydrateTraceProjections' | 'setBirthTimeUnknown' | 'setAskInput' | 'beginAsk' | 'finishAsk' | 'failAsk' | 'retryAsk' | 'hydrateAskHistory' | 'clearAskHistory' | 'reset';
 
 const INITIAL: Omit<FortuneStateShape, ActionKeys> = {
     fortuneId: null,
+    fortuneGeneration: 0,
     runId: null,
     persistenceDegraded: false,
     functionId: null,
@@ -148,8 +144,13 @@ export const useFortuneStore = create<FortuneStateShape>()(
 
         setFortune: (fortuneId, runId, opts) =>
             set((s) => {
+                if (s.fortuneId !== fortuneId) {
+                    s.fortuneGeneration += 1;
+                }
                 if (s.fortuneId && s.fortuneId !== fortuneId) {
                     s.askHistory = [];
+                    s.askInput = '';
+                    s.askLoading = false;
                     s.askMemoryEverDegraded = false;
                     s.dataModel = null;
                     s.lastSeq = 0;
@@ -219,6 +220,10 @@ export const useFortuneStore = create<FortuneStateShape>()(
 
         hydrateFromReplay: (replay) =>
             set((s) => {
+                const fortuneChanged = s.fortuneId !== replay.fortune_id;
+                if (fortuneChanged) {
+                    s.fortuneGeneration += 1;
+                }
                 s.fortuneId = replay.fortune_id;
                 s.runId = replay.run_id;
                 s.functionId = replay.function_id;
@@ -227,7 +232,14 @@ export const useFortuneStore = create<FortuneStateShape>()(
                 s.persistenceDegraded = !!replay.metadata?.persistence_degraded;
                 s.birthTimeUnknown = !!replay.metadata?.birth_time_unknown;
                 s.dataModel = replay.data_model;
-                s.askHistory = replay.ask_history || [];
+                if (fortuneChanged || (replay.ask_history?.length ?? 0) > 0) {
+                    s.askHistory = replay.ask_history || [];
+                }
+                if (fortuneChanged) {
+                    s.askInput = '';
+                    s.askLoading = false;
+                    s.askMemoryEverDegraded = false;
+                }
                 // A replay snapshot whose narrative already streamed has
                 // ``narrative.isComplete = true`` baked into ``data_model``.
                 // Pre-set the flag so the page header doesn't briefly flash
@@ -267,27 +279,77 @@ export const useFortuneStore = create<FortuneStateShape>()(
 
         beginAsk: (turn) =>
             set((s) => {
-                s.askHistory.push(turn);
+                s.askHistory.push({ ...turn, pending: true });
                 s.askLoading = true;
                 s.askInput = '';
             }),
 
         finishAsk: (turn) =>
             set((s) => {
+                const pending = s.askHistory.find(
+                    (item) => item.pending && item.clientRequestId === turn.clientRequestId,
+                );
+                if (pending) pending.pending = false;
                 s.askHistory.push(turn);
                 s.askLoading = false;
                 if (turn.degradedMemory) s.askMemoryEverDegraded = true;
             }),
 
-        failAsk: (errorMessage) =>
+        failAsk: (errorMessage, retryQuestion, askContext, clientRequestId, retryable) =>
             set((s) => {
+                const pending = s.askHistory.find(
+                    (item) => item.pending && item.clientRequestId === clientRequestId,
+                );
+                if (pending) pending.pending = false;
                 s.askHistory.push({
                     id: `err-${Date.now()}`,
                     role: 'agent',
                     content: errorMessage,
                     timestampISO: new Date().toISOString(),
+                    error: true,
+                    retryable,
+                    retryQuestion,
+                    askContext,
+                    clientRequestId,
                 });
                 s.askLoading = false;
+            }),
+
+        retryAsk: (clientRequestId) =>
+            set((s) => {
+                s.askHistory = s.askHistory.filter(
+                    (turn) => !(turn.error && turn.clientRequestId === clientRequestId),
+                );
+                const retryingQuestion = s.askHistory.find(
+                    (turn) => turn.role === 'user' && turn.clientRequestId === clientRequestId,
+                );
+                if (retryingQuestion) retryingQuestion.pending = true;
+                s.askLoading = true;
+            }),
+
+        hydrateAskHistory: (turns) =>
+            set((s) => {
+                if (!turns.length) return;
+                // Durable history is authoritative. Preserve only an explicitly
+                // pending optimistic question or a retryable failed exchange;
+                // role/content multiset matching cannot correctly pair
+                // intentionally repeated questions.
+                const recoveryIds = new Set(
+                    s.askHistory
+                        .filter((turn) => turn.error && turn.retryable && turn.clientRequestId)
+                        .map((turn) => turn.clientRequestId as string),
+                );
+                const durableIds = new Set(
+                    turns
+                        .filter((turn) => turn.clientRequestId)
+                        .map((turn) => turn.clientRequestId as string),
+                );
+                const recoverableLocal = s.askHistory.filter((turn) => (
+                    !turn.clientRequestId || !durableIds.has(turn.clientRequestId)
+                ) && (
+                    turn.pending || recoveryIds.has(turn.clientRequestId as string)
+                ));
+                s.askHistory = [...turns, ...recoverableLocal];
             }),
 
         clearAskHistory: () =>

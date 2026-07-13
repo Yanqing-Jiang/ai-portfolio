@@ -12,7 +12,7 @@ import { useFortuneStore } from '../../stores/fortuneStore';
 import { OracleChat, type OracleChatMessage } from './OracleChat';
 import { FLOW_ACCENTS, OBSERVATORY_MONO, accentAlpha } from '../designTokens';
 import { tabContentVariants } from '../animations';
-import type { FortuneFunctionId, OccasionPick } from '../../lib/fortuneTypes';
+import type { AskContext, FortuneFunctionId, OccasionPick } from '../../lib/fortuneTypes';
 import type { CanonicalFortuneFunction } from '../../../../lib/fortuneRoutes';
 
 /** Map canonical ids → legacy FLOW_ACCENTS / ask keys (API unchanged). */
@@ -103,14 +103,16 @@ export interface AskTabProps {
   functionId: CanonicalFortuneFunction;
   /** Wish-only: original question for suggestion derivation. */
   question?: string;
+  context?: AskContext;
+  ready?: boolean;
 }
 
-export const AskTab: React.FC<AskTabProps> = ({ functionId, question }) => {
+export const AskTab: React.FC<AskTabProps> = ({ functionId, question, context, ready = false }) => {
   const sessionId = SESSION_ID[functionId];
   const accent = FLOW_ACCENTS[sessionId];
   const header = HEADERS[functionId];
-  const { input, setInput, history, loading, memoryDegraded, send, fortuneId } =
-    useFortuneAsk();
+  const { input, setInput, history, loading, memoryDegraded, send, retry, fortuneId } =
+    useFortuneAsk(context);
 
   const dataModel = useFortuneStore(useShallow((s) => s.dataModel));
 
@@ -159,6 +161,11 @@ export const AskTab: React.FC<AskTabProps> = ({ functionId, question }) => {
     narrative: h.narrative as OracleChatMessage['narrative'],
     runId: h.runId,
     degradedMemory: h.degradedMemory,
+    error: h.error,
+    retryable: h.retryable,
+    retryQuestion: h.retryQuestion,
+    clientRequestId: h.clientRequestId,
+    askContext: h.askContext,
   }));
 
   const chat = (
@@ -169,12 +176,15 @@ export const AskTab: React.FC<AskTabProps> = ({ functionId, question }) => {
         input={input}
         onInputChange={setInput}
         onSend={send}
+        onRetry={retry}
         suggestions={suggestions}
         accentColor={accent.primary}
         isLoading={loading}
         memoryDegraded={memoryDegraded}
-        disabled={!fortuneId}
+        disabled={!fortuneId || !ready}
+        disabledReason={!ready ? 'Ask becomes available when the reading is complete.' : undefined}
         flowFocus={FLOW_FOCUS[functionId]}
+        contextLabel={context?.sectionLabel}
       />
     </div>
   );

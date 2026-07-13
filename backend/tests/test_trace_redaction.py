@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+import uuid
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
@@ -202,6 +203,65 @@ async def test_guardrail_tripwire_never_publishes_or_snapshots_narrative(monkeyp
     )
 
 
+@pytest.mark.asyncio
+async def test_rejected_action_preserves_completed_snapshot_and_narrative(monkeypatch):
+    reset_run_state_for_tests()
+    store = get_run_state()
+    approved_narrative = {
+        "tldr": "Previously approved reading",
+        "insights": [],
+        "year_predictions": [],
+    }
+    session = FortuneSession(
+        fortune_id=FORTUNE_ID,
+        run_id=RUN_ID,
+        surface_id="fortune_main",
+        request=CreateFortuneRequest(
+            birth_iso=BIRTH_CANARY,
+            timezone="America/Los_Angeles",
+            question=QUESTION_CANARY,
+            focus="wish",
+            gender="female",
+        ),
+        status=RuntimeStatus.complete,
+        latest_narrative=approved_narrative,
+        pending_action_id="go_deeper",
+        pending_action_question="Explain the verdict",
+    )
+    await store.put(session)
+
+    fake_repo = MagicMock()
+    fake_repo.available = False
+    fake_repo.update_run_status = AsyncMock()
+    fake_repo.upsert_snapshot = AsyncMock()
+    critical = GuardrailOutput(
+        level="critical",
+        message="Action answer withheld",
+        disclaimer="Try another question",
+        follow_up_buttons=[],
+    )
+
+    with patch("fortune._pipeline_run.get_repository", AsyncMock(return_value=fake_repo)), \
+         patch("fortune._pipeline_run.run_triage", AsyncMock(return_value=_rejected_output())), \
+         patch("fortune._pipeline_run.run_guardrail", AsyncMock(return_value=critical)), \
+         patch("fortune._pipeline_run.get_ask_session", AsyncMock(return_value=None)), \
+         patch("fortune.state.get_state_redis", AsyncMock(return_value=None)):
+        chunks = [
+            frame
+            async for frame in iter_fortune_sse_frames(session, request=None, store=store)
+        ]
+
+    assert chunks
+    assert session.latest_narrative == approved_narrative
+    assert session.status is RuntimeStatus.complete
+    fake_repo.upsert_snapshot.assert_not_awaited()
+    fake_repo.update_run_status.assert_any_await(
+        ANY,
+        "failed_guardrail",
+        error_message="output_guardrail_tripwire",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Endpoint-level canaries (Phase 4 Glass Box / MemoryPanel)
 # ---------------------------------------------------------------------------
@@ -315,6 +375,11 @@ async def test_conversation_endpoint_excludes_tool_and_reasoning_items(monkeypat
         "list_conversation_turns",
         AsyncMock(return_value=turns),
     )
+    repo = MagicMock(available=True)
+    repo.list_pending_ask_conversations = AsyncMock(return_value=[])
+    monkeypatch.setattr(
+        fortune_routes, "get_repository", AsyncMock(return_value=repo),
+    )
 
     client = TestClient(_fortune_test_app())
     res = client.get(f"/api/fortune/{FORTUNE_ID}/conversation")
@@ -327,3 +392,46 @@ async def test_conversation_endpoint_excludes_tool_and_reasoning_items(monkeypat
     assert "hidden chain" not in wire
     for canary in (BIRTH_CANARY, QUESTION_CANARY):
         assert canary not in wire
+
+
+@pytest.mark.asyncio
+async def test_conversation_endpoint_serves_degraded_memory_outbox(monkeypatch):
+    """A successful stateless Ask remains visible after browser reload."""
+    from fortune import routes as fortune_routes
+
+    async def _no_limit(*_a, **_k):
+        return None
+
+    now = datetime.now(timezone.utc)
+    pending = [{
+        "client_request_id": uuid.UUID("33333333-3333-3333-3333-333333333333"),
+        "lease_token": uuid.UUID("44444444-4444-4444-4444-444444444444"),
+        "delivery_id": uuid.UUID("55555555-5555-5555-5555-555555555555"),
+        "session_items": [
+            {"role": "user", "content": "Will this opportunity last?"},
+            {"role": "assistant", "content": "Treat the next month as a test window."},
+        ],
+        "updated_at": now,
+    }]
+    repo = MagicMock(available=True)
+    repo.list_pending_ask_conversations = AsyncMock(return_value=pending)
+    monkeypatch.setattr(fortune_routes, "smart_rate_limit", _no_limit)
+    monkeypatch.setattr(
+        fortune_routes, "list_conversation_turns", AsyncMock(return_value=[]),
+    )
+    monkeypatch.setattr(
+        fortune_routes, "get_ask_session", AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        fortune_routes, "get_repository", AsyncMock(return_value=repo),
+    )
+
+    client = TestClient(_fortune_test_app())
+    res = client.get(f"/api/fortune/{FORTUNE_ID}/conversation")
+
+    assert res.status_code == 200, res.text
+    assert [(turn["role"], turn["text"]) for turn in res.json()["turns"]] == [
+        ("user", "Will this opportunity last?"),
+        ("assistant", "Treat the next month as a test window."),
+    ]
+    repo.commit_ask_conversation.assert_not_called()

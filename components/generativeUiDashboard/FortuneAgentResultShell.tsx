@@ -117,6 +117,21 @@ export const FortuneAgentResultShell: React.FC<FortuneAgentResultShellProps> = (
   const reduceMotion = useReducedMotion();
   const obs = observatoryAccent(accentPrimary);
   const gradient = `radial-gradient(1200px 500px at 70% -10%, ${accentAlpha(accentPrimary, 0.07)}, transparent 60%), #0a0c10`;
+  const tabDomId = (id: string) => `fortune-tab-${purpose}-${id.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+  const panelDomId = `fortune-panel-${purpose}`;
+
+  const handleTabKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
+    let nextIndex: number | null = null;
+    if (event.key === 'ArrowRight') nextIndex = (index + 1) % tabs.length;
+    if (event.key === 'ArrowLeft') nextIndex = (index - 1 + tabs.length) % tabs.length;
+    if (event.key === 'Home') nextIndex = 0;
+    if (event.key === 'End') nextIndex = tabs.length - 1;
+    if (nextIndex === null) return;
+    event.preventDefault();
+    const nextTab = tabs[nextIndex];
+    onTabChange(nextTab.id);
+    document.getElementById(tabDomId(nextTab.id))?.focus();
+  };
 
   return (
     <div
@@ -238,15 +253,19 @@ export const FortuneAgentResultShell: React.FC<FortuneAgentResultShellProps> = (
             aria-label={`${purpose} sections`}
             className="mt-7 flex flex-wrap gap-1 border-t border-white/[0.06] pt-4"
           >
-            {tabs.map((t) => {
+            {tabs.map((t, index) => {
               const active = activeTabId === t.id;
               return (
                 <button
                   key={t.id}
                   type="button"
                   role="tab"
+                  id={tabDomId(t.id)}
+                  aria-controls={panelDomId}
                   aria-selected={active}
+                  tabIndex={active ? 0 : -1}
                   onClick={() => onTabChange(t.id)}
+                  onKeyDown={(event) => handleTabKeyDown(event, index)}
                   className={OBS_TAB}
                   style={
                     active
@@ -268,7 +287,15 @@ export const FortuneAgentResultShell: React.FC<FortuneAgentResultShellProps> = (
           {/* Mobile glass / pause chrome */}
           {mobileChrome && <div className="mt-5 lg:hidden">{mobileChrome}</div>}
 
-          <div className="mt-5">{children}</div>
+          <div
+            id={panelDomId}
+            role="tabpanel"
+            aria-labelledby={tabDomId(activeTabId)}
+            tabIndex={0}
+            className="mt-5"
+          >
+            {children}
+          </div>
         </main>
 
         {/* Desktop execution-trace rail */}

@@ -362,9 +362,27 @@ async def startup_event():
             # (~9s p50 + OpenAI tail) without rescuing truly dead runs too
             # late. If workloads shift, the right next step is a heartbeat
             # column on fortune_run that the stream loop touches each emit.
-            count = await repo.sweep_stuck_runs(older_than_minutes=20)
-            if count:
-                logger.info("[STARTUP] Swept %d stuck fortune_run rows", count)
+            records = await repo.sweep_stuck_run_records(older_than_minutes=20)
+            if records:
+                from fortune import events as _fortune_events
+                message = "Reading interrupted by a service restart. Please retry."
+                for record in records:
+                    terminal_ok = await _fortune_events.publish_interrupted_terminal(
+                        record["run_id"],
+                        fortune_id=record["fortune_id"],
+                        message=message,
+                    )
+                    record_ok = await _fortune_events.set_run_record(
+                        record["run_id"],
+                        fortune_id=record["fortune_id"],
+                        status="interrupted",
+                        error_message=message,
+                    )
+                    if terminal_ok and record_ok:
+                        await repo.mark_run_recovery_published(
+                            uuid.UUID(record["run_id"]),
+                        )
+                logger.info("[STARTUP] Swept %d stuck fortune_run rows", len(records))
         except Exception as exc:
             logger.warning("[STARTUP] stuck-run sweep failed: %s", exc)
 
@@ -2131,8 +2149,4 @@ async def reschedule_booking(booking_id: str, req: RescheduleBookingRequest, aut
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
-
-
-
-
 

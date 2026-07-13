@@ -1,90 +1,30 @@
 /**
  * MemoryPanel — compact SESSION MEMORY strip (Phase 5 / ledger-aligned).
  *
- * Hydrates from GET /conversation on mount and appends local Ask turns so
- * the panel demos SQLAlchemySession continuity without ops noise.
+ * Reads the same hydrated store as the visible chat, so the two surfaces
+ * cannot disagree after reload.
  */
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
-import { fortuneClient } from '../../lib/fortuneClient';
 import { useFortuneStore } from '../../stores/fortuneStore';
 import { OBS_MEMORY_STRIP, OBSERVATORY_MONO } from '../designTokens';
 
-interface MemoryTurn {
-  role: 'user' | 'assistant';
-  text: string;
-  at: string;
-  local?: boolean;
-}
-
 export const MemoryPanel: React.FC = () => {
   const reduceMotion = useReducedMotion();
-  const { fortuneId, askHistory } = useFortuneStore(
-    useShallow((s) => ({
-      fortuneId: s.fortuneId,
-      askHistory: s.askHistory,
-    })),
-  );
+  const askHistory = useFortuneStore(useShallow((s) => s.askHistory));
 
   const [open, setOpen] = useState(false);
-  const [remote, setRemote] = useState<MemoryTurn[]>([]);
-  const [loadedFor, setLoadedFor] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!fortuneId) {
-      setRemote([]);
-      setLoadedFor(null);
-      return;
-    }
-    if (loadedFor === fortuneId) return;
-
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fortuneClient.getConversation(fortuneId);
-        if (cancelled) return;
-        setRemote(
-          (res.turns || []).map((t) => ({
-            role: t.role,
-            text: t.text,
-            at: t.at || '',
-          })),
-        );
-        setLoadedFor(fortuneId);
-      } catch {
-        if (!cancelled) {
-          setRemote([]);
-          setLoadedFor(fortuneId);
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [fortuneId, loadedFor]);
 
   const turns = useMemo(() => {
-    const local: MemoryTurn[] = askHistory.map((h) => ({
+    return askHistory.map((h) => ({
       role: h.role === 'agent' ? 'assistant' : 'user',
       text: h.content,
       at: h.timestampISO,
-      local: true,
     }));
-
-    if (remote.length === 0) return local;
-
-    const remoteKeys = new Set(
-      remote.map((t) => `${t.role}:${t.text.slice(0, 120)}`),
-    );
-    const extras = local.filter(
-      (t) => !remoteKeys.has(`${t.role}:${t.text.slice(0, 120)}`),
-    );
-    return [...remote, ...extras];
-  }, [remote, askHistory]);
+  }, [askHistory]);
 
   return (
     <div className={OBS_MEMORY_STRIP}>
@@ -128,7 +68,6 @@ export const MemoryPanel: React.FC = () => {
                     <div className="mb-0.5 flex items-center justify-between gap-2 text-[9px] uppercase tracking-[0.16em] text-[#5c6963]">
                       <span>
                         {t.role}
-                        {t.local ? ' · live' : ''}
                       </span>
                       {t.at ? <span>{t.at.slice(11, 19) || t.at}</span> : null}
                     </div>

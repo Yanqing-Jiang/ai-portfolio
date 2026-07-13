@@ -24,6 +24,7 @@ set -uo pipefail
 REPO_DIR="/Users/yj/ai-portfolio"
 LOG_FILE="/Users/yj/scripts/portfolio-autodeploy.log"
 LOCK_DIR="/tmp/portfolio-autodeploy.lock"
+STATE_FILE="/Users/yj/.local/state/portfolio-autodeploy-backend.sha"
 HEALTH_URL="https://portfolio-api.yanqing.app/health"
 WATCH_PATHS=("backend/" "docker-compose.yml")
 
@@ -51,25 +52,43 @@ mkdir -p "$(dirname "$LOG_FILE")"
 
 cd "$REPO_DIR" || { log "FATAL: cd $REPO_DIR failed"; exit 1; }
 
+# Track the revision whose backend deployment actually completed. Git HEAD is
+# only the checked-out source revision: a migration/build may fail after the
+# pull, so using HEAD as the baseline would suppress every later retry.
+mkdir -p "$(dirname "$STATE_FILE")"
+LOCAL=$(git rev-parse HEAD)
+if [ ! -s "$STATE_FILE" ]; then
+  # Seed one revision behind so the first run of this stateful script also
+  # retries a commit that an older script may already have pulled before its
+  # migration failed. One conservative extra rebuild is safer than silently
+  # treating an un-deployed checkout as deployed.
+  git rev-parse HEAD^ > "$STATE_FILE" 2>/dev/null || printf '%s\n' "$LOCAL" > "$STATE_FILE"
+fi
+DEPLOYED=$(cat "$STATE_FILE")
+if ! git cat-file -e "${DEPLOYED}^{commit}" 2>/dev/null; then
+  log "WARNING: invalid deployment state; resetting baseline to ${LOCAL:0:7}"
+  DEPLOYED="$LOCAL"
+  printf '%s\n' "$DEPLOYED" > "$STATE_FILE"
+fi
+
 if ! git fetch origin main --quiet 2>>"$LOG_FILE"; then
   log "git fetch failed (network blip?); will retry next tick"
   exit 0
 fi
 
-LOCAL=$(git rev-parse HEAD)
 REMOTE=$(git rev-parse origin/main)
 
-if [ "$LOCAL" = "$REMOTE" ]; then
+if [ "$DEPLOYED" = "$REMOTE" ]; then
   # No drift — silent exit so the log doesn't churn once per minute.
   exit 0
 fi
 
-log "drift: HEAD=${LOCAL:0:7} → origin/main=${REMOTE:0:7}"
+log "drift: deployed=${DEPLOYED:0:7}, HEAD=${LOCAL:0:7} → origin/main=${REMOTE:0:7}"
 
 # Detect whether backend-relevant paths moved. Path-based filter keeps
 # frontend-only pushes from triggering a 60-90s docker rebuild that
 # nobody asked for.
-CHANGED_FILES=$(git diff --name-only "$LOCAL" "$REMOTE")
+CHANGED_FILES=$(git diff --name-only "$DEPLOYED" "$REMOTE")
 NEEDS_REBUILD=false
 for path in "${WATCH_PATHS[@]}"; do
   if echo "$CHANGED_FILES" | grep -q "^${path}"; then
@@ -78,14 +97,37 @@ for path in "${WATCH_PATHS[@]}"; do
   fi
 done
 
-if ! git pull --ff-only origin main >>"$LOG_FILE" 2>&1; then
-  log "FATAL: git pull --ff-only failed (non-fast-forward divergence); aborting"
-  exit 1
+if [ "$LOCAL" != "$REMOTE" ]; then
+  if ! git pull --ff-only origin main >>"$LOG_FILE" 2>&1; then
+    log "FATAL: git pull --ff-only failed (non-fast-forward divergence); aborting"
+    exit 1
+  fi
 fi
 
 if [ "$NEEDS_REBUILD" = "false" ]; then
+  printf '%s\n' "$REMOTE" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "$STATE_FILE"
   log "pulled ${REMOTE:0:7} — no backend changes, no rebuild needed"
   exit 0
+fi
+
+# Database changes must land before code that requires them. Run only the SQL
+# migrations introduced/changed by this fast-forward, using the existing
+# backend image for its asyncpg dependency and production env. Any failure is a
+# hard gate: the live container stays untouched and the next poll retries.
+MIGRATIONS=$(echo "$CHANGED_FILES" | grep '^backend/migrations/[^/]*\.sql$' | sort || true)
+if [ -n "$MIGRATIONS" ]; then
+  while IFS= read -r migration; do
+    migration_name=$(basename "$migration")
+    log "applying migration ${migration_name} before backend restart..."
+    if ! docker compose run --rm --no-deps -T \
+      -v "$REPO_DIR/backend:/workspace:ro" \
+      backend python /workspace/scripts/apply_migration.py \
+      "/workspace/migrations/${migration_name}" >>"$LOG_FILE" 2>&1; then
+      log "FATAL: migration ${migration_name} failed; backend deployment blocked"
+      exit 1
+    fi
+    log "migration ${migration_name} applied"
+  done <<< "$MIGRATIONS"
 fi
 
 log "rebuilding backend container..."
@@ -99,13 +141,25 @@ fi
 ELAPSED=$(( $(date +%s) - START ))
 log "rebuild + restart complete in ${ELAPSED}s"
 
-# Give gunicorn workers a moment to bind before the health probe.
+# Give gunicorn workers a moment to bind, then require health before advancing
+# the deployed-SHA marker. A failed probe leaves the old marker intact so the
+# daemon retries this revision on its next poll.
 sleep 5
+HEALTHY=false
+for attempt in 1 2 3 4 5 6; do
+  if curl -fsS --max-time 10 "$HEALTH_URL" >/dev/null 2>&1; then
+    HEALTHY=true
+    break
+  fi
+  log "health check attempt ${attempt}/6 failed; retrying in 5s"
+  sleep 5
+done
 
-if curl -fsS --max-time 10 "$HEALTH_URL" >/dev/null 2>&1; then
-  log "health check OK: $HEALTH_URL"
-else
-  log "WARNING: health check failed at $HEALTH_URL — container may still be warming up; check 'docker compose logs backend'"
+if [[ "$HEALTHY" != "true" ]]; then
+  log "FATAL: health check failed at $HEALTH_URL; deployment marker not advanced"
+  exit 1
 fi
+log "health check OK: $HEALTH_URL"
 
 log "deploy of ${REMOTE:0:7} complete"
+printf '%s\n' "$REMOTE" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "$STATE_FILE"

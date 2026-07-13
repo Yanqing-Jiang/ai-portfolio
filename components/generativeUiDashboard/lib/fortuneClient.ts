@@ -28,6 +28,7 @@
 
 import { configService } from '../../../services/config';
 import { authService } from '../../../services/auth';
+import type { AskContext } from './fortuneTypes';
 
 // ---------------------------------------------------------------------------
 // Request / response types — match backend Pydantic shapes in
@@ -101,6 +102,7 @@ export class FortuneApiError extends Error {
         public readonly status: number,
         public readonly requestId: string | null = null,
         public readonly body?: unknown,
+        public readonly retryAfter: string | null = null,
     ) {
         super(message);
         this.name = 'FortuneApiError';
@@ -154,7 +156,7 @@ async function jsonFetch<T>(
             (body && typeof body === 'object' && 'detail' in body && typeof (body as { detail?: unknown }).detail === 'string')
                 ? (body as { detail: string }).detail
                 : `Server error ${res.status}`;
-        throw new FortuneApiError(detail, res.status, requestId, body);
+        throw new FortuneApiError(detail, res.status, requestId, body, res.headers.get('retry-after'));
     }
 
     const data = (await res.json()) as T;
@@ -218,10 +220,29 @@ export const fortuneClient = {
         return data;
     },
 
-    async askFollowUp(fortuneId: string, question: string): Promise<AskResponse> {
+    async askFollowUp(
+        fortuneId: string,
+        question: string,
+        clientRequestId: string,
+        context?: AskContext,
+        opts?: { signal?: AbortSignal },
+    ): Promise<AskResponse> {
         const { data } = await jsonFetch<AskResponse>(
             `/api/fortune/${fortuneId}/ask`,
-            { method: 'POST', body: JSON.stringify({ question }) },
+            {
+                method: 'POST',
+                body: JSON.stringify({
+                    question,
+                    client_request_id: clientRequestId,
+                    context: context
+                        ? {
+                            section_id: context.sectionId,
+                            selection_id: context.selectionId,
+                        }
+                        : undefined,
+                }),
+                signal: opts?.signal,
+            },
         );
         return data;
     },
@@ -358,11 +379,11 @@ export const fortuneClient = {
 
     async getConversation(fortuneId: string): Promise<{
         fortune_id: string;
-        turns: Array<{ role: 'user' | 'assistant'; text: string; at: string }>;
+        turns: Array<{ role: 'user' | 'assistant'; text: string; at: string; client_request_id?: string; delivery_id?: string }>;
     }> {
         const { data } = await jsonFetch<{
             fortune_id: string;
-            turns: Array<{ role: 'user' | 'assistant'; text: string; at: string }>;
+            turns: Array<{ role: 'user' | 'assistant'; text: string; at: string; client_request_id?: string; delivery_id?: string }>;
         }>(`/api/fortune/${fortuneId}/conversation`);
         return data;
     },

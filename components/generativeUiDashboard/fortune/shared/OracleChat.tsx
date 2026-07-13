@@ -2,11 +2,8 @@
  * OracleChat — production Ask-the-Oracle bubble (Concept D, "Hybrid").
  *
  * Each agent turn renders as:
- *   1. Pre-verdict (during the ~50-70s /ask wait): a Career-style specialist
- *      chip + a stack of animated reasoning breadcrumbs that walk through 4
- *      named phases on a fixed schedule. Backend doesn't stream yet, so the
- *      schedule is client-side; the SSE migration in the redesign spec
- *      replaces this with real `reasoning.step` events.
+ *   1. Pre-verdict: an honest pending state. The JSON endpoint does not expose
+ *      intermediate reasoning events, so the UI never invents them.
  *   2. Verdict: italic serif headline (= narrative.tldr).
  *   3. Go-deeper accordion: holds insights → bullets, classical citations,
  *      and year predictions when present. Source chips on each section
@@ -26,7 +23,7 @@
  */
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
+import { AnimatePresence, motion, MotionConfig, useReducedMotion } from 'framer-motion';
 import {
     AlertCircle,
     BookOpen,
@@ -39,6 +36,7 @@ import {
     Target,
 } from 'lucide-react';
 import { CITATION_GOLD, GLASS } from '../designTokens';
+import type { AskContext } from '../../lib/fortuneTypes';
 
 // ---------------------------------------------------------------------------
 // Types — keep the message shape backward compatible. Optional fields light
@@ -54,6 +52,11 @@ export interface OracleChatMessage {
     narrative?: NarrativePayload;
     runId?: string;
     degradedMemory?: boolean;
+    error?: boolean;
+    retryable?: boolean;
+    retryQuestion?: string;
+    clientRequestId?: string;
+    askContext?: AskContext;
 }
 
 interface NarrativeBullet { icon?: string; text: string }
@@ -81,6 +84,7 @@ interface OracleChatProps {
     input: string;
     onInputChange: (v: string) => void;
     onSend: () => void;
+    onRetry?: (message: OracleChatMessage) => void;
     suggestions?: string[];
     accentColor?: string;
     isLoading?: boolean;
@@ -90,21 +94,11 @@ interface OracleChatProps {
      * "luck_cycle:career:5-year") so the loading chip can name the
      * specialist that's about to run. */
     flowFocus?: string;
+    contextLabel?: string;
+    disabledReason?: string;
 }
 
 const SERIF = "'Cormorant Garamond', 'Playfair Display', Georgia, serif";
-
-// Generic reasoning phases shown during the loading wait. Mapped to a fixed
-// schedule (in ms) since the JSON /ask endpoint doesn't stream yet. Once the
-// backend SSE work lands, this hook is replaced with real event consumption.
-const REASONING_PHASES = [
-    'Mapping the Four Pillars',
-    'Reading the year and luck pillars',
-    'Locating the relevant Ten Gods',
-    'Synthesizing the answer',
-] as const;
-
-const PHASE_SCHEDULE_MS = [400, 8000, 22000, 38000];
 
 // Mirror of backend `infer_specialist_action` so the loading chip can name
 // the specialist that's actually about to run (e.g. "Career specialist"
@@ -151,33 +145,6 @@ function inferSpecialistLabel(question: string | undefined, focus: string | unde
     return 'Oracle specialist';
 }
 
-function useSimulatedReasoning(active: boolean) {
-    const [revealed, setRevealed] = useState(0);
-    const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
-
-    useEffect(() => {
-        // Reset and re-arm whenever active flips on.
-        timersRef.current.forEach((t) => clearTimeout(t));
-        timersRef.current = [];
-        if (!active) {
-            setRevealed(0);
-            return;
-        }
-        PHASE_SCHEDULE_MS.forEach((delay, i) => {
-            const t = setTimeout(() => setRevealed(i + 1), delay);
-            timersRef.current.push(t);
-        });
-        return () => {
-            timersRef.current.forEach((t) => clearTimeout(t));
-        };
-    }, [active]);
-
-    return REASONING_PHASES.slice(0, revealed).map((label, i) => ({
-        id: `phase-${i}`,
-        label,
-    }));
-}
-
 // ---------------------------------------------------------------------------
 // Atoms
 // ---------------------------------------------------------------------------
@@ -195,75 +162,6 @@ const SpecialistChip: React.FC<{ label: string; color: string }> = ({ label, col
         {label}
     </motion.span>
 );
-
-const ReasoningBreadcrumbs: React.FC<{
-    steps: { id: string; label: string }[];
-    accentColor: string;
-}> = ({ steps, accentColor }) => (
-    <div className="flex flex-wrap items-center gap-1.5">
-        <AnimatePresence>
-            {steps.map((step) => (
-                <motion.span
-                    key={step.id}
-                    layout
-                    initial={{ opacity: 0, y: 4 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: 0.3 }}
-                    className="inline-flex items-center gap-1 rounded-full bg-white/[0.04] px-2 py-1 text-[10px] text-slate-300"
-                >
-                    <Loader2 className="h-2.5 w-2.5 animate-spin" style={{ color: accentColor }} />
-                    {step.label}
-                </motion.span>
-            ))}
-        </AnimatePresence>
-    </div>
-);
-
-const ReasoningTrailChip: React.FC<{ steps: { id: string; label: string }[] }> = ({ steps }) => {
-    const [open, setOpen] = useState(false);
-    if (steps.length === 0) return null;
-    return (
-        <div className="flex flex-col gap-1.5">
-            <button
-                type="button"
-                onClick={() => setOpen((v) => !v)}
-                className="self-start inline-flex items-center gap-1.5 rounded-full border border-white/5 bg-white/[0.02] px-2.5 py-1 text-[10px] uppercase tracking-widest text-slate-500 hover:text-slate-300"
-            >
-                <Brain className="h-3 w-3" />
-                {steps.length} reasoning steps
-                <motion.span animate={{ rotate: open ? 180 : 0 }} transition={{ duration: 0.2 }}>
-                    <ChevronDown className="h-3 w-3" />
-                </motion.span>
-            </button>
-            <AnimatePresence initial={false}>
-                {open && (
-                    <motion.div
-                        initial={{ height: 0, opacity: 0 }}
-                        animate={{ height: 'auto', opacity: 1 }}
-                        exit={{ height: 0, opacity: 0 }}
-                        transition={{ duration: 0.25 }}
-                        className="overflow-hidden"
-                    >
-                        <ul className="space-y-1 pl-1 pt-1">
-                            {steps.map((s, i) => (
-                                <li
-                                    key={s.id}
-                                    className="flex items-center gap-2 text-[11px] text-slate-400"
-                                >
-                                    <span className="text-slate-600 tabular-nums">
-                                        {String(i + 1).padStart(2, '0')}
-                                    </span>
-                                    <span>{s.label}</span>
-                                </li>
-                            ))}
-                        </ul>
-                    </motion.div>
-                )}
-            </AnimatePresence>
-        </div>
-    );
-};
 
 const DisclosureAccordion: React.FC<{
     title: string;
@@ -360,19 +258,18 @@ const UserBubble: React.FC<{ text: string }> = ({ text }) => (
 interface AgentBubbleProps {
     msg: OracleChatMessage;
     accentColor: string;
-    /** Pre-rendered when this is the in-flight loading turn. */
-    pendingSteps?: { id: string; label: string }[];
     isPending?: boolean;
     /** Resolved specialist name to show in the pre-verdict chip. */
     specialistLabel?: string;
+    onRetry?: (message: OracleChatMessage) => void;
 }
 
 const AgentBubble: React.FC<AgentBubbleProps> = ({
     msg,
     accentColor,
-    pendingSteps,
     isPending,
     specialistLabel = 'Oracle specialist',
+    onRetry,
 }) => {
     const narrative = msg.narrative;
     const verdict = narrative?.tldr || msg.content;
@@ -398,7 +295,16 @@ const AgentBubble: React.FC<AgentBubbleProps> = ({
                     className={`${GLASS} max-w-[88%] rounded-2xl px-4 py-3 text-[13px] text-slate-200`}
                     style={{ borderLeft: `2px solid ${accentColor}66` }}
                 >
-                    {msg.content}
+                    <div role={msg.error ? 'alert' : undefined}>{msg.content}</div>
+                    {msg.error && msg.retryable && msg.retryQuestion && onRetry && (
+                        <button
+                            type="button"
+                            onClick={() => onRetry(msg)}
+                            className="mt-2 rounded-full border border-white/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-widest text-slate-300 hover:bg-white/[0.06]"
+                        >
+                            Retry
+                        </button>
+                    )}
                 </div>
             </motion.div>
         );
@@ -411,29 +317,17 @@ const AgentBubble: React.FC<AgentBubbleProps> = ({
             className="rounded-2xl border-l-2 bg-white/[0.02] p-4 space-y-3"
             style={{ borderLeftColor: `${accentColor}66` }}
         >
-            {/* Pre-verdict: specialist + animated reasoning breadcrumbs */}
+            {/* Honest pre-verdict state: no simulated backend progress. */}
             {isPending && (
                 <div className="flex flex-col gap-2">
                     <div className="flex items-center gap-2 flex-wrap">
                         <SpecialistChip label={specialistLabel} color={accentColor} />
-                        {(!pendingSteps || pendingSteps.length === 0) && (
-                            <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-widest text-slate-500">
-                                <Loader2 className="h-3 w-3 animate-spin" style={{ color: accentColor }} />
-                                Routing
-                            </span>
-                        )}
+                        <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-widest text-slate-500">
+                            <Loader2 className="h-3 w-3 animate-spin" style={{ color: accentColor }} />
+                            Preparing your answer
+                        </span>
                     </div>
-                    {pendingSteps && pendingSteps.length > 0 && (
-                        <ReasoningBreadcrumbs steps={pendingSteps} accentColor={accentColor} />
-                    )}
                 </div>
-            )}
-
-            {/* Post-verdict reasoning trail (collapsed) — only when narrative present */}
-            {!isPending && narrative && (
-                <ReasoningTrailChip
-                    steps={REASONING_PHASES.map((label, i) => ({ id: `r-${i}`, label }))}
-                />
             )}
 
             {/* Verdict — italic serif (= narrative.tldr). */}
@@ -571,15 +465,19 @@ export const OracleChat: React.FC<OracleChatProps> = ({
     input,
     onInputChange,
     onSend,
+    onRetry,
     suggestions = [],
     accentColor = '#14b8a6',
     isLoading = false,
     memoryDegraded = false,
     disabled = false,
     flowFocus,
+    contextLabel,
+    disabledReason,
 }) => {
     const scrollRef = useRef<HTMLDivElement>(null);
-    const pendingSteps = useSimulatedReasoning(isLoading);
+    const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const reduceMotion = useReducedMotion();
 
     // The most recent user turn is what the next /ask call will dispatch on,
     // so use it (plus flowFocus as fallback) to name the specialist chip.
@@ -595,11 +493,24 @@ export const OracleChat: React.FC<OracleChatProps> = ({
     );
 
     useEffect(() => {
-        scrollRef.current?.scrollTo({
-            top: scrollRef.current.scrollHeight,
-            behavior: 'smooth',
-        });
-    }, [messages.length, pendingSteps.length]);
+        const scroller = scrollRef.current;
+        if (!scroller) return;
+        if (typeof scroller.scrollTo === 'function') {
+            scroller.scrollTo({
+                top: scroller.scrollHeight,
+                behavior: reduceMotion ? 'auto' : 'smooth',
+            });
+        } else {
+            scroller.scrollTop = scroller.scrollHeight;
+        }
+    }, [messages.length, isLoading, reduceMotion]);
+
+    useEffect(() => {
+        const textarea = textareaRef.current;
+        if (!textarea) return;
+        textarea.style.height = 'auto';
+        textarea.style.height = `${Math.min(textarea.scrollHeight, 120)}px`;
+    }, [input]);
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
         if (e.key === 'Enter' && !e.shiftKey) {
@@ -621,7 +532,19 @@ export const OracleChat: React.FC<OracleChatProps> = ({
     })();
 
     return (
-        <div className="flex flex-col h-[60vh] max-h-[560px]">
+        <MotionConfig reducedMotion="user">
+        <div className="flex min-h-[420px] flex-col h-[min(70dvh,560px)]">
+            {contextLabel && (
+                <div className="mb-3 flex items-center gap-2 text-[10px] uppercase tracking-widest text-slate-500">
+                    <span>Answering about</span>
+                    <span
+                        className="rounded-full border px-2 py-1 text-slate-300"
+                        style={{ borderColor: `${accentColor}44`, background: `${accentColor}12` }}
+                    >
+                        {contextLabel}
+                    </span>
+                </div>
+            )}
             {memoryDegraded && (
                 <div className="flex items-center gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 p-2 mb-3 text-[11px] text-amber-400">
                     <AlertCircle className="w-3.5 h-3.5 flex-none" />
@@ -629,7 +552,14 @@ export const OracleChat: React.FC<OracleChatProps> = ({
                 </div>
             )}
 
-            <div ref={scrollRef} className="flex-1 overflow-y-auto space-y-4 mb-3 pr-1 scrollbar-hide">
+            <div
+                ref={scrollRef}
+                role="log"
+                aria-live="polite"
+                aria-busy={isLoading}
+                aria-label="Ask conversation"
+                className="flex-1 overflow-y-auto space-y-4 mb-3 pr-1 scrollbar-hide"
+            >
                 <AnimatePresence initial={false}>
                     {messages.map((msg) =>
                         msg.role === 'user' ? (
@@ -639,6 +569,7 @@ export const OracleChat: React.FC<OracleChatProps> = ({
                                 key={msg.id}
                                 msg={msg}
                                 accentColor={accentColor}
+                                onRetry={onRetry}
                             />
                         ),
                     )}
@@ -649,7 +580,6 @@ export const OracleChat: React.FC<OracleChatProps> = ({
                     <AgentBubble
                         msg={{ id: '__pending', role: 'agent', content: '' }}
                         accentColor={accentColor}
-                        pendingSteps={pendingSteps}
                         isPending
                         specialistLabel={specialistLabel}
                     />
@@ -704,13 +634,22 @@ export const OracleChat: React.FC<OracleChatProps> = ({
                 </div>
             )}
 
+            {disabledReason && disabled && (
+                <p id="fortune-ask-disabled" className="mb-2 text-[11px] text-slate-500">
+                    {disabledReason}
+                </p>
+            )}
             <div className="flex items-end gap-2">
                 <textarea
+                    ref={textareaRef}
                     value={input}
                     onChange={(e) => onInputChange(e.target.value)}
                     onKeyDown={handleKeyDown}
                     placeholder="Ask the oracle..."
-                    disabled={disabled || isLoading}
+                    disabled={disabled}
+                    maxLength={500}
+                    aria-label="Ask a question about this reading"
+                    aria-describedby={disabledReason && disabled ? 'fortune-ask-disabled fortune-ask-count' : 'fortune-ask-count'}
                     rows={1}
                     className="flex-1 resize-none rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none"
                     style={{ maxHeight: 100, minHeight: 38 }}
@@ -727,6 +666,7 @@ export const OracleChat: React.FC<OracleChatProps> = ({
                     type="button"
                     onClick={onSend}
                     disabled={disabled || isLoading || !input.trim()}
+                    aria-label={isLoading ? 'Waiting for answer' : 'Send question'}
                     className="flex h-[38px] w-[38px] flex-none items-center justify-center rounded-xl border transition-colors"
                     style={{
                         borderColor: `${accentColor}33`,
@@ -737,6 +677,10 @@ export const OracleChat: React.FC<OracleChatProps> = ({
                     <Send className="w-4 h-4" />
                 </button>
             </div>
+            <div id="fortune-ask-count" className="mt-1 text-right font-mono text-[10px] text-slate-600">
+                {input.length}/500
+            </div>
         </div>
+        </MotionConfig>
     );
 };

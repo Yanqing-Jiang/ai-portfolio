@@ -27,7 +27,7 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import asyncpg
 
@@ -35,6 +35,11 @@ logger = logging.getLogger(__name__)
 
 _pool: Optional[asyncpg.Pool] = None
 _pool_lock = asyncio.Lock()
+
+# Ask requests use the same lease window for their Redis serialization lock and
+# durable idempotency takeover. Keeping these aligned prevents a crashed worker
+# from leaving retries blocked behind a longer, unrelated fortune-run lock.
+ASK_LEASE_TTL_SECONDS = 180
 
 
 def _db_url() -> str:
@@ -196,7 +201,7 @@ class FortuneRepository:
         self,
         *,
         fortune_id: UUID,
-        run_kind: str,  # 'initial' | 'action'
+        run_kind: str,  # 'initial' | 'action' | 'ask'
         action_type: str | None = None,
         model_used: str | None = None,
         reasoning_effort: str | None = None,
@@ -255,6 +260,483 @@ class FortuneRepository:
             started_at, finished_at,
         )
 
+    async def claim_ask_request(
+        self,
+        *,
+        fortune_id: UUID,
+        client_request_id: UUID,
+        payload_hash: str,
+    ) -> dict[str, Any] | None:
+        """Claim an Ask idempotency key or return its existing durable state."""
+        if self.pool is None:
+            return None
+        lease_token = uuid4()
+        delivery_id = uuid4()
+        inserted = await self.pool.fetchrow(
+            """
+            INSERT INTO fortune_ask_request (
+                fortune_id, client_request_id, payload_hash, lease_token,
+                delivery_id, status
+            ) VALUES ($1, $2, $3, $4, $5, 'running')
+            ON CONFLICT (fortune_id, client_request_id) DO NOTHING
+            RETURNING status, payload_hash, lease_token, delivery_id, run_id, response_json,
+                      session_items, conversation_committed, updated_at
+            """,
+            fortune_id, client_request_id, payload_hash, lease_token, delivery_id,
+        )
+        if inserted is not None:
+            return {**dict(inserted), "claimed": True}
+        row = await self.pool.fetchrow(
+            """
+            SELECT status, payload_hash, lease_token, delivery_id, run_id, response_json,
+                   session_items, conversation_committed, updated_at
+            FROM fortune_ask_request
+            WHERE fortune_id = $1 AND client_request_id = $2
+            """,
+            fortune_id, client_request_id,
+        )
+        if (
+            row is not None
+            and row["status"] == "error"
+            and row["payload_hash"] == payload_hash
+        ):
+            retried = await self.pool.fetchrow(
+                """
+                UPDATE fortune_ask_request
+                SET status = 'running', lease_token = $3, response_json = NULL,
+                    session_items = NULL, conversation_committed = FALSE,
+                    updated_at = NOW()
+                WHERE fortune_id = $1 AND client_request_id = $2 AND status = 'error'
+                RETURNING status, payload_hash, lease_token, delivery_id, run_id, response_json,
+                          session_items, conversation_committed, updated_at
+                """,
+                fortune_id, client_request_id, lease_token,
+            )
+            if retried is not None:
+                return {**dict(retried), "claimed": True}
+        if (
+            row is not None
+            and row["status"] == "running"
+            and row["payload_hash"] == payload_hash
+        ):
+            # Recover a key abandoned by a crashed/cancelled worker. This is the
+            # same lease window used by the Ask serialization lock in routes.py.
+            recovered = await self.pool.fetchrow(
+                """
+                UPDATE fortune_ask_request
+                SET status = 'running', lease_token = $3, response_json = NULL,
+                    session_items = NULL, conversation_committed = FALSE,
+                    updated_at = NOW()
+                WHERE fortune_id = $1 AND client_request_id = $2
+                  AND status = 'running'
+                  AND updated_at < NOW() - ($4 * INTERVAL '1 second')
+                RETURNING status, payload_hash, lease_token, delivery_id, run_id, response_json,
+                          session_items, conversation_committed, updated_at
+                """,
+                fortune_id, client_request_id, lease_token, ASK_LEASE_TTL_SECONDS,
+            )
+            if recovered is not None:
+                return {**dict(recovered), "claimed": True}
+        return ({**dict(row), "claimed": False} if row is not None else None)
+
+    async def get_ask_request(
+        self,
+        *,
+        fortune_id: UUID,
+        client_request_id: UUID,
+    ) -> dict[str, Any] | None:
+        """Read an Ask idempotency record without claiming or renewing it."""
+        if self.pool is None:
+            return None
+        row = await self.pool.fetchrow(
+            """
+            SELECT status, payload_hash, lease_token, delivery_id, run_id, response_json,
+                   session_items, conversation_committed, updated_at
+            FROM fortune_ask_request
+            WHERE fortune_id = $1 AND client_request_id = $2
+            """,
+            fortune_id, client_request_id,
+        )
+        return dict(row) if row is not None else None
+
+    async def list_pending_ask_conversations(
+        self, *, fortune_id: UUID,
+    ) -> list[dict[str, Any]]:
+        """Return completed Ask outbox turns not yet copied to SDK memory."""
+        if self.pool is None:
+            return []
+        rows = await self.pool.fetch(
+            """
+            SELECT client_request_id, lease_token, delivery_id, session_items,
+                   updated_at
+            FROM fortune_ask_request
+            WHERE fortune_id = $1 AND status = 'done'
+              AND conversation_committed = FALSE
+              AND session_items IS NOT NULL
+            ORDER BY created_at ASC, client_request_id ASC
+            """,
+            fortune_id,
+        )
+        return [dict(row) for row in rows]
+
+    async def list_ask_conversations(
+        self, *, fortune_id: UUID,
+    ) -> list[dict[str, Any]]:
+        """Return every completed Ask turn with stable delivery identities."""
+        if self.pool is None:
+            return []
+        rows = await self.pool.fetch(
+            """
+            SELECT client_request_id, lease_token, delivery_id, session_items,
+                   conversation_committed, updated_at
+            FROM fortune_ask_request
+            WHERE fortune_id = $1 AND status = 'done'
+              AND session_items IS NOT NULL
+            ORDER BY created_at ASC, client_request_id ASC
+            """,
+            fortune_id,
+        )
+        return [dict(row) for row in rows]
+
+    async def ensure_ask_run(
+        self, *, fortune_id: UUID, client_request_id: UUID, lease_token: UUID,
+    ) -> UUID:
+        """Create or recover the single activity-rail run owned by an Ask key."""
+        if self.pool is None:
+            raise RuntimeError("Ask persistence unavailable")
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow(
+                    """
+                    SELECT run_id FROM fortune_ask_request
+                    WHERE fortune_id = $1 AND client_request_id = $2
+                      AND lease_token = $3 AND status = 'running'
+                    FOR UPDATE
+                    """,
+                    fortune_id, client_request_id, lease_token,
+                )
+                if row is None:
+                    raise RuntimeError("Ask idempotency lease was lost before run creation")
+                run_id = row["run_id"]
+                if run_id is None:
+                    run_id = await conn.fetchval(
+                        """
+                        INSERT INTO fortune_run (fortune_id, run_kind, status)
+                        VALUES ($1, 'ask', 'queued') RETURNING id
+                        """,
+                        fortune_id,
+                    )
+                    await conn.execute(
+                        """
+                        UPDATE fortune_ask_request SET run_id = $4, updated_at = NOW()
+                        WHERE fortune_id = $1 AND client_request_id = $2
+                          AND lease_token = $3
+                        """,
+                        fortune_id, client_request_id, lease_token, run_id,
+                    )
+                else:
+                    await conn.execute(
+                        """
+                        UPDATE fortune_run SET status = 'queued', error_message = NULL,
+                            finished_at = NULL
+                        WHERE id = $1 AND fortune_id = $2
+                        """,
+                        run_id, fortune_id,
+                    )
+                return run_id
+
+    async def complete_ask_request(
+        self,
+        *,
+        fortune_id: UUID,
+        client_request_id: UUID,
+        lease_token: UUID,
+        response: dict[str, Any],
+        run_id: UUID,
+        run_status: str = "done",
+        session_items: list[Any] | None = None,
+        conversation_committed: bool = False,
+    ) -> None:
+        if self.pool is None:
+            return
+        import json
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                updated = await conn.fetchval(
+                    """
+                    UPDATE fortune_ask_request
+                    SET status = 'done', response_json = $4::jsonb,
+                        session_items = $5::jsonb, conversation_committed = $6,
+                        updated_at = NOW()
+                    WHERE fortune_id = $1 AND client_request_id = $2
+                      AND lease_token = $3 AND run_id = $7
+                    RETURNING 1
+                    """,
+                    fortune_id, client_request_id, lease_token, json.dumps(response),
+                    json.dumps(session_items) if session_items is not None else None,
+                    conversation_committed, run_id,
+                )
+                if updated is None:
+                    raise RuntimeError("Ask idempotency lease was lost before completion")
+                result = await conn.execute(
+                    """
+                    UPDATE fortune_run SET status = $2, finished_at = NOW()
+                    WHERE id = $1 AND fortune_id = $3
+                    """,
+                    run_id, run_status, fortune_id,
+                )
+                if result != "UPDATE 1":
+                    raise RuntimeError("Ask run completion failed")
+
+    async def mark_ask_conversation_committed(
+        self, *, fortune_id: UUID, client_request_id: UUID, lease_token: UUID,
+    ) -> None:
+        if self.pool is None:
+            return
+        updated = await self.pool.fetchval(
+            """
+            UPDATE fortune_ask_request
+            SET conversation_committed = TRUE, updated_at = NOW()
+            WHERE fortune_id = $1 AND client_request_id = $2
+              AND lease_token = $3 AND status = 'done'
+            RETURNING 1
+            """,
+            fortune_id, client_request_id, lease_token,
+        )
+        if updated is None:
+            raise RuntimeError("Ask idempotency lease was lost before memory acknowledgement")
+
+    async def commit_ask_conversation(
+        self,
+        *,
+        fortune_id: UUID,
+        client_request_id: UUID,
+        lease_token: UUID,
+        delivery_id: UUID,
+        session_id: str,
+        serialized_items: list[str],
+    ) -> None:
+        """Publish an Ask turn and acknowledge its outbox in one transaction.
+
+        The per-message delivery key is protected by a partial unique index.
+        A retry after an ambiguous database result can therefore safely repeat
+        the inserts without relying on message equality or a history window.
+        """
+        if self.pool is None:
+            raise RuntimeError("Ask persistence unavailable")
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                owned = await conn.fetchval(
+                    """
+                    SELECT 1 FROM fortune_ask_request
+                    WHERE fortune_id = $1 AND client_request_id = $2
+                      AND lease_token = $3 AND delivery_id = $4
+                      AND status = 'done' AND conversation_committed = FALSE
+                    FOR UPDATE
+                    """,
+                    fortune_id, client_request_id, lease_token, delivery_id,
+                )
+                if owned is None:
+                    # A previous transaction may already have committed. Treat
+                    # that exact durable state as success; reject every other
+                    # lease/delivery mismatch.
+                    committed = await conn.fetchval(
+                        """
+                        SELECT 1 FROM fortune_ask_request
+                        WHERE fortune_id = $1 AND client_request_id = $2
+                          AND lease_token = $3 AND delivery_id = $4
+                          AND status = 'done' AND conversation_committed = TRUE
+                        """,
+                        fortune_id, client_request_id, lease_token, delivery_id,
+                    )
+                    if committed is not None:
+                        return
+                    raise RuntimeError("Ask idempotency lease was lost before memory commit")
+
+                await conn.execute(
+                    """
+                    INSERT INTO agent_sessions (session_id)
+                    VALUES ($1) ON CONFLICT (session_id) DO NOTHING
+                    """,
+                    session_id,
+                )
+                for index, message_data in enumerate(serialized_items):
+                    await conn.execute(
+                        """
+                        INSERT INTO agent_messages (
+                            session_id, message_data,
+                            ask_delivery_id, ask_delivery_index
+                        ) VALUES ($1, $2, $3, $4)
+                        ON CONFLICT DO NOTHING
+                        """,
+                        session_id, message_data, delivery_id, index,
+                    )
+                await conn.execute(
+                    """
+                    UPDATE agent_sessions SET updated_at = CURRENT_TIMESTAMP
+                    WHERE session_id = $1
+                    """,
+                    session_id,
+                )
+                result = await conn.execute(
+                    """
+                    UPDATE fortune_ask_request
+                    SET conversation_committed = TRUE, updated_at = NOW()
+                    WHERE fortune_id = $1 AND client_request_id = $2
+                      AND lease_token = $3 AND delivery_id = $4
+                      AND status = 'done' AND conversation_committed = FALSE
+                    """,
+                    fortune_id, client_request_id, lease_token, delivery_id,
+                )
+                if result != "UPDATE 1":
+                    raise RuntimeError("Ask memory acknowledgement failed")
+
+    async def complete_ask_with_conversation(
+        self,
+        *,
+        fortune_id: UUID,
+        client_request_id: UUID,
+        lease_token: UUID,
+        delivery_id: UUID,
+        response: dict[str, Any],
+        session_items: list[Any],
+        session_id: str,
+        serialized_items: list[str],
+        run_id: UUID,
+        run_status: str = "done",
+    ) -> None:
+        """Atomically publish an approved turn and its replayable response.
+
+        A client must never receive HTTP 200 while its turn only exists in an
+        unserviced outbox. Combining the SDK message inserts with the
+        idempotency completion makes either both durable or neither durable.
+        The delivery key still makes an ambiguous transaction retry safe.
+        """
+        if self.pool is None:
+            raise RuntimeError("Ask persistence unavailable")
+        import json
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                owned = await conn.fetchval(
+                    """
+                    SELECT 1 FROM fortune_ask_request
+                    WHERE fortune_id = $1 AND client_request_id = $2
+                      AND lease_token = $3 AND delivery_id = $4
+                      AND run_id = $5 AND status = 'running'
+                    FOR UPDATE
+                    """,
+                    fortune_id, client_request_id, lease_token, delivery_id, run_id,
+                )
+                if owned is None:
+                    committed = await conn.fetchval(
+                        """
+                        SELECT 1 FROM fortune_ask_request
+                        WHERE fortune_id = $1 AND client_request_id = $2
+                          AND lease_token = $3 AND delivery_id = $4
+                          AND run_id = $5
+                          AND status = 'done' AND conversation_committed = TRUE
+                        """,
+                        fortune_id, client_request_id, lease_token, delivery_id, run_id,
+                    )
+                    if committed is not None:
+                        return
+                    raise RuntimeError("Ask idempotency lease was lost before completion")
+
+                await conn.execute(
+                    """
+                    INSERT INTO agent_sessions (session_id)
+                    VALUES ($1) ON CONFLICT (session_id) DO NOTHING
+                    """,
+                    session_id,
+                )
+                for index, message_data in enumerate(serialized_items):
+                    await conn.execute(
+                        """
+                        INSERT INTO agent_messages (
+                            session_id, message_data,
+                            ask_delivery_id, ask_delivery_index
+                        ) VALUES ($1, $2, $3, $4)
+                        ON CONFLICT DO NOTHING
+                        """,
+                        session_id, message_data, delivery_id, index,
+                    )
+                await conn.execute(
+                    """
+                    UPDATE agent_sessions SET updated_at = CURRENT_TIMESTAMP
+                    WHERE session_id = $1
+                    """,
+                    session_id,
+                )
+                result = await conn.execute(
+                    """
+                    UPDATE fortune_ask_request
+                    SET status = 'done', response_json = $5::jsonb,
+                        session_items = $6::jsonb,
+                        conversation_committed = TRUE, updated_at = NOW()
+                    WHERE fortune_id = $1 AND client_request_id = $2
+                      AND lease_token = $3 AND delivery_id = $4
+                      AND run_id = $7 AND status = 'running'
+                    """,
+                    fortune_id, client_request_id, lease_token, delivery_id,
+                    json.dumps(response), json.dumps(session_items), run_id,
+                )
+                if result != "UPDATE 1":
+                    raise RuntimeError("Ask atomic conversation completion failed")
+                run_result = await conn.execute(
+                    """
+                    UPDATE fortune_run SET status = $2, finished_at = NOW()
+                    WHERE id = $1 AND fortune_id = $3
+                    """,
+                    run_id, run_status, fortune_id,
+                )
+                if run_result != "UPDATE 1":
+                    raise RuntimeError("Ask run completion failed")
+
+    async def reconcile_completed_ask_run(
+        self, *, fortune_id: UUID, client_request_id: UUID, run_id: UUID,
+    ) -> None:
+        """Repair pre-atomic completed responses whose run stayed queued."""
+        if self.pool is None:
+            return
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                owned = await conn.fetchval(
+                    """
+                    UPDATE fortune_ask_request SET run_id = COALESCE(run_id, $3)
+                    WHERE fortune_id = $1 AND client_request_id = $2
+                      AND status = 'done' AND (run_id IS NULL OR run_id = $3)
+                    RETURNING 1
+                    """,
+                    fortune_id, client_request_id, run_id,
+                )
+                if owned is None:
+                    return
+                await conn.execute(
+                    """
+                    UPDATE fortune_run SET status = 'done', finished_at = COALESCE(finished_at, NOW())
+                    WHERE id = $1 AND fortune_id = $2 AND status NOT IN ('done', 'failed_guardrail')
+                    """,
+                    run_id, fortune_id,
+                )
+
+    async def fail_ask_request(
+        self,
+        *,
+        fortune_id: UUID,
+        client_request_id: UUID,
+        lease_token: UUID,
+    ) -> None:
+        if self.pool is None:
+            return
+        await self.pool.execute(
+            """
+            UPDATE fortune_ask_request
+            SET status = 'error', updated_at = NOW()
+            WHERE fortune_id = $1 AND client_request_id = $2 AND lease_token = $3
+            """,
+            fortune_id, client_request_id, lease_token,
+        )
+
     # -- fortune_snapshot ---------------------------------------------------
 
     async def upsert_snapshot(
@@ -270,6 +752,7 @@ class FortuneRepository:
         references: dict[str, Any] | None = None,
         retrodictions: dict[str, Any] | None = None,
         data_model: dict[str, Any] | None = None,
+        request_context: dict[str, Any] | None = None,
         schema_version: int | None = None,
     ) -> None:
         """Upsert snapshot. Dual-write: legacy ``latest_*`` + optional v2 ``data_model``.
@@ -294,10 +777,11 @@ class FortuneRepository:
                 latest_overview, latest_pillars, latest_mechanics,
                 latest_narrative, latest_trace, latest_references,
                 latest_retrodictions, schema_version, data_model
+                , request_context
             )
             VALUES ($1, 1, $2, $3::jsonb, $4::jsonb, $5::jsonb,
                     $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb,
-                    COALESCE($10, 1), $11::jsonb)
+                    COALESCE($10, 1), $11::jsonb, $12::jsonb)
             ON CONFLICT (fortune_id) DO UPDATE SET
                 snapshot_version = fortune_snapshot.snapshot_version + 1,
                 status = EXCLUDED.status,
@@ -318,7 +802,8 @@ class FortuneRepository:
                          || EXCLUDED.latest_retrodictions
                 END,
                 schema_version = COALESCE($10, fortune_snapshot.schema_version),
-                data_model = COALESCE(EXCLUDED.data_model, fortune_snapshot.data_model)
+                data_model = COALESCE(EXCLUDED.data_model, fortune_snapshot.data_model),
+                request_context = COALESCE(EXCLUDED.request_context, fortune_snapshot.request_context)
             """,
             fortune_id, status,
             _j(overview), _j(pillars), _j(mechanics),
@@ -326,6 +811,7 @@ class FortuneRepository:
             _j(retrodictions),
             schema_version,
             _j(data_model),
+            _j(request_context),
         )
 
     async def upsert_correction(
@@ -388,32 +874,60 @@ class FortuneRepository:
         )
         return record
 
-    async def sweep_stuck_runs(self, *, older_than_minutes: int = 10) -> int:
-        """Mark runs stuck in 'queued'/'streaming' past the threshold as 'interrupted'.
+    async def sweep_stuck_run_records(
+        self, *, older_than_minutes: int = 10,
+    ) -> list[dict[str, str]]:
+        """Interrupt stale runs and return identities for Redis reconciliation.
 
-        Idempotent: runs that have already transitioned won't match. Returns the
-        count of runs updated so the caller can log. Called from startup and
-        on a periodic timer — a crashed worker leaves rows stuck otherwise and
-        the replay endpoint reports 'pending' forever.
+        Idempotent: runs that have already transitioned won't match. The caller
+        uses the returned run/fortune ids to terminalize the Redis projection,
+        which otherwise remains ``streaming`` after a hard worker exit.
         """
         if self.pool is None:
-            return 0
-        row = await self.pool.fetchrow(
+            return []
+        rows = await self.pool.fetch(
             """
-            WITH swept AS (
+            WITH interrupted AS (
                 UPDATE fortune_run
                 SET status = 'interrupted',
                     error_message = COALESCE(error_message, 'worker exited mid-stream'),
                     finished_at = NOW()
                 WHERE status IN ('queued', 'streaming')
                   AND COALESCE(started_at, created_at) < NOW() - ($1 || ' minutes')::interval
-                RETURNING 1
+                RETURNING id
             )
-            SELECT COUNT(*)::int AS n FROM swept
+            SELECT id, fortune_id
+            FROM fortune_run
+            WHERE status = 'interrupted' AND recovery_published_at IS NULL
+            ORDER BY finished_at ASC NULLS FIRST, created_at ASC
             """,
             str(older_than_minutes),
         )
-        return int(row["n"]) if row else 0
+        return [
+            {"run_id": str(row["id"]), "fortune_id": str(row["fortune_id"])}
+            for row in rows
+        ]
+
+    async def mark_run_recovery_published(self, run_id: UUID) -> None:
+        """Acknowledge that both Redis terminal projections were repaired."""
+        if self.pool is None:
+            return
+        await self.pool.execute(
+            """
+            UPDATE fortune_run SET recovery_published_at = NOW()
+            WHERE id = $1 AND status = 'interrupted'
+              AND recovery_published_at IS NULL
+            """,
+            run_id,
+        )
+
+    async def sweep_stuck_runs(self, *, older_than_minutes: int = 10) -> int:
+        """Backward-compatible count-only wrapper for maintenance callers."""
+        return len(
+            await self.sweep_stuck_run_records(
+                older_than_minutes=older_than_minutes,
+            )
+        )
 
     async def get_snapshot(self, fortune_id: UUID) -> dict[str, Any] | None:
         if self.pool is None:
@@ -423,7 +937,7 @@ class FortuneRepository:
             SELECT fortune_id, snapshot_version, schema_version, status,
                    latest_overview, latest_pillars, latest_mechanics,
                    latest_narrative, latest_trace, latest_references,
-                   latest_retrodictions, data_model, updated_at
+                   latest_retrodictions, data_model, request_context, updated_at
             FROM fortune_snapshot WHERE fortune_id = $1
             """,
             fortune_id,

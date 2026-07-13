@@ -12,7 +12,6 @@ import { fortuneClient, FortuneApiError } from '../lib/fortuneClient';
 import { authService } from '../../../services/auth';
 import { useFortuneStore } from '../stores/fortuneStore';
 import { useFortuneStream, hydrateDataModelFromSnapshot } from './useFortuneStream';
-import { useFortuneAsk } from './useFortuneAsk';
 import type { FortuneFunctionId, FortuneDataModel, FortuneStatus } from '../lib/fortuneTypes';
 
 interface UseFortuneSessionOptions {
@@ -30,7 +29,6 @@ interface UseFortuneSessionReturn {
   persistenceDegraded: boolean;
   isReplay: boolean;
   error: string | null;
-  ask: ReturnType<typeof useFortuneAsk>;
   create: (payload: Record<string, unknown>) => Promise<void>;
   pausing: boolean;
   cancel: () => Promise<void>;
@@ -181,6 +179,7 @@ export function useFortuneSession(options: UseFortuneSessionOptions): UseFortune
   const [streamUrl, setStreamUrl] = useState<string | null>(null);
   const createCalledRef = useRef(false);
   const streamStartedForRef = useRef<string | null>(null);
+  const hydrationGenerationRef = useRef(0);
 
   const {
     fortuneId,
@@ -204,24 +203,36 @@ export function useFortuneSession(options: UseFortuneSessionOptions): UseFortune
     })),
   );
 
-  const ask = useFortuneAsk();
-
-  const startStreamForFortune = useCallback(async (id: string) => {
+  const startStreamForFortune = useCallback(async (
+    id: string,
+    hydrationGeneration?: number,
+  ) => {
+    if (
+      hydrationGeneration !== undefined &&
+      hydrationGenerationRef.current !== hydrationGeneration
+    ) return false;
     if (streamStartedForRef.current === id && streamUrl) {
       setStatus('streaming');
-      return;
+      return true;
     }
-    streamStartedForRef.current = id;
     const token = await authService.getAccessToken();
+    if (
+      hydrationGeneration !== undefined &&
+      hydrationGenerationRef.current !== hydrationGeneration
+    ) return false;
+    streamStartedForRef.current = id;
     setStreamUrl(fortuneClient.buildStreamUrl(id, token));
     setStatus('streaming');
+    return true;
   }, [setStatus, streamUrl]);
 
   const hydrateSnapshot = useCallback(async (id: string) => {
+    const generation = ++hydrationGenerationRef.current;
     const snapshot = await fortuneClient.getFortune(id);
+    if (hydrationGenerationRef.current !== generation) return undefined;
     if (snapshot === null) {
       setFortune(id, '', { functionId });
-      await startStreamForFortune(id);
+      if (!await startStreamForFortune(id, generation)) return undefined;
       return null;
     }
 
@@ -243,7 +254,7 @@ export function useFortuneSession(options: UseFortuneSessionOptions): UseFortune
       ask_history: [],
     });
 
-    return { snapshot, replayStatus };
+    return { snapshot, replayStatus, generation };
   }, [functionId, hydrateFromReplay, setFortune, startStreamForFortune]);
 
   const handleResyncRequired = useCallback(async () => {
@@ -252,8 +263,9 @@ export function useFortuneSession(options: UseFortuneSessionOptions): UseFortune
     streamStartedForRef.current = null;
     setStreamUrl(null);
     const result = await hydrateSnapshot(id);
-    if (result?.replayStatus === 'streaming' || result === null) {
-      await startStreamForFortune(id);
+    if (result === undefined) return;
+    if (result?.replayStatus === 'streaming') {
+      await startStreamForFortune(id, result.generation);
     }
   }, [fortuneId, urlFortuneId, hydrateSnapshot, startStreamForFortune]);
 
@@ -284,10 +296,10 @@ export function useFortuneSession(options: UseFortuneSessionOptions): UseFortune
     (async () => {
       try {
         const result = await hydrateSnapshot(urlFortuneId);
-        if (cancelled) return;
+        if (cancelled || result === undefined) return;
         if (result === null) return; // pending → stream opened
         if (result.replayStatus === 'streaming') {
-          await startStreamForFortune(urlFortuneId);
+          await startStreamForFortune(urlFortuneId, result.generation);
         }
       } catch (err) {
         if (cancelled) return;
@@ -305,6 +317,10 @@ export function useFortuneSession(options: UseFortuneSessionOptions): UseFortune
 
     return () => {
       cancelled = true;
+      // Invalidate the in-flight fetch before its first store mutation. This
+      // prevents a delayed response for the old route from replacing the new
+      // fortune and clearing its Ask conversation.
+      hydrationGenerationRef.current += 1;
     };
   }, [urlFortuneId]);
 
@@ -360,7 +376,6 @@ export function useFortuneSession(options: UseFortuneSessionOptions): UseFortune
     persistenceDegraded,
     isReplay,
     error,
-    ask,
     create,
     pausing,
     cancel,

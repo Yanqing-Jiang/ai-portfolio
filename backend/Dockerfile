@@ -22,6 +22,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 EXPOSE 8000
 # FortuneStore holds active stream state in process memory, so the API must
 # remain single-worker until that state moves to a shared store.
-CMD ["gunicorn", "main:app", "-w", "1", "-k", "uvicorn.workers.UvicornWorker", \
-     "--bind", "0.0.0.0:8000", "--timeout", "120", "--graceful-timeout", "30", \
-     "--keep-alive", "75"]
+CMD ["sh", "scripts/start_backend.sh"]

@@ -90,10 +90,7 @@ def _snapshot_pillars(session: FortuneSession, foundation: dict[str, Any]) -> di
         payload["person_b"] = {
             "pillars": _to_jsonable(person_b.get("pillars")),
             "elements": _to_jsonable(person_b.get("elements")),
-            "mechanics": {
-                "hidden_stems": _to_jsonable(getattr(analysis_b, "hidden_stems", None)),
-                "ten_gods": _to_jsonable(getattr(analysis_b, "ten_gods", None)),
-            },
+            "mechanics": _snapshot_mechanics(session, analysis_b),
         }
     if get_settings().snapshot_schema_versions_enabled:
         payload["foundation_version"] = FOUNDATION_VERSION
@@ -136,6 +133,7 @@ def _build_ask_original_input(req: Any) -> dict[str, Any] | None:
         "focus": req.focus,
         "original_question": req.question,
         "tone": req.tone,
+        "function_id": canonical_function(req.focus, req.question),
     }
     if getattr(req, "person_b", None) is not None:
         out["person_b"] = req.person_b.model_dump()
@@ -216,6 +214,54 @@ async def run_and_publish(session, *, store=None, lock_token: str | None = None)
         }
         final = status_map.get(session.status, session.status.value)
         await fortune_events.set_run_record(run_id, fortune_id=fortune_id, status=final)
+    except asyncio.CancelledError:
+        # Gunicorn cancels worker-owned background tasks during a deploy. Mark
+        # both durable projections and publish an explicit terminal pair so a
+        # reconnect does not wait on a stale Redis ``streaming`` hash.
+        message = "Reading interrupted by a service restart. Please retry."
+
+        async def _terminalize_cancelled_run() -> None:
+            session.touch(RuntimeStatus.interrupted)
+            try:
+                await store.put(session)
+            except Exception as exc:
+                logger.warning("[FORTUNE-PIPELINE] cancelled state put failed: %s", exc)
+            try:
+                repo = await get_repository()
+                if repo.available and run_id:
+                    await repo.update_run_status(
+                        uuid.UUID(run_id), "interrupted", error_message=message,
+                    )
+            except Exception as exc:
+                logger.warning("[FORTUNE-PIPELINE] cancelled SQL status failed: %s", exc)
+            terminal_ok = False
+            record_ok = False
+            try:
+                terminal_ok = await fortune_events.publish_interrupted_terminal(
+                    run_id, fortune_id=fortune_id, message=message,
+                )
+            except Exception as exc:
+                logger.warning("[FORTUNE-PIPELINE] cancelled terminal publish failed: %s", exc)
+            record_ok = await fortune_events.set_run_record(
+                run_id, fortune_id=fortune_id, status="interrupted",
+                error_message=message,
+            )
+            if terminal_ok and record_ok:
+                try:
+                    repo = await get_repository()
+                    if repo.available:
+                        await repo.mark_run_recovery_published(uuid.UUID(run_id))
+                except Exception as exc:
+                    logger.warning("[FORTUNE-PIPELINE] recovery acknowledgement failed: %s", exc)
+
+        cleanup = asyncio.create_task(_terminalize_cancelled_run())
+        try:
+            await asyncio.shield(cleanup)
+        except asyncio.CancelledError:
+            # A second cancellation must not orphan cleanup. Keep the task
+            # strongly referenced and drain it before propagating shutdown.
+            await cleanup
+        raise
     except Exception as exc:
         logger.exception("[FORTUNE-PIPELINE] run_and_publish failed: %s", exc)
         await fortune_events.set_run_record(

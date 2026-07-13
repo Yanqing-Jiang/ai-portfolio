@@ -9,6 +9,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -143,14 +144,29 @@ async def test_publish_and_tail_roundtrip(fake_redis):
 async def test_cursor_predates_window_resync(fake_redis):
     run_id = "run-2"
     await fortune_events.publish_envelope(run_id, {"seq": 1, "payload": {"a": 1}})
-    assert await fortune_events.needs_resync(run_id, "999-1") is True
+    assert await fortune_events.needs_resync(
+        run_id, fortune_events.encode_cursor(run_id, "999-1"),
+    ) is True
     assert await fortune_events.needs_resync(run_id, "0-0") is False
-    assert await fortune_events.needs_resync(run_id, "1000-1") is False
+    assert await fortune_events.needs_resync(
+        run_id, fortune_events.encode_cursor(run_id, "1000-1"),
+    ) is False
+
+
+@pytest.mark.asyncio
+async def test_cursor_from_another_run_always_resyncs(fake_redis):
+    run_id = "run-target"
+    await fortune_events.publish_envelope(run_id, {"seq": 1, "payload": {"a": 1}})
+    newer_foreign_cursor = fortune_events.encode_cursor("run-newer", "9999-1")
+    assert await fortune_events.needs_resync(run_id, newer_foreign_cursor) is True
+    # Raw legacy IDs have no trustworthy run identity and fail closed.
+    assert await fortune_events.needs_resync(run_id, "9999-1") is True
 
 
 @pytest.mark.asyncio
 async def test_missing_stream_needs_resync(fake_redis):
-    assert await fortune_events.needs_resync("missing-run", "1000-1") is True
+    cursor = fortune_events.encode_cursor("missing-run", "1000-1")
+    assert await fortune_events.needs_resync("missing-run", cursor) is True
 
 
 @pytest.mark.asyncio
@@ -254,3 +270,66 @@ async def test_release_lock_survives_caller_cancellation(monkeypatch):
         await asyncio.sleep(0.01)
     assert not client.kv, "lock key leaked after caller cancellation"
     assert await store.acquire_lock("f-cancel")
+
+
+@pytest.mark.asyncio
+async def test_cancelled_background_run_terminalizes_sql_and_redis(monkeypatch):
+    """A graceful worker restart cannot leave a reconnect stuck streaming."""
+    import asyncio
+    import uuid
+    from fortune import pipeline
+    from fortune.state import RuntimeStatus
+
+    session = FortuneSession(
+        fortune_id="11111111-1111-1111-1111-111111111111",
+        run_id="22222222-2222-2222-2222-222222222222",
+        surface_id="fortune_main",
+        request=CreateFortuneRequest(birth_iso="1990-01-01T00:00:00"),
+    )
+    store = MagicMock()
+    store.put = AsyncMock()
+    store.release_lock = AsyncMock()
+    store.evict_local = MagicMock()
+    repo = MagicMock(available=True)
+    repo.update_run_status = AsyncMock()
+
+    async def _blocked_frames(*_args, **_kwargs):
+        await asyncio.Event().wait()
+        if False:
+            yield ""
+
+    monkeypatch.setattr(pipeline, "iter_fortune_sse_frames", _blocked_frames)
+    monkeypatch.setattr(pipeline, "get_repository", AsyncMock(return_value=repo))
+    monkeypatch.setattr(fortune_events, "set_run_record", AsyncMock())
+    terminal = AsyncMock()
+    monkeypatch.setattr(fortune_events, "publish_interrupted_terminal", terminal)
+
+    task = asyncio.create_task(
+        pipeline.run_and_publish(session, store=store, lock_token="owned"),
+    )
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert session.status is RuntimeStatus.interrupted
+    repo.update_run_status.assert_awaited_once_with(
+        uuid.UUID(session.run_id),
+        "interrupted",
+        error_message="Reading interrupted by a service restart. Please retry.",
+    )
+    terminal.assert_awaited_once()
+    terminal_call = terminal.await_args.kwargs
+    assert terminal_call["fortune_id"] == session.fortune_id
+    final_status = fortune_events.set_run_record.await_args_list[-1].kwargs
+    assert final_status["status"] == "interrupted"
+    store.release_lock.assert_awaited_once_with(session.fortune_id, "owned")
+
+
+def test_migration_runner_uses_transaction_scoped_lock() -> None:
+    source = (
+        Path(__file__).resolve().parent.parent / "scripts" / "apply_migration.py"
+    ).read_text(encoding="utf-8")
+    assert "pg_advisory_xact_lock" in source
+    assert "pg_advisory_lock(" not in source
+    assert "pg_advisory_unlock" not in source

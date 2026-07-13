@@ -26,6 +26,7 @@ we pass ``statement_cache_size=0`` on the underlying asyncpg driver.
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 import os
 from typing import Optional
@@ -179,6 +180,65 @@ async def get_ask_session(fortune_id: str):
         return None
 
 
+class BufferedAskSession:
+    """Session adapter that keeps a model turn private until it is approved.
+
+    The Agents SDK normally writes the user input and raw model output to its
+    session before our output guardrail runs.  This adapter reads the durable
+    history but buffers all new items in memory.  The route explicitly commits
+    them only after the safe response has been durably claimed, preventing a
+    rejected or half-completed answer from resurfacing via /conversation.
+    """
+
+    def __init__(self, durable_session: object) -> None:
+        self._durable_session = durable_session
+        self._pending: list[object] = []
+        self.session_id = getattr(durable_session, "session_id", "fortune_buffered")
+        self.session_settings = getattr(durable_session, "session_settings", None)
+
+    async def get_items(self, limit: int | None = None):
+        durable = await self._durable_session.get_items()
+        items = [*durable, *self._pending]
+        if limit is not None:
+            items = items[-limit:]
+        return copy.deepcopy(items)
+
+    async def add_items(self, items) -> None:
+        self._pending.extend(copy.deepcopy(list(items)))
+
+    async def pop_item(self):
+        # Never mutate approved history. Runner only needs to pop items it
+        # added during this buffered turn.
+        return self._pending.pop() if self._pending else None
+
+    async def clear_session(self) -> None:
+        self._pending.clear()
+
+    async def commit(self) -> None:
+        if not self._pending:
+            return
+        pending = copy.deepcopy(self._pending)
+        await self._durable_session.add_items(pending)
+        self._pending.clear()
+
+    def pending_items(self) -> list[object]:
+        return copy.deepcopy(self._pending)
+
+    def discard(self) -> None:
+        self._pending.clear()
+
+
+async def serialize_session_items(
+    durable_session: object,
+    items: list[object],
+) -> list[str]:
+    """Serialize buffered items exactly as the Agents SDK persists them."""
+    serializer = getattr(durable_session, "_serialize_item", None)
+    if serializer is None:
+        raise RuntimeError("Ask session serializer unavailable")
+    return [await serializer(item) for item in items]
+
+
 async def close_ask_engine() -> None:
     """Dispose of the async engine on shutdown (called from FastAPI lifespan)."""
     global _engine, _tables_ready
@@ -290,6 +350,21 @@ def filter_conversation_turns(
             except Exception:
                 at = str(created_at)
         turns.append({"role": role, "text": text[:2000], "at": at})
+    return turns
+
+
+def conversation_turns_from_items(
+    items: list[object], created_at: object | None = None, *,
+    client_request_id: object | None = None,
+    delivery_id: object | None = None,
+) -> list[dict[str, str]]:
+    """Project approved Ask outbox items when SDK memory is unavailable."""
+    turns = filter_conversation_turns([(item, created_at) for item in items])
+    for turn in turns:
+        if client_request_id is not None:
+            turn["client_request_id"] = str(client_request_id)
+        if delivery_id is not None:
+            turn["delivery_id"] = str(delivery_id)
     return turns
 
 

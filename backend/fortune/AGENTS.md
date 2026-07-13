@@ -16,7 +16,7 @@
 
 **PR-Panel (always-visible Thinking Panel):** every stream emits the 5 canonical rows (calendar → bazi_interpreter → classics_retriever → narrative → guardrail) under `/data/thinking/steps/{step_id}` with a queued→running→done lifecycle. See `backend/fortune/stream_bridge.py::emit_agent_step` and `routes.py::_panel_canonical_rows`. Audit covered by `tests/fortune/test_thinking_panel_completeness.py`.
 
-**PR-4 (Redis-backed ephemeral Ask chain):** compat narrative now ships with `store=True`. The Ask handler reads/writes `previous_response_id` via `chain_store.py` (Redis-backed, 1h TTL, deferred OpenAI `DELETE /v1/responses/{id}` on TTL expiry). Kill switch: `FORTUNE_ASK_CHAINING_ENABLED=false`. Conversation history continues to live in `SQLAlchemySession` (option ii — survives backend restart).
+**Ask continuity (current):** `SQLAlchemySession`, keyed by fortune id, is the sole conversation-memory mechanism and survives backend restarts. Response-id chaining is disabled (`chain_status="disabled"`); the former Redis `chain_store.py` path was removed. Ask requests may include an allowlisted section locator (`section_id` plus optional `selection_id`). The backend reconstructs that section from the trusted stored narrative before adding it to the volatile `intent` tail of the triage prompt—never accept arbitrary section content from the browser.
 
 The reasoning + model wiring lives in `backend/fortune/config.py` and is read
 by `_model_settings()` in `backend/fortune/agents.py`. Override live LLM stages

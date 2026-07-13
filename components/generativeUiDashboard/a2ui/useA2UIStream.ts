@@ -115,6 +115,8 @@ export interface UseA2UIStreamOptions {
     apiBaseUrl?: string;
     /** Callback for audit events */
     onAudit?: (event: any) => void;
+    /** Named SSE recovery signal; caller should hydrate a durable snapshot. */
+    onResyncRequired?: (detail: Record<string, unknown>) => void | Promise<void>;
 }
 
 const DEFAULT_OPTIONS: UseA2UIStreamOptions = {
@@ -191,6 +193,10 @@ export function useA2UIStream(
     // Refs
     const eventSourceRef = useRef<EventSource | null>(null);
     const processorRef = useRef<MessageProcessor | null>(null);
+    // The backend deliberately follows a terminal error frame with {done:true}
+    // so EventSource closes cleanly. Remember the error so the sentinel cannot
+    // relabel a failed reading as complete.
+    const terminalErrorRef = useRef<Error | null>(null);
     const retryTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     // Optimization #16: AbortController for fetch cleanup
     const abortControllerRef = useRef<AbortController | null>(null);
@@ -239,6 +245,10 @@ export function useA2UIStream(
     const connect = useCallback((isRetry = false) => {
         if (!streamUrl) return;
 
+        if (!isRetry) {
+            terminalErrorRef.current = null;
+        }
+
         // Clear any pending retry
         if (retryTimeoutRef.current) {
             clearTimeout(retryTimeoutRef.current);
@@ -273,6 +283,7 @@ export function useA2UIStream(
         eventSourceRef.current = eventSource;
 
         eventSource.onopen = () => {
+            if (eventSourceRef.current !== eventSource) return;
             setState((prev) => ({
                 ...prev,
                 isConnected: true,
@@ -284,6 +295,7 @@ export function useA2UIStream(
 
         // Handle clarification_request events from backend
         eventSource.addEventListener('clarification_request', (event) => {
+            if (eventSourceRef.current !== eventSource) return;
             try {
                 const clarification = JSON.parse((event as MessageEvent).data) as BackendClarificationRequest;
                 setState((prev) => ({
@@ -295,40 +307,104 @@ export function useA2UIStream(
             }
         });
 
-        eventSource.onmessage = (event) => {
-            const data = event.data;
-
-            // Check for a "done" signal (normal completion or timeout)
-            try {
-                const json = JSON.parse(data);
-                if (json && typeof json === 'object' && json.done === true) {
-                    setState((prev) => ({
-                        ...prev,
-                        isDone: true,
-                        isConnected: false,
-                        isLoading: false,
-                        connectionStatus: 'complete',
-                        // Surface timeout as a user-visible error if no content was rendered
-                        error: json.timeout ? new Error('Reading took too long. Please try again.') : prev.error,
-                    }));
-                    eventSource.close();
-                    return;
-                }
-            } catch (e) {
-                // Not a JSON message, or not a "done" signal, proceed as normal
+        eventSource.addEventListener('resync_required', (event) => {
+            if (eventSourceRef.current !== eventSource) return;
+            eventSource.close();
+            eventSourceRef.current = null;
+            if (retryTimeoutRef.current) {
+                clearTimeout(retryTimeoutRef.current);
+                retryTimeoutRef.current = null;
             }
+            let detail: Record<string, unknown> = {};
+            try {
+                detail = JSON.parse((event as MessageEvent).data) as Record<string, unknown>;
+            } catch {
+                // An empty detail still requires a snapshot refresh.
+            }
+            setState((prev) => ({
+                ...prev,
+                isConnected: false,
+                isLoading: false,
+                connectionStatus: 'reconnecting',
+            }));
+            void Promise.resolve(opts.onResyncRequired?.(detail)).catch((error) => {
+                setState((prev) => ({
+                    ...prev,
+                    error: error instanceof Error ? error : new Error('Unable to refresh the reading.'),
+                    connectionStatus: 'error',
+                }));
+            });
+        });
 
-            // Process A2UI messages (may be multiple lines)
-            // Note: isLoading is set atomically with surfaces in syncState to prevent race condition
-            const lines = data.split('\n');
-            for (const line of lines) {
-                if (line.trim()) {
-                    processorRef.current?.processLine(line);
+        eventSource.onmessage = (event) => {
+            if (eventSourceRef.current !== eventSource) return;
+
+            // Process A2UI messages (may be multiple lines). Fortune v2 wraps
+            // each A2UI frame in {run_id, fortune_id, seq, payload}; dashboard
+            // streams still send the unwrapped frame, so support both shapes.
+            for (const line of event.data.split('\n')) {
+                if (!line.trim()) continue;
+                try {
+                    const envelope = JSON.parse(line) as Record<string, unknown>;
+                    const isFortuneEnvelope = (
+                        envelope.payload && typeof envelope.payload === 'object'
+                        && ('run_id' in envelope || 'fortune_id' in envelope || 'seq' in envelope)
+                    );
+                    const payload = (isFortuneEnvelope
+                        ? envelope.payload
+                        : envelope) as Record<string, unknown>;
+
+                    const update = payload.dataModelUpdate as {
+                        path?: string;
+                        contents?: Array<Record<string, unknown>>;
+                    } | undefined;
+                    if (update?.path === '/data/meta' && Array.isArray(update.contents)) {
+                        const status = update.contents.find((entry) => entry.key === 'status')?.valueString;
+                        if (status === 'error') {
+                            const detail = update.contents.find((entry) => entry.key === 'error_message')?.valueString;
+                            terminalErrorRef.current = new Error(
+                                typeof detail === 'string' && detail
+                                    ? detail
+                                    : 'The reading could not be completed. Please try again.'
+                            );
+                            setState((prev) => ({
+                                ...prev,
+                                error: terminalErrorRef.current,
+                                connectionStatus: 'error',
+                            }));
+                        }
+                    }
+
+                    if (payload.done === true) {
+                        const timeoutError = payload.timeout
+                            ? new Error('Reading took too long. Please try again.')
+                            : null;
+                        const directError = payload.error
+                            ? new Error(typeof payload.message === 'string' ? payload.message : 'The stream failed.')
+                            : null;
+                        const terminalError = terminalErrorRef.current || timeoutError || directError;
+                        if (terminalError) terminalErrorRef.current = terminalError;
+                        setState((prev) => ({
+                            ...prev,
+                            isDone: true,
+                            isConnected: false,
+                            isLoading: false,
+                            connectionStatus: terminalError ? 'error' : 'complete',
+                            error: terminalError || prev.error,
+                        }));
+                        eventSource.close();
+                        return;
+                    }
+
+                    processorRef.current?.processLine(JSON.stringify(payload));
+                } catch (error) {
+                    console.error('Failed to parse A2UI stream message:', error, line);
                 }
             }
         };
 
         eventSource.onerror = (event) => {
+            if (eventSourceRef.current !== eventSource) return;
             console.error('A2UI stream error:', event);
             eventSource.close();
 

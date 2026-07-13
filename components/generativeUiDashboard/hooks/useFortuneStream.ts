@@ -43,9 +43,15 @@ export function useFortuneStream(options: UseFortuneStreamOptions): UseFortuneSt
   const retryCountRef = useRef(0);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const completedRef = useRef(false);
+  const erroredRef = useRef(false);
   const baseStreamUrlRef = useRef<string | null>(null);
   const onResyncRef = useRef(onResyncRequired);
+  const fortuneIdRef = useRef(fortuneId);
+  const connectionEpochRef = useRef(0);
   onResyncRef.current = onResyncRequired;
+  // Update during render so callbacks from the previous EventSource are fenced
+  // even before React runs the route-change effect.
+  fortuneIdRef.current = fortuneId;
 
   const applyPatch = useFortuneStore((s) => s.applyPatch);
   const setStatus = useFortuneStore((s) => s.setStatus);
@@ -76,14 +82,26 @@ export function useFortuneStream(options: UseFortuneStreamOptions): UseFortuneSt
 
     const es = new EventSource(url);
     eventSourceRef.current = es;
+    const epoch = connectionEpochRef.current;
+    const connectionFortuneId = fortuneId;
+    const isCurrentConnection = () => (
+      eventSourceRef.current === es
+      && connectionEpochRef.current === epoch
+      && fortuneIdRef.current === connectionFortuneId
+    );
 
     es.onopen = () => {
+      if (!isCurrentConnection()) return;
       setPhase('streaming');
       retryCountRef.current = 0;
     };
 
     const handleEnvelope = (event: MessageEvent) => {
       try {
+        if (!isCurrentConnection()) return;
+        const currentFortuneId = useFortuneStore.getState().fortuneId;
+        if (currentFortuneId !== fortuneId) return;
+
         if (event.lastEventId) {
           lastEventIdRef.current = event.lastEventId;
           setLastEventId(event.lastEventId);
@@ -91,10 +109,22 @@ export function useFortuneStream(options: UseFortuneStreamOptions): UseFortuneSt
 
         const envelope = JSON.parse(event.data);
 
+        // A delayed EventSource callback must never mutate the newly selected
+        // reading after navigation. Older servers may omit fortune_id, but an
+        // explicit mismatch is always stale and must be ignored.
+        if (envelope.fortune_id && envelope.fortune_id !== fortuneId) {
+          return;
+        }
+
         if (envelope.done === true || (envelope.payload && envelope.payload.done === true)) {
           completedRef.current = true;
-          setPhase('complete');
-          setStatus('complete');
+          if (erroredRef.current) {
+            setPhase('error');
+            setStatus('error');
+          } else {
+            setPhase('complete');
+            setStatus('complete');
+          }
           es.close();
           return;
         }
@@ -143,6 +173,7 @@ export function useFortuneStream(options: UseFortuneStreamOptions): UseFortuneSt
               setPhase('complete');
               setStatus('complete');
             } else if (contents.status === 'error') {
+              erroredRef.current = true;
               setPhase('error');
               setStatus('error');
             }
@@ -157,11 +188,17 @@ export function useFortuneStream(options: UseFortuneStreamOptions): UseFortuneSt
 
     // Typed events (e.g. event: resync_required)
     es.addEventListener('resync_required', () => {
+      if (!isCurrentConnection()) return;
       es.close();
       eventSourceRef.current = null;
       void (async () => {
         try {
           await onResyncRef.current?.();
+          if (!isCurrentConnection() && (
+            connectionEpochRef.current !== epoch
+            || fortuneIdRef.current !== connectionFortuneId
+          )) return;
+          if (eventSourceRef.current !== null) return;
           // Parent rehydrates + may rebuild streamUrl without after=; reset cursor.
           lastEventIdRef.current = null;
           setLastEventId(null);
@@ -180,6 +217,7 @@ export function useFortuneStream(options: UseFortuneStreamOptions): UseFortuneSt
     });
 
     es.onerror = () => {
+      if (!isCurrentConnection()) return;
       es.close();
       eventSourceRef.current = null;
       if (completedRef.current) return;
@@ -221,8 +259,26 @@ export function useFortuneStream(options: UseFortuneStreamOptions): UseFortuneSt
     appendTraceEvent,
   ]);
 
+  // A new stream URL is a new run even when it belongs to the same fortune
+  // (for example an action run). Sequence numbers and completion are run-local,
+  // so fence the old source and reset its cursor for either identity change.
   useEffect(() => {
+    connectionEpochRef.current += 1;
+    close();
     completedRef.current = false;
+    erroredRef.current = false;
+    maxSeqRef.current = 0;
+    lastEventIdRef.current = null;
+    runIdRef.current = null;
+    retryCountRef.current = 0;
+    baseStreamUrlRef.current = null;
+    setLastSeq(0);
+    setLastEventId(null);
+    setRunId(null);
+    setPhase('idle');
+  }, [fortuneId, streamUrl, close]);
+
+  useEffect(() => {
     baseStreamUrlRef.current = streamUrl;
     if (streamUrl && enabled && fortuneId) {
       connect(streamUrl);
@@ -230,7 +286,25 @@ export function useFortuneStream(options: UseFortuneStreamOptions): UseFortuneSt
     return close;
   }, [streamUrl, enabled, fortuneId, connect, close]);
 
-  return { phase, lastSeq, lastEventId, runId, reconnect: () => connect() };
+  const reconnect = useCallback(() => {
+    // Manual reconnect denotes a new run attempt even when the backend URL is
+    // stable for the fortune. Clear every run-local latch before connecting.
+    connectionEpochRef.current += 1;
+    close();
+    completedRef.current = false;
+    erroredRef.current = false;
+    maxSeqRef.current = 0;
+    lastEventIdRef.current = null;
+    runIdRef.current = null;
+    retryCountRef.current = 0;
+    setLastSeq(0);
+    setLastEventId(null);
+    setRunId(null);
+    setPhase('idle');
+    connect(streamUrl);
+  }, [close, connect, streamUrl]);
+
+  return { phase, lastSeq, lastEventId, runId, reconnect };
 }
 
 /** Convert A2UI DataEntry[] contents to a plain JS object. */

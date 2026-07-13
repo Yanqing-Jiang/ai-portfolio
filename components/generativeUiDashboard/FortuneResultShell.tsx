@@ -4,7 +4,7 @@
  */
 import React, { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence } from 'framer-motion';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useSearchParams } from 'react-router-dom';
 import { useShallow } from 'zustand/react/shallow';
 import {
   FortuneAgentResultShell,
@@ -24,6 +24,7 @@ import {
   shortFortuneId,
 } from './fortune/shell/resultConfig';
 import type { CanonicalFortuneFunction } from '../../lib/fortuneRoutes';
+import type { AskContext, AskSectionId } from './lib/fortuneTypes';
 
 import { VerdictTab } from './fortune/wish/VerdictTab';
 import { AnchorTab } from './fortune/wish/AnchorTab';
@@ -44,33 +45,47 @@ function renderFunctionTab(
   activeTab: string,
   isReplay: boolean,
   question?: string,
+  askContext?: AskContext,
+  askReady?: boolean,
 ): React.ReactNode {
   if (functionId === 'wish') {
     if (activeTab === 'Verdict') return <VerdictTab isReplay={isReplay} question={question} />;
     if (activeTab === 'Anchor') return <AnchorTab isReplay={isReplay} />;
     if (activeTab === 'Why') return <WhyTab functionId="wish" isReplay={isReplay} />;
-    if (activeTab === 'Ask') return <AskTab functionId="wish" question={question} />;
+    if (activeTab === 'Ask') return <AskTab functionId="wish" question={question} context={askContext} ready={askReady} />;
   }
   if (functionId === 'cycle') {
     if (activeTab === 'Now') return <NowTab isReplay={isReplay} />;
     if (activeTab === 'Timeline') return <TimelineTab isReplay={isReplay} />;
     if (activeTab === 'Why') return <WhyTab functionId="cycle" isReplay={isReplay} />;
-    if (activeTab === 'Ask') return <AskTab functionId="cycle" />;
+    if (activeTab === 'Ask') return <AskTab functionId="cycle" context={askContext} ready={askReady} />;
   }
   if (functionId === 'compatibility') {
     if (activeTab === 'Overview') return <OverviewTab isReplay={isReplay} />;
     if (activeTab === 'Pillars') return <PillarsTab isReplay={isReplay} />;
     if (activeTab === 'Why') return <WhyTab functionId="compatibility" isReplay={isReplay} />;
-    if (activeTab === 'Ask') return <AskTab functionId="compatibility" />;
+    if (activeTab === 'Ask') return <AskTab functionId="compatibility" context={askContext} ready={askReady} />;
   }
   if (functionId === 'occasion') {
     if (activeTab === 'TopPicks') return <TopPicksTab isReplay={isReplay} />;
     if (activeTab === 'Calendar') return <CalendarTab isReplay={isReplay} />;
     if (activeTab === 'Why') return <WhyTab functionId="occasion" isReplay={isReplay} />;
-    if (activeTab === 'Ask') return <AskTab functionId="occasion" />;
+    if (activeTab === 'Ask') return <AskTab functionId="occasion" context={askContext} ready={askReady} />;
   }
   return null;
 }
+
+const TAB_SECTION_IDS: Record<string, AskSectionId> = {
+  Verdict: 'verdict',
+  Anchor: 'anchor',
+  Why: 'why',
+  Now: 'now',
+  Timeline: 'timeline',
+  Overview: 'overview',
+  Pillars: 'pillars',
+  TopPicks: 'top_picks',
+  Calendar: 'calendar',
+};
 
 
 function useIsLg(): boolean {
@@ -109,9 +124,34 @@ export const FortuneResultShell: React.FC<FortuneResultShellProps> = ({
   onBack,
 }) => {
   const config = FORTUNE_RESULT_CONFIG[functionId];
-  const [activeTab, setActiveTab] = useState(config.defaultTab);
   const { state } = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedTab = searchParams.get('tab');
+  const initialTab = config.tabs.some((tab) => tab.id === requestedTab)
+    ? requestedTab as string
+    : config.defaultTab;
+  const [activeTab, setActiveTab] = useState(initialTab);
+  const [lastContentTab, setLastContentTab] = useState(
+    initialTab === 'Ask' ? config.defaultTab : initialTab,
+  );
   const question = (state as { question?: string } | null)?.question;
+
+  useEffect(() => {
+    const nextTab = requestedTab && config.tabs.some((tab) => tab.id === requestedTab)
+      ? requestedTab
+      : config.defaultTab;
+    setActiveTab(nextTab);
+    if (nextTab !== 'Ask') setLastContentTab(nextTab);
+  }, [requestedTab, config.tabs]);
+
+  const handleTabChange = (tabId: string) => {
+    setActiveTab(tabId);
+    if (tabId !== 'Ask') setLastContentTab(tabId);
+    const next = new URLSearchParams(searchParams);
+    if (tabId === config.defaultTab) next.delete('tab');
+    else next.set('tab', tabId);
+    setSearchParams(next, { replace: true });
+  };
 
   const session = useFortuneSession({
     functionId: config.sessionFunctionId,
@@ -150,6 +190,11 @@ export const FortuneResultShell: React.FC<FortuneResultShellProps> = ({
 
   const statusPath = `fortune://${config.canonicalId}/${shortFortuneId(fortuneId)}`;
   const isLg = useIsLg();
+  const askContext: AskContext = {
+    sectionId: TAB_SECTION_IDS[lastContentTab] || TAB_SECTION_IDS[config.defaultTab],
+    sectionLabel: config.tabs.find((tab) => tab.id === lastContentTab)?.label || lastContentTab,
+  };
+  const askReady = status === 'complete';
 
   const pauseBar =
     status === 'streaming' ? (
@@ -191,7 +236,7 @@ export const FortuneResultShell: React.FC<FortuneResultShellProps> = ({
       runState={runState}
       tabs={config.tabs}
       activeTabId={activeTab}
-      onTabChange={setActiveTab}
+      onTabChange={handleTabChange}
       onBack={onBack}
       rail={rail}
       mobileChrome={mobileChrome}
@@ -213,7 +258,14 @@ export const FortuneResultShell: React.FC<FortuneResultShellProps> = ({
 
       {(status !== 'loading' || session.dataModel) && !error && (
         <AnimatePresence mode="wait">
-          {renderFunctionTab(functionId, activeTab, isReplay, question)}
+          {renderFunctionTab(
+            functionId,
+            activeTab,
+            isReplay,
+            question,
+            askContext,
+            askReady,
+          )}
         </AnimatePresence>
       )}
     </FortuneAgentResultShell>

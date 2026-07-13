@@ -21,6 +21,8 @@ import { BirthdayScrollPicker } from './BirthdayScrollPicker';
 import { MingResultsTabs } from './MingResultsTabs';
 import { fortuneClient, FortuneApiError } from './lib/fortuneClient';
 import { useFortuneStore } from './stores/fortuneStore';
+import { hydrateDataModelFromSnapshot } from './hooks/useFortuneStream';
+import type { FortuneFunctionId } from './lib/fortuneTypes';
 import { ActivityRail, type ActivityRailStep, type ActivityRailSummary } from './ActivityRail';
 import { GlassBoxDrawer } from './GlassBoxDrawer';
 
@@ -329,6 +331,10 @@ function StreamingPhase({ fortuneId, inspectorMode = false }: StreamingPhaseProp
     const backendUrl = configService.getBackendUrl();
     const [authToken, setAuthToken] = useState<string | null>(null);
     const [tokenResolved, setTokenResolved] = useState(false);
+    const activeRunId = useFortuneStore((s) => s.runId);
+    const setRunId = useFortuneStore((s) => s.setRunId);
+    const functionId = useFortuneStore((s) => s.functionId);
+    const hydrateFromReplay = useFortuneStore((s) => s.hydrateFromReplay);
 
     // Resolve auth token once before connecting — prevents double-connect flicker
     useEffect(() => {
@@ -343,15 +349,49 @@ function StreamingPhase({ fortuneId, inspectorMode = false }: StreamingPhaseProp
     const streamUrl = useMemo(() => {
         if (!tokenResolved) return null; // Don't connect yet
         const base = `${backendUrl}/api/fortune/${fortuneId}/stream`;
-        return authToken ? `${base}?token=${encodeURIComponent(authToken)}` : base;
-    }, [backendUrl, fortuneId, authToken, tokenResolved]);
+        const params = new URLSearchParams();
+        if (authToken) params.set('token', authToken);
+        if (activeRunId) params.set('run_id', activeRunId);
+        const query = params.toString();
+        return query ? `${base}?${query}` : base;
+    }, [backendUrl, fortuneId, authToken, activeRunId, tokenResolved]);
+
+    const handleResyncRequired = useCallback(async (detail: Record<string, unknown>) => {
+        const snapshot = await fortuneClient.getFortune(fortuneId);
+        if (snapshot === null) {
+            const replacementRunId = typeof detail.run_id === 'string' ? detail.run_id : null;
+            if (replacementRunId && replacementRunId !== activeRunId) setRunId(replacementRunId);
+            return;
+        }
+        const resolvedFunction = (
+            snapshot.metadata?.function_id as FortuneFunctionId | undefined
+        ) || functionId || 'wish';
+        const status = snapshot.status === 'complete'
+            ? 'complete'
+            : snapshot.status === 'error' || snapshot.status === 'failed_guardrail'
+                ? 'error'
+                : 'streaming';
+        hydrateFromReplay({
+            fortune_id: snapshot.fortune_id,
+            run_id: typeof detail.run_id === 'string' ? detail.run_id : (activeRunId || ''),
+            function_id: resolvedFunction,
+            status,
+            last_seq: 0,
+            metadata: {
+                created_at: snapshot.metadata?.created_at || '',
+                persistence_degraded: snapshot.metadata?.persistence_degraded,
+                birth_time_unknown: snapshot.metadata?.birth_time_unknown,
+            },
+            data_model: hydrateDataModelFromSnapshot(snapshot, resolvedFunction),
+            ask_history: [],
+        });
+    }, [activeRunId, fortuneId, functionId, hydrateFromReplay, setRunId]);
 
     const [streamState, streamActions] = useA2UIStream(streamUrl, {
         autoConnect: true,
         apiBaseUrl: `${backendUrl}/api/fortune`,
+        onResyncRequired: handleResyncRequired,
     });
-
-    const setRunId = useFortuneStore((s) => s.setRunId);
 
     const handleAction = useCallback(
         async (actionName: string, context: Record<string, unknown>) => {
@@ -362,7 +402,6 @@ function StreamingPhase({ fortuneId, inspectorMode = false }: StreamingPhaseProp
                         context.actionId as string,
                     );
                     setRunId(res.run_id);
-                    streamActions.reconnect();
                 } catch (err) {
                     console.error('[MingEngine] Action failed:', err);
                 }
@@ -385,7 +424,6 @@ function StreamingPhase({ fortuneId, inspectorMode = false }: StreamingPhaseProp
                 try {
                     const res = await fortuneClient.submitAction(fortuneId, focusValue as string);
                     setRunId(res.run_id);
-                    streamActions.reconnect();
                 } catch (err) {
                     console.error('[MingEngine] Clarification action failed:', err);
                 }

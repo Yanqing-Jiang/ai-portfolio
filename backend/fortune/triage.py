@@ -78,6 +78,9 @@ Output one EnrichedNarrativeOutput:
 
 Continuity is mandatory. Resolve words such as "this", "that date", "us", or
 "my decade" from the latest narrative, original input, and prior session turns.
+When `intent.selected_section` is present, treat that trusted server projection
+as the primary referent for words such as "this section" while still using the
+full reading for supporting evidence.
 Refine or qualify earlier claims; do not silently contradict them. Ground every
 answer in specific computed stems/elements/animals, ten gods, seasonal strength,
 or branch interactions from the foundation.
@@ -134,6 +137,71 @@ def _project_latest_narrative(latest: dict[str, Any] | None) -> dict[str, Any] |
     return {key: _jsonable(value) for key, value in projected.items() if value}
 
 
+def _project_selected_section(
+    locator: dict[str, Any] | None,
+    latest: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Resolve an allowlisted client locator against trusted narrative data."""
+    if not locator:
+        return None
+    section_id = locator.get("section_id")
+    if not isinstance(section_id, str):
+        return None
+
+    projected = _project_latest_narrative(latest) or {}
+    field_paths = {
+        "verdict": ("wish", "verdict"),
+        "anchor": ("wish", "anchors"),
+        "now": ("luck_cycle", "current_window"),
+        "timeline": (None, "year_predictions"),
+        "overview": ("compatibility", "overview"),
+        "pillars": ("compatibility", "pair_interactions"),
+        "top_picks": ("occasion", "top_picks"),
+        "calendar": ("occasion", "top_picks"),
+    }
+    selection_id = locator.get("selection_id")
+    resolved_selection: str | None = None
+
+    if section_id == "why":
+        mechanisms = []
+        for block_name in ("wish", "luck_cycle", "compatibility", "occasion"):
+            block = projected.get(block_name)
+            if isinstance(block, dict) and block.get("mechanisms"):
+                value = block["mechanisms"]
+                mechanisms.extend(value if isinstance(value, list) else [value])
+        data = mechanisms or None
+    else:
+        path = field_paths.get(section_id)
+        if path is None:
+            data = None
+        else:
+            block_name, field_name = path
+            parent = projected if block_name is None else projected.get(block_name)
+            data = parent.get(field_name) if isinstance(parent, dict) else None
+
+    # A selection locator is accepted only when it resolves against trusted
+    # server output. The browser never supplies the selected content itself.
+    if isinstance(selection_id, str) and isinstance(data, list):
+        match = next((
+            item for item in data
+            if isinstance(item, dict) and any(
+                str(item.get(key)) == selection_id
+                for key in ("id", "date", "rank")
+                if item.get(key) is not None
+            )
+        ), None)
+        if match is not None:
+            data = match
+            resolved_selection = selection_id
+
+    result: dict[str, Any] = {"section_id": section_id}
+    if resolved_selection is not None:
+        result["selection_id"] = resolved_selection
+    if data:
+        result["data"] = data
+    return result
+
+
 def _build_triage_prompt(
     ctx: FortuneRunContext,
     foundation: dict[str, Any],
@@ -142,9 +210,15 @@ def _build_triage_prompt(
     question: str | None,
     original_input: dict[str, Any] | None = None,
     latest_narrative: dict[str, Any] | None = None,
+    selected_section: dict[str, Any] | None = None,
 ) -> str:
     """Serialize stable reading context first for prompt-cache reuse."""
-    function_id = canonical_function(ctx.focus, ctx.question or question) or "wish"
+    stored_function = (original_input or {}).get("function_id")
+    function_id = (
+        stored_function
+        if stored_function in {"wish", "cycle", "compatibility", "occasion"}
+        else canonical_function(ctx.focus, ctx.question or question) or "wish"
+    )
     payload = {
         "foundation": _project_foundation(foundation),
         "original_input": _jsonable(original_input or {}),
@@ -155,6 +229,9 @@ def _build_triage_prompt(
             "question": question or ctx.question,
             "focus": ctx.focus,
             "tone": ctx.tone,
+            "selected_section": _project_selected_section(
+                selected_section, latest_narrative,
+            ),
         },
     }
     return json.dumps(payload, ensure_ascii=False)
@@ -169,6 +246,7 @@ async def run_triage(
     session: Any | None = None,
     original_input: dict[str, Any] | None = None,
     latest_narrative: dict[str, Any] | None = None,
+    selected_section: dict[str, Any] | None = None,
     ask_mode: bool = False,
 ) -> EnrichedNarrativeOutput:
     """Run the one Ask/action agent, with SQLAlchemySession as sole memory."""
@@ -181,6 +259,7 @@ async def run_triage(
         question=question,
         original_input=original_input,
         latest_narrative=latest_narrative,
+        selected_section=selected_section,
     )
     kwargs: dict[str, Any] = {
         "input": prompt,
@@ -191,8 +270,13 @@ async def run_triage(
         kwargs["session"] = session
 
     settings = get_settings()
-    fn = canonical_function(ctx.focus, ctx.question or question) or classify_function(
-        ctx.focus, ctx.question or question,
+    stored_function = (original_input or {}).get("function_id")
+    fn = (
+        stored_function
+        if stored_function in {"wish", "cycle", "compatibility", "occasion"}
+        else canonical_function(ctx.focus, ctx.question or question) or classify_function(
+            ctx.focus, ctx.question or question,
+        )
     )
     with _stage(
         function=fn,

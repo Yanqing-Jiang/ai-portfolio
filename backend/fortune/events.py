@@ -41,6 +41,26 @@ def run_hash_key(run_id: str) -> str:
     return f"{RUN_HASH_PREFIX}{run_id}"
 
 
+def encode_cursor(run_id: str, entry_id: str) -> str:
+    """Bind a Redis stream position to the run that produced it."""
+    return f"{run_id}:{entry_id}"
+
+
+def decode_cursor(run_id: str, cursor: str | None) -> tuple[str, bool]:
+    """Return the Redis cursor plus whether it belongs to ``run_id``.
+
+    Zero cursors start a new stream and are intentionally unscoped. Non-zero
+    legacy/raw IDs are rejected so a cursor from a newer run cannot silently
+    skip every event in an older target stream.
+    """
+    if not cursor or cursor in {"0", "0-0", "$"}:
+        return cursor or "0-0", True
+    prefix, separator, entry_id = cursor.partition(":")
+    if not separator or prefix != run_id or not entry_id:
+        return "0-0", False
+    return entry_id, True
+
+
 async def get_events_redis(*, required: bool = False) -> Any:
     """Lazy AsyncRedis singleton for the event backbone.
 
@@ -130,11 +150,11 @@ async def set_run_record(
     status: str,
     error_message: str | None = None,
     client: Any | None = None,
-) -> None:
+) -> bool:
     """Persist terminal/non-terminal run status OUTSIDE the expiring stream."""
     redis = client or await get_events_redis()
     if redis is None:
-        return
+        return False
     key = run_hash_key(run_id)
     mapping = {
         "fortune_id": fortune_id,
@@ -146,8 +166,10 @@ async def set_run_record(
     try:
         await redis.hset(key, mapping=mapping)
         await redis.expire(key, RUN_HASH_TTL_SECONDS)
+        return True
     except Exception as exc:
         logger.warning("[FORTUNE-EVENTS] set_run_record failed: %s", exc)
+        return False
 
 
 async def get_run_record(run_id: str, *, client: Any | None = None) -> dict[str, str] | None:
@@ -188,6 +210,43 @@ async def publish_envelope(
     except Exception as exc:
         logger.error("[FORTUNE-EVENTS] XADD failed run=%s: %s", run_id, exc)
         return None
+
+
+async def publish_interrupted_terminal(
+    run_id: str,
+    *,
+    fortune_id: str,
+    message: str = "Reading interrupted by a service restart. Please retry.",
+    client: Any | None = None,
+) -> bool:
+    """Publish a recoverable terminal pair for an abandoned background run.
+
+    These envelopes deliberately omit ``seq``. A worker can be cancelled
+    between any two locally allocated sequence numbers, so inventing one risks
+    frontend dedupe dropping the terminal update. Redis stream IDs provide the
+    authoritative ordering for reconnects.
+    """
+    error_envelope = {
+        "run_id": run_id,
+        "fortune_id": fortune_id,
+        "payload": {
+            "dataModelUpdate": {
+                "path": "/data/meta",
+                "contents": [
+                    {"key": "status", "valueString": "error"},
+                    {"key": "error_message", "valueString": message},
+                ],
+            },
+        },
+    }
+    done_envelope = {
+        "run_id": run_id,
+        "fortune_id": fortune_id,
+        "payload": {"done": True, "error": True, "message": message},
+    }
+    error_id = await publish_envelope(run_id, error_envelope, client=client)
+    done_id = await publish_envelope(run_id, done_envelope, client=client)
+    return error_id is not None and done_id is not None
 
 
 async def stream_length(run_id: str, *, client: Any | None = None) -> int:
@@ -251,6 +310,9 @@ async def needs_resync(
     """Detect trim-gap / expired-stream cases that require snapshot rehydrate."""
     if not after or after in {"0", "0-0"}:
         return False
+    redis_cursor, cursor_matches_run = decode_cursor(run_id, after)
+    if not cursor_matches_run:
+        return True
     redis = client or await get_events_redis()
     exists = await stream_exists(run_id, client=redis)
     if not exists:
@@ -259,7 +321,7 @@ async def needs_resync(
     first = await first_stream_id(run_id, client=redis)
     if first is None:
         return True
-    return cursor_predates_window(after, first)
+    return cursor_predates_window(redis_cursor, first)
 
 
 async def tail_envelopes(
@@ -337,5 +399,3 @@ def _envelope_is_terminal(envelope: dict[str, Any]) -> bool:
     if isinstance(payload, dict) and payload.get("done") is True:
         return True
     return False
-
-
