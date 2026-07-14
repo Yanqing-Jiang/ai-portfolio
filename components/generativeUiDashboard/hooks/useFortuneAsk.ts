@@ -184,8 +184,8 @@ export function useFortuneAsk(context?: AskContext) {
         }
     }, [fortuneId, fortuneGeneration, askLoading, beginAsk, finishAsk, failAsk, retryAsk, setRunId]);
 
-    const send = useCallback(() => {
-        const question = askInput.trim();
+    const send = useCallback((suggestedQuestion?: string) => {
+        const question = (suggestedQuestion ?? askInput).trim();
         if (!question) return;
         void requestAnswer(question, context, false);
     }, [askInput, context, requestAnswer]);

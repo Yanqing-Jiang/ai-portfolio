@@ -83,7 +83,8 @@ interface OracleChatProps {
     messages: OracleChatMessage[];
     input: string;
     onInputChange: (v: string) => void;
-    onSend: () => void;
+    /** Submit the current composer value, or a predefined question directly. */
+    onSend: (question?: string) => void;
     onRetry?: (message: OracleChatMessage) => void;
     suggestions?: string[];
     accentColor?: string;
@@ -585,6 +586,33 @@ export const OracleChat: React.FC<OracleChatProps> = ({
                     />
                 )}
 
+                {/* Cold-start quick replies live inside the conversation so
+                    the first interaction already feels like a chatbot. */}
+                {!isLoading && messages.length === 0 && suggestions.length > 0 && (
+                    <motion.div
+                        initial={{ opacity: 0, y: 6 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="max-w-[92%] space-y-3 rounded-2xl border border-white/[0.07] bg-white/[0.03] p-4"
+                    >
+                        <p className="text-[13px] text-slate-300">
+                            Choose a question to start the conversation.
+                        </p>
+                        <div className="flex flex-wrap gap-1.5">
+                            {suggestions.map((s) => (
+                                <button
+                                    key={s}
+                                    type="button"
+                                    onClick={() => onSend(s)}
+                                    disabled={disabled}
+                                    className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-slate-400 transition-colors hover:bg-white/[0.06] hover:text-slate-200 disabled:cursor-not-allowed disabled:opacity-40"
+                                >
+                                    {s}
+                                </button>
+                            ))}
+                        </div>
+                    </motion.div>
+                )}
+
                 {/* Follow-up pills under the latest agent turn (kept persistent
                     so users always have an on-ramp, not just on first message) */}
                 {!isLoading && lastAgentIdx >= 0 && followUps.length > 0 && (
@@ -603,7 +631,7 @@ export const OracleChat: React.FC<OracleChatProps> = ({
                                 <button
                                     key={s}
                                     type="button"
-                                    onClick={() => onInputChange(s)}
+                                    onClick={() => onSend(s)}
                                     className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-slate-300 hover:bg-white/[0.07]"
                                 >
                                     <span className="text-slate-500">{meta.icon}</span>
@@ -617,22 +645,6 @@ export const OracleChat: React.FC<OracleChatProps> = ({
                     </motion.div>
                 )}
             </div>
-
-            {/* Suggestion chips — pre-conversation only (cold start onboarding) */}
-            {suggestions.length > 0 && messages.length === 0 && !isLoading && (
-                <div className="flex flex-wrap gap-1.5 mb-3">
-                    {suggestions.map((s) => (
-                        <button
-                            key={s}
-                            type="button"
-                            onClick={() => onInputChange(s)}
-                            className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-slate-400 transition-colors hover:bg-white/[0.06] hover:text-slate-200"
-                        >
-                            {s}
-                        </button>
-                    ))}
-                </div>
-            )}
 
             {disabledReason && disabled && (
                 <p id="fortune-ask-disabled" className="mb-2 text-[11px] text-slate-500">
@@ -664,7 +676,7 @@ export const OracleChat: React.FC<OracleChatProps> = ({
                 />
                 <button
                     type="button"
-                    onClick={onSend}
+                    onClick={() => onSend()}
                     disabled={disabled || isLoading || !input.trim()}
                     aria-label={isLoading ? 'Waiting for answer' : 'Send question'}
                     className="flex h-[38px] w-[38px] flex-none items-center justify-center rounded-xl border transition-colors"

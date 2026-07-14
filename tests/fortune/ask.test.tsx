@@ -224,6 +224,32 @@ describe('fortune Ask state', () => {
     expect(useFortuneStore.getState().askHistory.at(-1)?.content).toBe('Immediate answer');
   });
 
+  it('submits a predefined question without waiting for composer state to update', async () => {
+    vi.spyOn(fortuneClient, 'getConversation').mockResolvedValue({ fortune_id: 'fortune-a', turns: [] });
+    const ask = vi.spyOn(fortuneClient, 'askFollowUp').mockResolvedValue({
+      fortune_id: 'fortune-a',
+      run_id: 'run-suggestion',
+      narrative: { tldr: 'Suggested answer', insights: [] },
+      degraded_memory: false,
+    });
+    act(() => useFortuneStore.getState().setFortune('fortune-a', 'run-a'));
+    const { result } = renderHook(() => useFortuneAsk());
+
+    act(() => result.current.send('What defines a Lucky Day?'));
+
+    await waitFor(() => expect(ask).toHaveBeenCalledWith(
+      'fortune-a',
+      'What defines a Lucky Day?',
+      expect.any(String),
+      undefined,
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    ));
+    expect(useFortuneStore.getState().askHistory[0]).toMatchObject({
+      role: 'user',
+      content: 'What defines a Lucky Day?',
+    });
+  });
+
   it('drops an in-flight answer after an A to B to A navigation', async () => {
     let resolveAsk!: (value: Awaited<ReturnType<typeof fortuneClient.askFollowUp>>) => void;
     const pendingAsk = new Promise<Awaited<ReturnType<typeof fortuneClient.askFollowUp>>>((resolve) => {
@@ -521,6 +547,37 @@ describe('fortune Ask state', () => {
 });
 
 describe('OracleChat accessibility and recovery', () => {
+  it('turns cold-start and follow-up suggestions into immediate chat submissions', () => {
+    const onSend = vi.fn();
+    const { rerender } = render(
+      <OracleChat
+        messages={[]}
+        input=""
+        onInputChange={vi.fn()}
+        onSend={onSend}
+        suggestions={['What defines a Lucky Day?']}
+      />,
+    );
+
+    const chat = screen.getByRole('log', { name: 'Ask conversation' });
+    const coldStartQuestion = screen.getByRole('button', { name: 'What defines a Lucky Day?' });
+    expect(chat).toContainElement(coldStartQuestion);
+    fireEvent.click(coldStartQuestion);
+    expect(onSend).toHaveBeenCalledWith('What defines a Lucky Day?');
+
+    rerender(
+      <OracleChat
+        messages={[{ id: 'answer', role: 'agent', content: 'A complete answer.' }]}
+        input=""
+        onInputChange={vi.fn()}
+        onSend={onSend}
+        suggestions={['Compare the top picks']}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Compare the top picks/ }));
+    expect(onSend).toHaveBeenCalledWith('Compare the top picks');
+  });
+
   it('shows selected context, exposes a bounded composer, and retries an error', () => {
     const onRetry = vi.fn();
     render(
