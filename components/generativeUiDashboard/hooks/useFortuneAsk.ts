@@ -48,39 +48,9 @@ export function getFortuneAskErrorMessage(error: unknown, timedOut = false): str
     return 'Something went wrong preparing this answer. Your question is saved here—please retry.';
 }
 
-export function useFortuneAsk(context?: AskContext) {
+export function useConversationHydration(fortuneId: string | null) {
     const loadedConversationFor = useRef<string | null>(null);
-    const {
-        fortuneId,
-        fortuneGeneration,
-        askInput,
-        askHistory,
-        askLoading,
-        askMemoryEverDegraded,
-        setAskInput,
-        beginAsk,
-        finishAsk,
-        failAsk,
-        retryAsk,
-        hydrateAskHistory,
-        setRunId,
-    } = useFortuneStore(
-        useShallow((s) => ({
-            fortuneId: s.fortuneId,
-            fortuneGeneration: s.fortuneGeneration,
-            askInput: s.askInput,
-            askHistory: s.askHistory,
-            askLoading: s.askLoading,
-            askMemoryEverDegraded: s.askMemoryEverDegraded,
-            setAskInput: s.setAskInput,
-            beginAsk: s.beginAsk,
-            finishAsk: s.finishAsk,
-            failAsk: s.failAsk,
-            retryAsk: s.retryAsk,
-            hydrateAskHistory: s.hydrateAskHistory,
-            setRunId: s.setRunId,
-        })),
-    );
+    const hydrateAskHistory = useFortuneStore((s) => s.hydrateAskHistory);
 
     useEffect(() => {
         if (!fortuneId || loadedConversationFor.current === fortuneId) return;
@@ -103,6 +73,38 @@ export function useFortuneAsk(context?: AskContext) {
 
         return () => { ignore = true; };
     }, [fortuneId, hydrateAskHistory]);
+}
+
+export function useFortuneAsk(context?: AskContext) {
+    const {
+        fortuneId,
+        fortuneGeneration,
+        askInput,
+        askHistory,
+        askLoading,
+        askMemoryEverDegraded,
+        setAskInput,
+        beginAsk,
+        finishAsk,
+        failAsk,
+        retryAsk,
+        setRunId,
+    } = useFortuneStore(
+        useShallow((s) => ({
+            fortuneId: s.fortuneId,
+            fortuneGeneration: s.fortuneGeneration,
+            askInput: s.askInput,
+            askHistory: s.askHistory,
+            askLoading: s.askLoading,
+            askMemoryEverDegraded: s.askMemoryEverDegraded,
+            setAskInput: s.setAskInput,
+            beginAsk: s.beginAsk,
+            finishAsk: s.finishAsk,
+            failAsk: s.failAsk,
+            retryAsk: s.retryAsk,
+            setRunId: s.setRunId,
+        })),
+    );
 
     const requestAnswer = useCallback(async (
         question: string,

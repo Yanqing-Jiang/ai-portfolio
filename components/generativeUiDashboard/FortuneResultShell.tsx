@@ -11,8 +11,10 @@ import {
   type ShellRunState,
 } from './FortuneAgentResultShell';
 import { useFortuneSession } from './hooks/useFortuneSession';
+import { useConversationHydration } from './hooks/useFortuneAsk';
 import { useFortuneStore } from './stores/fortuneStore';
 import { GlassBoxPanel } from './fortune/shared/GlassBoxPanel';
+import { MemoryPanel } from './fortune/shared/MemoryPanel';
 import { AskTab } from './fortune/shared/AskTab';
 import { WhyTab } from './fortune/shared/WhyTab';
 import { FLOW_ACCENTS } from './fortune/designTokens';
@@ -159,6 +161,7 @@ export const FortuneResultShell: React.FC<FortuneResultShellProps> = ({
   });
 
   const { isReplay, status, error, cancel, pausing, fortuneId } = session;
+  useConversationHydration(fortuneId);
   const dataModel = useFortuneStore(useShallow((s) => s.dataModel));
 
   const accent = FLOW_ACCENTS[config.sessionFunctionId];
@@ -215,6 +218,7 @@ export const FortuneResultShell: React.FC<FortuneResultShellProps> = ({
   const glass = !error ? (
     <div className="space-y-3">
       <GlassBoxPanel accent={accent.primary} variant={isLg ? 'rail' : 'inline'} />
+      <MemoryPanel />
       {pauseBar}
     </div>
   ) : null;

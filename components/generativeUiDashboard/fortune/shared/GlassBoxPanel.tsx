@@ -8,11 +8,11 @@
  * variant="rail": always-open sticky side ledger for ≥lg screens.
  */
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
-import { fortuneClient } from '../../lib/fortuneClient';
+import { fortuneClient, FortuneApiError } from '../../lib/fortuneClient';
 import { useFortuneStore, type TraceProjection } from '../../stores/fortuneStore';
 import {
   OBS_LEDGER,
@@ -104,6 +104,12 @@ function spanLabel(step: TraceProjection): string {
   return step.toolName || step.spanType || step.phase || step.model || 'span';
 }
 
+function formatTimestamp(value: string | null | undefined): string {
+  if (!value) return '';
+  const timeIndex = value.indexOf('T');
+  return timeIndex >= 0 ? value.slice(timeIndex + 1, timeIndex + 9) : value.slice(0, 8);
+}
+
 function isActiveStatus(status: string | null | undefined): boolean {
   const s = (status || '').toLowerCase();
   return s === 'running' || s === 'pending' || s === 'streaming';
@@ -120,10 +126,11 @@ export const GlassBoxPanel: React.FC<GlassBoxPanelProps> = ({
   variant = 'inline',
 }) => {
   const reduceMotion = useReducedMotion();
-  const { fortuneId, status, traceEvents, hydrateTraceProjections } = useFortuneStore(
+  const { fortuneId, status, askLoading, traceEvents, hydrateTraceProjections } = useFortuneStore(
     useShallow((s) => ({
       fortuneId: s.fortuneId,
       status: s.status,
+      askLoading: s.askLoading,
       traceEvents: s.traceEvents,
       hydrateTraceProjections: s.hydrateTraceProjections,
     })),
@@ -131,11 +138,23 @@ export const GlassBoxPanel: React.FC<GlassBoxPanelProps> = ({
 
   const isRail = variant === 'rail';
   const [open, setOpen] = useState(isRail);
+  const [openRows, setOpenRows] = useState<Set<string>>(() => new Set());
   const [loadingReplay, setLoadingReplay] = useState(false);
+  const traceFetchInFlight = useRef<{ fortuneId: string; request: Promise<void> } | null>(null);
+  const traceFetchBlocked = useRef<{ fortuneId: string | null; blocked: boolean }>({
+    fortuneId,
+    blocked: false,
+  });
+  const previousAskLoading = useRef({ fortuneId, askLoading });
 
   useEffect(() => {
     if (isRail) setOpen(true);
   }, [isRail]);
+
+  useEffect(() => {
+    setOpenRows(new Set());
+    traceFetchBlocked.current = { fortuneId, blocked: false };
+  }, [fortuneId]);
 
   const projections = useMemo(() => {
     const out: TraceProjection[] = [];
@@ -146,34 +165,70 @@ export const GlassBoxPanel: React.FC<GlassBoxPanelProps> = ({
     return coalesceSpans(out);
   }, [traceEvents]);
 
+  const fetchLatestTrace = useCallback(async (replaceWhenEmpty = true) => {
+    if (!fortuneId) return;
+    const blocked = traceFetchBlocked.current;
+    if (blocked.fortuneId === fortuneId && blocked.blocked) return;
+    const active = traceFetchInFlight.current;
+    if (active?.fortuneId === fortuneId) return active.request;
+
+    const request = (async () => {
+      let res: Awaited<ReturnType<typeof fortuneClient.getTrace>>;
+      try {
+        res = await fortuneClient.getTrace(fortuneId);
+      } catch (error) {
+        if (error instanceof FortuneApiError && (error.status === 401 || error.status === 429)) {
+          traceFetchBlocked.current = { fortuneId, blocked: true };
+        }
+        throw error;
+      }
+      if (useFortuneStore.getState().fortuneId !== fortuneId) return;
+      const mapped = (res.events || [])
+        .map((event) => asProjection(event))
+        .filter((event): event is TraceProjection => !!event);
+      if (replaceWhenEmpty || mapped.length > 0) hydrateTraceProjections(mapped);
+    })();
+    const trackedRequest = { fortuneId, request };
+    traceFetchInFlight.current = trackedRequest;
+    try {
+      await request;
+    } finally {
+      if (traceFetchInFlight.current === trackedRequest) traceFetchInFlight.current = null;
+    }
+  }, [fortuneId, hydrateTraceProjections]);
+
   useEffect(() => {
     if (!fortuneId) return;
     if (projections.length > 0) return;
     if (status === 'streaming' || status === 'loading') return;
 
-    let cancelled = false;
     (async () => {
       setLoadingReplay(true);
       try {
-        const res = await fortuneClient.getTrace(fortuneId);
-        if (cancelled) return;
-        const mapped = (res.events || [])
-          .map((e) => asProjection(e))
-          .filter((e): e is TraceProjection => !!e);
-        if (mapped.length > 0) hydrateTraceProjections(mapped);
+        await fetchLatestTrace(false);
       } catch {
         // Replay is best-effort.
       } finally {
-        if (!cancelled) setLoadingReplay(false);
+        // Not gated on effect cleanup: a successful hydrate re-runs this
+        // effect (projections.length changes), and a cancelled-guard would
+        // skip clearing the flag exactly on success.
+        setLoadingReplay(false);
       }
     })();
+  }, [fortuneId, projections.length, status, fetchLatestTrace]);
 
-    return () => {
-      cancelled = true;
-    };
-  }, [fortuneId, projections.length, status, hydrateTraceProjections]);
+  useEffect(() => {
+    const previous = previousAskLoading.current;
+    if (fortuneId && previous.fortuneId === fortuneId && previous.askLoading && !askLoading) {
+      // DEBT: trace refreshes once per completed Ask (no live polling — GET /trace shares the 5/day guest replay quota), upgrade when trace gets a dedicated rate-limit scope or SSE push.
+      void fetchLatestTrace().catch(() => {
+        // Final trace hydration is best-effort.
+      });
+    }
+    previousAskLoading.current = { fortuneId, askLoading };
+  }, [askLoading, fortuneId, fetchLatestTrace]);
 
-  const isLive = status === 'streaming' || status === 'loading';
+  const isLive = status === 'streaming' || status === 'loading' || askLoading;
   const totalMs = useMemo(
     () =>
       projections.reduce(
@@ -183,11 +238,12 @@ export const GlassBoxPanel: React.FC<GlassBoxPanelProps> = ({
     [projections],
   );
 
-  const headerText = loadingReplay
+  const baseHeaderText = loadingReplay
     ? 'EXECUTION TRACE · LOADING…'
     : `EXECUTION TRACE · ${projections.length} SPAN${projections.length === 1 ? '' : 'S'}${
         totalMs > 0 ? ` · ${formatDuration(totalMs)}` : ''
       }`;
+  const headerText = askLoading ? `${baseHeaderText} · ASK RUNNING` : baseHeaderText;
 
   const rows = (
     <div
@@ -209,43 +265,82 @@ export const GlassBoxPanel: React.FC<GlassBoxPanelProps> = ({
         projections.map((step) => {
           const active = isActiveStatus(step.status);
           const ms = formatDuration(step.durationMs);
+          const rowOpen = openRows.has(step.eventId);
+          const details = [
+            step.agentName && ['agent', step.agentName],
+            step.toolName && ['tool', step.toolName],
+            step.spanType && ['span type', step.spanType],
+            step.model && ['model', step.model],
+            step.status && ['status', step.status],
+            ms && ['duration', ms],
+            step.argSummary && ['arguments', step.argSummary],
+            step.resultSummary && ['result', step.resultSummary],
+            step.startedAt && ['started', formatTimestamp(step.startedAt)],
+            step.endedAt && ['ended', formatTimestamp(step.endedAt)],
+          ].filter((detail): detail is string[] => !!detail);
           return (
-            <div
-              key={step.eventId}
-              className={OBS_LEDGER_ROW}
-              style={active ? { color: accent } : undefined}
-            >
-              <span className="min-w-0 truncate">
-                <b
-                  className="font-medium"
-                  style={{ color: active ? accent : '#9fb3a8' }}
-                >
-                  {step.agentName || 'pipeline'}
-                </b>{' '}
-                <span>{spanLabel(step)}</span>
-                {active && (
-                  <motion.span
-                    aria-hidden
-                    className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full align-middle"
-                    style={{ background: accent }}
-                    animate={reduceMotion ? undefined : { opacity: [1, 0.25, 1] }}
-                    transition={
-                      reduceMotion
-                        ? undefined
-                        : { duration: 1.2, repeat: Infinity, ease: 'easeInOut' }
-                    }
-                  />
-                )}
-              </span>
-              {ms ? (
-                <span
-                  className="flex-none"
-                  style={{ color: active ? accentAlpha(accent, 0.7) : '#39707f' }}
-                >
-                  {ms}
+            <div key={step.eventId}>
+              <button
+                type="button"
+                onClick={() => setOpenRows((current) => {
+                  const next = new Set(current);
+                  if (next.has(step.eventId)) next.delete(step.eventId);
+                  else next.add(step.eventId);
+                  return next;
+                })}
+                className={`${OBS_LEDGER_ROW} w-full text-left hover:bg-white/[0.02]`}
+                style={active ? { color: accent } : undefined}
+                aria-expanded={rowOpen}
+              >
+                <span className="flex min-w-0 items-center gap-1.5">
+                  {rowOpen ? (
+                    <ChevronDown size={11} className="flex-none text-[#5c6963]" />
+                  ) : (
+                    <ChevronRight size={11} className="flex-none text-[#5c6963]" />
+                  )}
+                  <span className="min-w-0 truncate">
+                    <b
+                      className="font-medium"
+                      style={{ color: active ? accent : '#9fb3a8' }}
+                    >
+                      {step.agentName || 'pipeline'}
+                    </b>{' '}
+                    <span>{spanLabel(step)}</span>
+                    {active && (
+                      <motion.span
+                        aria-hidden
+                        className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full align-middle"
+                        style={{ background: accent }}
+                        animate={reduceMotion ? undefined : { opacity: [1, 0.25, 1] }}
+                        transition={
+                          reduceMotion
+                            ? undefined
+                            : { duration: 1.2, repeat: Infinity, ease: 'easeInOut' }
+                        }
+                      />
+                    )}
+                  </span>
                 </span>
-              ) : (
-                <span className="flex-none text-transparent">·</span>
+                {ms ? (
+                  <span
+                    className="flex-none"
+                    style={{ color: active ? accentAlpha(accent, 0.7) : '#39707f' }}
+                  >
+                    {ms}
+                  </span>
+                ) : (
+                  <span className="flex-none text-transparent">·</span>
+                )}
+              </button>
+              {rowOpen && details.length > 0 && (
+                <dl className="space-y-1 border-b border-white/[0.04] bg-white/[0.015] px-7 py-2 text-[10px] leading-relaxed text-[#5c6963]">
+                  {details.map(([label, value]) => (
+                    <div key={label} className="grid grid-cols-[64px_minmax(0,1fr)] gap-2">
+                      <dt className="uppercase tracking-wide text-[#39707f]">{label}</dt>
+                      <dd className="min-w-0 break-words text-[#7d8b84]">{value}</dd>
+                    </div>
+                  ))}
+                </dl>
               )}
             </div>
           );

@@ -1,13 +1,12 @@
 /**
  * Unified Ask tab — parametrized per fortune function.
- * Preserves each mode's suggestions, headers, context banners, and flowFocus.
+ * Preserves each mode's suggestions, headers, and context banners.
  */
 import React, { useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { useShallow } from 'zustand/react/shallow';
 import { Brain, MessageSquareQuote, TrendingUp } from 'lucide-react';
 import { useFortuneAsk } from '../../hooks/useFortuneAsk';
-import { MemoryPanel } from './MemoryPanel';
 import { useFortuneStore } from '../../stores/fortuneStore';
 import { OracleChat, type OracleChatMessage } from './OracleChat';
 import { FLOW_ACCENTS, OBSERVATORY_MONO, accentAlpha } from '../designTokens';
@@ -21,13 +20,6 @@ const SESSION_ID: Record<CanonicalFortuneFunction, FortuneFunctionId> = {
   cycle: 'luck-cycle',
   compatibility: 'compatibility',
   occasion: 'lucky-day',
-};
-
-const FLOW_FOCUS: Record<CanonicalFortuneFunction, string> = {
-  wish: 'wish',
-  cycle: 'luck_cycle',
-  compatibility: 'compatibility:romance',
-  occasion: 'occasion',
 };
 
 const DEFAULT_SUGGESTIONS: Record<CanonicalFortuneFunction, string[]> = {
@@ -170,7 +162,6 @@ export const AskTab: React.FC<AskTabProps> = ({ functionId, question, context, r
 
   const chat = (
     <div className="flex flex-col gap-3">
-      <MemoryPanel />
       <OracleChat
         messages={messages}
         input={input}
@@ -183,7 +174,6 @@ export const AskTab: React.FC<AskTabProps> = ({ functionId, question, context, r
         memoryDegraded={memoryDegraded}
         disabled={!fortuneId || !ready}
         disabledReason={!ready ? 'Ask becomes available when the reading is complete.' : undefined}
-        flowFocus={FLOW_FOCUS[functionId]}
         contextLabel={context?.sectionLabel}
       />
     </div>
@@ -198,7 +188,7 @@ export const AskTab: React.FC<AskTabProps> = ({ functionId, question, context, r
         initial="initial"
         animate="animate"
         exit="exit"
-        className="flex flex-col gap-4 pb-24"
+        className="flex flex-col gap-4 pb-6"
       >
         {topPicks.length > 0 && (
           <div>
@@ -292,7 +282,7 @@ export const AskTab: React.FC<AskTabProps> = ({ functionId, question, context, r
       initial="initial"
       animate="animate"
       exit="exit"
-      className={functionId === 'cycle' ? 'pb-20' : 'pb-8'}
+      className={functionId === 'cycle' ? 'pb-6' : 'pb-8'}
     >
       {header.title && (
         <div className="mb-4 px-1">

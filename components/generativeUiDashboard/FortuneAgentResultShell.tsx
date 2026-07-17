@@ -134,8 +134,10 @@ export const FortuneAgentResultShell: React.FC<FortuneAgentResultShellProps> = (
   };
 
   return (
+    /* Old Safari falls back to hidden (clips but loses sticky); modern browsers
+       use clip so the status bar / Ask composer stick to the app shell's <main>. */
     <div
-      className="relative min-h-screen overflow-x-hidden text-[#e8e6e1] selection:bg-white/20"
+      className="relative min-h-screen overflow-x-hidden supports-[overflow-x:clip]:overflow-x-clip text-[#e8e6e1] selection:bg-white/20"
       style={{ background: gradient }}
     >
       {/* Oversized CJK watermark */}

@@ -1,9 +1,11 @@
 /**
- * OracleChat — production Ask-the-Oracle bubble (Concept D, "Hybrid").
+ * OracleChat — mobile-first Ask-the-Oracle conversation.
  *
+ * Messages flow with the page while the safe-area-aware sticky composer stays
+ * visible at the viewport edge. A bottom sentinel keeps new turns in view.
  * Each agent turn renders as:
- *   1. Pre-verdict: an honest pending state. The JSON endpoint does not expose
- *      intermediate reasoning events, so the UI never invents them.
+ *   1. Pre-verdict: an honest pending state while Execution Trace surfaces
+ *      server-backed reasoning separately.
  *   2. Verdict: italic serif headline (= narrative.tldr).
  *   3. Go-deeper accordion: holds insights → bullets, classical citations,
  *      and year predictions when present. Source chips on each section
@@ -11,15 +13,13 @@
  *   4. Follow-up pills: pulled from the per-tab `suggestions` array.
  *
  * Backward compat: a turn without `narrative` (legacy or error) falls back
- * to the plain-text bubble. The callers (4 per-function AskTab.tsx files)
- * already store `narrative` on each turn via `useFortuneAsk`, so the new
- * layout lights up automatically.
+ * to the plain-text bubble. The unified fortune/shared/AskTab.tsx stores
+ * `narrative` on each turn via `useFortuneAsk`.
  *
- * Called from: fortune/{compatibility|occasion|luck|wish}/AskTab.tsx.
+ * Called from: fortune/shared/AskTab.tsx.
  * Forwards to: only renders — no fetching. Submit handled by parent.
  *
- * The companion demo at /project/fortune-agent/ask-demo/d simulates the
- * full event flow client-side for visual review of this layout.
+ * AskDemoPage is an independent visual prototype, not a caller of this layout.
  */
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
@@ -29,7 +29,6 @@ import {
     BookOpen,
     Brain,
     ChevronDown,
-    Compass,
     Loader2,
     Send,
     Sparkles,
@@ -91,78 +90,15 @@ interface OracleChatProps {
     isLoading?: boolean;
     memoryDegraded?: boolean;
     disabled?: boolean;
-    /** Focus string of the parent flow (e.g. "compatibility:romance",
-     * "luck_cycle:career:5-year") so the loading chip can name the
-     * specialist that's about to run. */
-    flowFocus?: string;
     contextLabel?: string;
     disabledReason?: string;
 }
 
 const SERIF = "'Cormorant Garamond', 'Playfair Display', Georgia, serif";
 
-// Mirror of backend `infer_specialist_action` so the loading chip can name
-// the specialist that's actually about to run (e.g. "Career specialist"
-// rather than the generic "Oracle specialist"). Heuristics intentionally
-// match — if backend bypasses triage, the label here is correct.
-const SPECIALIST_LABELS: Record<string, string> = {
-    career_focus: 'Career specialist',
-    relationship_focus: 'Relationship specialist',
-    year_forecast: 'Year forecast specialist',
-    deep_dive_element: 'Element-balance specialist',
-    show_sources: 'Sources specialist',
-    expand_classics: 'Classics specialist',
-};
-
-function inferSpecialistLabel(question: string | undefined, focus: string | undefined): string {
-    const q = (question || '').toLowerCase();
-    const f = (focus || '').toLowerCase();
-    const has = (keys: string[]) => keys.some((k) => q.includes(k));
-
-    // Order mirrors backend `infer_specialist_action` (triage.py:155+):
-    // classics is checked BEFORE sources because "explain the classic
-    // text" should land on expand_classics, not show_sources. PR4 of the
-    // latency refactor surfaced this drift in code review.
-    if (has(['classic', 'classical text', 'expand on', 'philosophy', 'tradition', 'scripture', 'deeper meaning', 'more from']))
-        return SPECIALIST_LABELS.expand_classics;
-    // Sources keys mirror backend `_SOURCES_PHRASES` + `_SOURCES_WORDS`
-    // (triage.py:99-104). The two long phrases without a "source" /
-    // "reference" / "citation" / "passage" substring — "where does this
-    // come from" and "where did you get" — must be enumerated explicitly
-    // or the optimistic chat label drifts from the actual specialist.
-    if (has(['source', 'reference', 'citation', 'passage', 'where does this come from', 'where did you get']))
-        return SPECIALIST_LABELS.show_sources;
-    if (has(['career', 'job', 'work', 'promotion', 'boss', 'salary', 'company', 'office', 'raise', 'interview', 'resign', 'quit']))
-        return SPECIALIST_LABELS.career_focus;
-    if (has(['relationship', 'partner', 'marry', 'marriage', 'love', 'spouse', 'wife', 'husband', 'girlfriend', 'boyfriend', 'us ', 'we ', 'together']))
-        return SPECIALIST_LABELS.relationship_focus;
-    if (has(['element', 'wood', 'fire', 'earth', 'metal', 'water', 'balance']))
-        return SPECIALIST_LABELS.deep_dive_element;
-    if (has(['year', 'next year', 'decade', 'luck', 'cycle', 'timing', 'when ', 'forecast', '2025', '2026', '2027', '2028']))
-        return SPECIALIST_LABELS.year_forecast;
-
-    if (f.startsWith('compatibility')) return SPECIALIST_LABELS.relationship_focus;
-    if (f.startsWith('luck_cycle') || f.startsWith('occasion')) return SPECIALIST_LABELS.year_forecast;
-    return 'Oracle specialist';
-}
-
 // ---------------------------------------------------------------------------
 // Atoms
 // ---------------------------------------------------------------------------
-
-const SpecialistChip: React.FC<{ label: string; color: string }> = ({ label, color }) => (
-    <motion.span
-        layout
-        initial={{ opacity: 0, scale: 0.8 }}
-        animate={{ opacity: 1, scale: 1 }}
-        transition={{ duration: 0.25 }}
-        className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-widest"
-        style={{ borderColor: `${color}55`, background: `${color}1A`, color }}
-    >
-        <Compass className="h-2.5 w-2.5" />
-        {label}
-    </motion.span>
-);
 
 const DisclosureAccordion: React.FC<{
     title: string;
@@ -260,8 +196,6 @@ interface AgentBubbleProps {
     msg: OracleChatMessage;
     accentColor: string;
     isPending?: boolean;
-    /** Resolved specialist name to show in the pre-verdict chip. */
-    specialistLabel?: string;
     onRetry?: (message: OracleChatMessage) => void;
 }
 
@@ -269,7 +203,6 @@ const AgentBubble: React.FC<AgentBubbleProps> = ({
     msg,
     accentColor,
     isPending,
-    specialistLabel = 'Oracle specialist',
     onRetry,
 }) => {
     const narrative = msg.narrative;
@@ -321,13 +254,10 @@ const AgentBubble: React.FC<AgentBubbleProps> = ({
             {/* Honest pre-verdict state: no simulated backend progress. */}
             {isPending && (
                 <div className="flex flex-col gap-2">
-                    <div className="flex items-center gap-2 flex-wrap">
-                        <SpecialistChip label={specialistLabel} color={accentColor} />
-                        <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-widest text-slate-500">
-                            <Loader2 className="h-3 w-3 animate-spin" style={{ color: accentColor }} />
-                            Preparing your answer
-                        </span>
-                    </div>
+                    <span className="inline-flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-slate-500">
+                        <Loader2 className="h-3 w-3 animate-spin" style={{ color: accentColor }} />
+                        Consulting the oracle…
+                    </span>
                 </div>
             )}
 
@@ -472,38 +402,24 @@ export const OracleChat: React.FC<OracleChatProps> = ({
     isLoading = false,
     memoryDegraded = false,
     disabled = false,
-    flowFocus,
     contextLabel,
     disabledReason,
 }) => {
-    const scrollRef = useRef<HTMLDivElement>(null);
+    const bottomRef = useRef<HTMLDivElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const reduceMotion = useReducedMotion();
 
-    // The most recent user turn is what the next /ask call will dispatch on,
-    // so use it (plus flowFocus as fallback) to name the specialist chip.
-    const lastUserText = useMemo(() => {
-        for (let i = messages.length - 1; i >= 0; i--) {
-            if (messages[i].role === 'user') return messages[i].content;
-        }
-        return '';
-    }, [messages]);
-    const specialistLabel = useMemo(
-        () => inferSpecialistLabel(lastUserText, flowFocus),
-        [lastUserText, flowFocus],
-    );
-
     useEffect(() => {
-        const scroller = scrollRef.current;
-        if (!scroller) return;
-        if (typeof scroller.scrollTo === 'function') {
-            scroller.scrollTo({
-                top: scroller.scrollHeight,
-                behavior: reduceMotion ? 'auto' : 'smooth',
-            });
-        } else {
-            scroller.scrollTop = scroller.scrollHeight;
-        }
+        const bottom = bottomRef.current;
+        if (!bottom) return;
+        const latestIsUser = messages.at(-1)?.role === 'user';
+        const nearViewportBottom = typeof window !== 'undefined'
+            && bottom.getBoundingClientRect().top <= window.innerHeight + 120;
+        if (!latestIsUser && !nearViewportBottom) return;
+        bottom.scrollIntoView?.({
+            block: 'end',
+            behavior: reduceMotion ? 'auto' : 'smooth',
+        });
     }, [messages.length, isLoading, reduceMotion]);
 
     useEffect(() => {
@@ -534,7 +450,7 @@ export const OracleChat: React.FC<OracleChatProps> = ({
 
     return (
         <MotionConfig reducedMotion="user">
-        <div className="flex min-h-[420px] flex-col h-[min(70dvh,560px)]">
+        <div>
             {contextLabel && (
                 <div className="mb-3 flex items-center gap-2 text-[10px] uppercase tracking-widest text-slate-500">
                     <span>Answering about</span>
@@ -554,12 +470,11 @@ export const OracleChat: React.FC<OracleChatProps> = ({
             )}
 
             <div
-                ref={scrollRef}
                 role="log"
                 aria-live="polite"
                 aria-busy={isLoading}
                 aria-label="Ask conversation"
-                className="flex-1 overflow-y-auto space-y-4 mb-3 pr-1 scrollbar-hide"
+                className="mb-3 space-y-4 pr-1"
             >
                 <AnimatePresence initial={false}>
                     {messages.map((msg) =>
@@ -582,7 +497,6 @@ export const OracleChat: React.FC<OracleChatProps> = ({
                         msg={{ id: '__pending', role: 'agent', content: '' }}
                         accentColor={accentColor}
                         isPending
-                        specialistLabel={specialistLabel}
                     />
                 )}
 
@@ -604,7 +518,7 @@ export const OracleChat: React.FC<OracleChatProps> = ({
                                     type="button"
                                     onClick={() => onSend(s)}
                                     disabled={disabled}
-                                    className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-slate-400 transition-colors hover:bg-white/[0.06] hover:text-slate-200 disabled:cursor-not-allowed disabled:opacity-40"
+                                    className="min-h-10 rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 font-mono text-[10px] uppercase tracking-[0.12em] text-slate-400 transition-colors hover:bg-white/[0.06] hover:text-slate-200 disabled:cursor-not-allowed disabled:opacity-40"
                                 >
                                     {s}
                                 </button>
@@ -632,7 +546,7 @@ export const OracleChat: React.FC<OracleChatProps> = ({
                                     key={s}
                                     type="button"
                                     onClick={() => onSend(s)}
-                                    className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-slate-300 hover:bg-white/[0.07]"
+                                    className="inline-flex min-h-10 items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 font-mono text-[10px] uppercase tracking-[0.12em] text-slate-300 hover:bg-white/[0.07]"
                                 >
                                     <span className="text-slate-500">{meta.icon}</span>
                                     <span className="text-[10px] uppercase tracking-widest text-slate-500">
@@ -644,53 +558,62 @@ export const OracleChat: React.FC<OracleChatProps> = ({
                         })}
                     </motion.div>
                 )}
+                <div ref={bottomRef} aria-hidden />
             </div>
 
-            {disabledReason && disabled && (
-                <p id="fortune-ask-disabled" className="mb-2 text-[11px] text-slate-500">
-                    {disabledReason}
-                </p>
-            )}
-            <div className="flex items-end gap-2">
-                <textarea
-                    ref={textareaRef}
-                    value={input}
-                    onChange={(e) => onInputChange(e.target.value)}
-                    onKeyDown={handleKeyDown}
-                    placeholder="Ask the oracle..."
-                    disabled={disabled}
-                    maxLength={500}
-                    aria-label="Ask a question about this reading"
-                    aria-describedby={disabledReason && disabled ? 'fortune-ask-disabled fortune-ask-count' : 'fortune-ask-count'}
-                    rows={1}
-                    className="flex-1 resize-none rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none"
-                    style={{ maxHeight: 100, minHeight: 38 }}
-                    onFocus={(e) => {
-                        e.currentTarget.style.borderColor = `${accentColor}88`;
-                        e.currentTarget.style.boxShadow = `0 0 0 2px ${accentColor}33`;
-                    }}
-                    onBlur={(e) => {
-                        e.currentTarget.style.borderColor = '';
-                        e.currentTarget.style.boxShadow = '';
-                    }}
-                />
-                <button
-                    type="button"
-                    onClick={() => onSend()}
-                    disabled={disabled || isLoading || !input.trim()}
-                    aria-label={isLoading ? 'Waiting for answer' : 'Send question'}
-                    className="flex h-[38px] w-[38px] flex-none items-center justify-center rounded-xl border transition-colors"
-                    style={{
-                        borderColor: `${accentColor}33`,
-                        background: input.trim() ? `${accentColor}1A` : 'transparent',
-                        color: input.trim() ? accentColor : '#64748b',
-                    }}
-                >
-                    <Send className="w-4 h-4" />
-                </button>
-            </div>
-            <div id="fortune-ask-count" className="mt-1 text-right font-mono text-[10px] text-slate-600">
-                {input.length}/500
+            <div
+                className="sticky bottom-0 z-10 -mx-1 border-t border-white/[0.06] px-1 pt-3 backdrop-blur-md"
+                style={{
+                    background: 'rgba(10,12,16,0.88)',
+                    paddingBottom: 'max(env(safe-area-inset-bottom), 8px)',
+                }}
+            >
+                {disabledReason && disabled && (
+                    <p id="fortune-ask-disabled" className="mb-2 text-[11px] text-slate-500">
+                        {disabledReason}
+                    </p>
+                )}
+                <div className="flex items-end gap-2">
+                    <textarea
+                        ref={textareaRef}
+                        value={input}
+                        onChange={(e) => onInputChange(e.target.value)}
+                        onKeyDown={handleKeyDown}
+                        placeholder="Ask the oracle..."
+                        disabled={disabled}
+                        maxLength={500}
+                        aria-label="Ask a question about this reading"
+                        aria-describedby={disabledReason && disabled ? 'fortune-ask-disabled fortune-ask-count' : 'fortune-ask-count'}
+                        rows={1}
+                        className="flex-1 resize-none rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none"
+                        style={{ maxHeight: 100, minHeight: 38 }}
+                        onFocus={(e) => {
+                            e.currentTarget.style.borderColor = `${accentColor}88`;
+                            e.currentTarget.style.boxShadow = `0 0 0 2px ${accentColor}33`;
+                        }}
+                        onBlur={(e) => {
+                            e.currentTarget.style.borderColor = '';
+                            e.currentTarget.style.boxShadow = '';
+                        }}
+                    />
+                    <button
+                        type="button"
+                        onClick={() => onSend()}
+                        disabled={disabled || isLoading || !input.trim()}
+                        aria-label={isLoading ? 'Waiting for answer' : 'Send question'}
+                        className="flex h-[38px] w-[38px] flex-none items-center justify-center rounded-xl border transition-colors"
+                        style={{
+                            borderColor: `${accentColor}33`,
+                            background: input.trim() ? `${accentColor}1A` : 'transparent',
+                            color: input.trim() ? accentColor : '#64748b',
+                        }}
+                    >
+                        <Send className="w-4 h-4" />
+                    </button>
+                </div>
+                <div id="fortune-ask-count" className="mt-1 text-right font-mono text-[10px] text-slate-600">
+                    {input.length}/500
+                </div>
             </div>
         </div>
         </MotionConfig>

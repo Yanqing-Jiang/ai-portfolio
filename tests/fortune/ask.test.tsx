@@ -3,9 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
 import { OracleChat } from '../../components/generativeUiDashboard/fortune/shared/OracleChat';
+import { GlassBoxPanel } from '../../components/generativeUiDashboard/fortune/shared/GlassBoxPanel';
 import {
   getFortuneAskErrorMessage,
   isFortuneAskErrorRetryable,
+  useConversationHydration,
   useFortuneAsk,
 } from '../../components/generativeUiDashboard/hooks/useFortuneAsk';
 import { useFortuneSession } from '../../components/generativeUiDashboard/hooks/useFortuneSession';
@@ -149,7 +151,10 @@ describe('fortune Ask state', () => {
     ));
 
     act(() => useFortuneStore.getState().setFortune('fortune-a', 'run-a'));
-    const { unmount } = renderHook(() => useFortuneAsk());
+    const { unmount } = renderHook(() => {
+      const fortuneId = useFortuneStore((state) => state.fortuneId);
+      useConversationHydration(fortuneId);
+    });
     await waitFor(() => expect(fortuneClient.getConversation).toHaveBeenCalledWith('fortune-a'));
     act(() => useFortuneStore.getState().setFortune('fortune-b', 'run-b'));
     await act(async () => {
@@ -215,7 +220,11 @@ describe('fortune Ask state', () => {
       useFortuneStore.getState().setFortune('fortune-a', 'run-a');
       useFortuneStore.getState().setAskInput('Can I ask now?');
     });
-    const { result } = renderHook(() => useFortuneAsk());
+    const { result } = renderHook(() => {
+      const fortuneId = useFortuneStore((state) => state.fortuneId);
+      useConversationHydration(fortuneId);
+      return useFortuneAsk();
+    });
 
     act(() => result.current.send());
 
@@ -543,6 +552,25 @@ describe('fortune Ask state', () => {
     expect(next.askInput).toBe('');
     expect(next.askHistory).toEqual([]);
     expect(next.askLoading).toBe(false);
+  });
+
+  it('stops trace refreshes for a fortune after a terminal quota error', async () => {
+    const getTrace = vi.spyOn(fortuneClient, 'getTrace').mockRejectedValue(
+      new FortuneApiError('Unauthorized', 401),
+    );
+    act(() => useFortuneStore.getState().setFortune('fortune-a', 'run-a'));
+    render(<GlassBoxPanel />);
+
+    await waitFor(() => expect(getTrace).toHaveBeenCalledOnce());
+    act(() => useFortuneStore.getState().beginAsk({
+      id: 'question', role: 'user', content: 'Why?', timestampISO: '1',
+    }));
+    act(() => useFortuneStore.getState().finishAsk({
+      id: 'answer', role: 'agent', content: 'Because.', timestampISO: '2',
+    }));
+    await act(async () => { await Promise.resolve(); });
+
+    expect(getTrace).toHaveBeenCalledOnce();
   });
 });
 
