@@ -4,7 +4,8 @@ set -eu
 # The migration runner records immutable checksums and skips versions already
 # applied.  The full chain therefore supports clean installs without replaying
 # historical DDL on every container boot.
-for migration in /app/migrations/00[2-7]_*.sql; do
+for migration in /app/migrations/*.sql; do
+  case "$migration" in /app/migrations/001_*) continue ;; esac
   python scripts/apply_migration.py "$migration"
 done
 
