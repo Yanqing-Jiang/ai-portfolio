@@ -49,6 +49,21 @@ def test_all_ok_is_healthy():
     assert all(p["status"] == "ok" for p in report["providers"])
 
 
+def test_supabase_anon_reads_bookings_for_keepalive():
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(200, json=[])
+
+    probe = ph.probe_supabase_anon(FULL_ENV, make_client(handler))
+    assert requests[0].url.path == "/rest/v1/bookings"
+    assert "select=id" in requests[0].url.query.decode()
+    assert "limit=1" in requests[0].url.query.decode()
+    assert probe.status == "ok"
+    assert probe.probe == "bookings.select"
+
+
 def test_missing_keys_are_degraded_and_no_request():
     called = {"n": 0}
 

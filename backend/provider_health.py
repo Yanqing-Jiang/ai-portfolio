@@ -302,11 +302,13 @@ def probe_supabase_anon(env: dict, client: httpx.Client) -> Probe:
     url = env.get("SUPABASE_URL", "").strip().rstrip("/")
     if not key or not url:
         return Probe("supabase_anon", MISSING, "config")
+    # This real table read also resets Supabase's free-tier 7-day inactivity timer;
+    # the PostgREST root does not.
     st, code, lat, _ = _timed(
-        client, "GET", f"{url}/rest/v1/", "rest.root",
+        client, "GET", f"{url}/rest/v1/bookings?select=id&limit=1", "bookings.select",
         headers={"apikey": key, "Authorization": f"Bearer {key}"},
     )
-    return Probe("supabase_anon", st, "rest.root", code, lat)
+    return Probe("supabase_anon", st, "bookings.select", code, lat)
 
 
 def probe_supabase_jwt(env: dict, client: httpx.Client) -> Probe:
