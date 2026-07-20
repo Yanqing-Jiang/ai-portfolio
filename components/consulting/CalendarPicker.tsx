@@ -60,28 +60,28 @@ export const CalendarPicker: React.FC<CalendarPickerProps> = ({ selectedDate, on
   };
 
   return (
-    <div className="bg-white/[0.03] border border-white/10 p-4 sm:p-6 rounded-2xl backdrop-blur-xl">
+    <div className="bg-[#12110F] border border-[#37332E] p-4 sm:p-6 rounded-[6px]">
       {/* Month navigation */}
       <div className="flex items-center justify-between mb-4">
         <button
           onClick={() => goMonth(-1)}
-          className="p-2 rounded-lg hover:bg-white/10 transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center"
+          className="p-2 rounded-[4px] hover:bg-white/5 transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center"
         >
-          <ChevronLeft className="w-5 h-5 text-slate-400" />
+          <ChevronLeft className="w-5 h-5 text-[#A8A096]" />
         </button>
-        <span className="text-base font-semibold text-white">{monthLabel}</span>
+        <span className="text-base font-semibold text-[#F1EADF]">{monthLabel}</span>
         <button
           onClick={() => goMonth(1)}
-          className="p-2 rounded-lg hover:bg-white/10 transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center"
+          className="p-2 rounded-[4px] hover:bg-white/5 transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center"
         >
-          <ChevronRight className="w-5 h-5 text-slate-400" />
+          <ChevronRight className="w-5 h-5 text-[#A8A096]" />
         </button>
       </div>
 
       {/* Day headers */}
       <div className="grid grid-cols-7 gap-1 mb-2">
         {DAYS.map((d) => (
-          <div key={d} className="text-center text-xs font-medium text-slate-500 py-1">
+          <div key={d} className="text-center text-xs font-medium text-[#A8A096] py-1">
             {d}
           </div>
         ))}
@@ -97,14 +97,14 @@ export const CalendarPicker: React.FC<CalendarPickerProps> = ({ selectedDate, on
               onClick={() => !cell.disabled && onSelectDate(cell.date)}
               whileTap={cell.disabled ? undefined : { scale: 0.9 }}
               className={`
-                min-h-[44px] rounded-xl text-sm font-medium transition-all
+                min-h-[44px] rounded-[4px] text-sm font-medium transition-all
                 ${cell.disabled
-                  ? 'text-slate-600 cursor-not-allowed'
+                  ? 'text-[#565049] cursor-not-allowed'
                   : cell.date === selectedDate
-                    ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/30'
+                    ? 'bg-[#F04A32] text-[#12110F] font-semibold'
                     : cell.date === today
-                      ? 'bg-blue-500/10 text-blue-400 border border-blue-500/30 hover:bg-blue-500/20'
-                      : 'text-slate-300 hover:bg-white/10'
+                      ? 'text-[#F04A32] border border-[#F04A32]/40 hover:bg-[#F04A32]/10'
+                      : 'text-[#F1EADF] hover:bg-white/5'
                 }
               `}
             >

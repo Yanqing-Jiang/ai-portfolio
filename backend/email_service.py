@@ -33,8 +33,22 @@ GMAIL_CREDENTIALS_PATH = os.getenv(
     "GMAIL_CREDENTIALS_PATH", "~/.gmail-mcp/credentials.json"
 )
 BOOKING_TIMEZONE = os.getenv("BOOKING_TIMEZONE", "America/Los_Angeles")
-# Admin alert recipient for new bookings. If empty, the admin alert is skipped.
-ADMIN_ALERT_EMAIL = os.getenv("ADMIN_ALERT_EMAIL", "jiangyanqing90@gmail.com")
+# Admin alert recipient(s) for new bookings / consult intake. Comma-separated list.
+# Every consult + context-form submission is copied to BOTH addresses (D5).
+# If empty, the admin alert is skipped.
+ADMIN_ALERT_EMAIL = os.getenv(
+    "ADMIN_ALERT_EMAIL", "yanqing.app@gmail.com,jiangyanqing91@gmail.com"
+)
+
+
+def _admin_alert_recipients() -> list[str]:
+    """Parse ADMIN_ALERT_EMAIL into a de-duplicated list of addresses."""
+    seen: list[str] = []
+    for part in (ADMIN_ALERT_EMAIL or "").split(","):
+        addr = part.strip()
+        if addr and addr not in seen:
+            seen.append(addr)
+    return seen
 
 # Scopes must match the ones the stored token was granted for.
 GMAIL_SCOPES = [
@@ -148,10 +162,19 @@ def _build_email_html(
     session_type: str,
     slot_start_iso: str,
     meet_link: Optional[str],
+    notes: Optional[str] = None,
 ) -> str:
-    """Return an HTML email body with booking details, Meet link, and
-    reschedule/cancel instructions."""
+    """Return an HTML email body with booking details, Meet link, the context
+    the client shared, and reschedule/cancel instructions."""
     duration = "60 minutes" if session_type == "60" else "30 minutes"
+
+    context_block = ""
+    if notes and notes.strip():
+        import html as _html
+        safe_notes = _html.escape(notes.strip()).replace("\n", "<br>")
+        context_block = f"""
+          <p style="margin:24px 0 6px 0;font-family:Arial,sans-serif;font-size:14px;color:#202124;"><strong>What you shared</strong></p>
+          <div style="font-family:Arial,sans-serif;font-size:13px;color:#5f6368;line-height:1.5;background:#f8f9fa;border-radius:6px;padding:12px 16px;">{safe_notes}</div>"""
 
     # Format the slot start time for display (best-effort, tz-aware)
     try:
@@ -209,6 +232,7 @@ def _build_email_html(
             </tr>
             {meet_block}
           </table>
+          {context_block}
           <p style="margin:24px 0 8px 0;font-family:Arial,sans-serif;font-size:14px;color:#202124;line-height:1.5;">
             <strong>Need to reschedule or cancel?</strong><br>
             Just reply to this email and I'll take care of it. No need to explain — simply let me know the new time you'd prefer, or that you'd like to cancel.
@@ -243,6 +267,7 @@ async def send_booking_confirmation_email(
     session_type: str,
     slot_start: str,
     meet_link: Optional[str] = None,
+    notes: Optional[str] = None,
 ) -> bool:
     """Send a booking confirmation email via Gmail API.
 
@@ -276,6 +301,7 @@ async def send_booking_confirmation_email(
             session_type=session_type,
             slot_start_iso=slot_start,
             meet_link=meet_link,
+            notes=notes,
         )
 
         # Build the RFC822 message — MIMEMultipart("alternative") for HTML + plain
@@ -346,7 +372,8 @@ async def send_admin_booking_alert(
     sent only to the admin address, never to the client. Fire-and-forget:
     returns True on success, False otherwise; never raises.
     """
-    if not ADMIN_ALERT_EMAIL:
+    recipients = _admin_alert_recipients()
+    if not recipients:
         return False
 
     service = _get_gmail_service()
@@ -355,12 +382,15 @@ async def send_admin_booking_alert(
         return False
 
     try:
-        duration = "60" if session_type == "60" else "30"
-        subject = f"New consult booking — {name or 'unknown'} ({duration} min)"
+        is_free = session_type == "fit"
+        duration = "30" if is_free else ("60" if session_type == "60" else "30")
+        kind = "Enterprise fit call (FREE)" if is_free else f"{duration}-min session"
+        subject = f"New consult booking — {name or 'unknown'} ({kind})"
 
         lines = [
             "New consult booking confirmed on yanqing.app/consult",
             "",
+            f"Type:     {kind}",
             f"Name:     {name or '(none)'}",
             f"Email:    {email or '(none)'}",
             f"Duration: {duration} minutes",
@@ -373,7 +403,7 @@ async def send_admin_booking_alert(
         plain_text = "\n".join(lines) + "\n"
 
         mime_msg = MIMEText(plain_text, "plain", "utf-8")
-        mime_msg["To"] = ADMIN_ALERT_EMAIL
+        mime_msg["To"] = ", ".join(recipients)
         mime_msg["From"] = (
             f"Yanqing Bookings <{GMAIL_FROM_EMAIL}>"
             if "@" in GMAIL_FROM_EMAIL
@@ -396,7 +426,7 @@ async def send_admin_booking_alert(
             ).execute(),
         )
 
-        logger.info("[GMAIL] Admin booking alert sent to %s", ADMIN_ALERT_EMAIL)
+        logger.info("[GMAIL] Admin booking alert sent to %s", ", ".join(recipients))
         return True
 
     except Exception as exc:

@@ -12,6 +12,7 @@ import json
 from datetime import datetime as _DateTime, timezone, timedelta
 import uuid
 import time
+import threading
 try:
     import stripe  # type: ignore
 except ImportError:  # pragma: no cover - optional dependency
@@ -92,6 +93,18 @@ BOOKING_AMOUNT_CENTS = {
 from calendar_service import get_available_slots, create_booking_event, delete_booking_event
 from telegram_service import send_booking_notification
 from email_service import send_booking_confirmation_email, send_admin_booking_alert
+from intake_agent import (
+    run_turn as intake_run_turn,
+    new_state as intake_new_state,
+    sign_session as intake_sign_session,
+    verify_session as intake_verify_session,
+    clamp_brief as intake_clamp_brief,
+    min_brief_ok as intake_min_brief_ok,
+    fit_session_to_cap as intake_fit_session,
+    intake_available,
+    MAX_USER_TURNS,
+    MAX_SESSION_TOKEN_CHARS,
+)
 from rate_limiter import parse_user_id, ParsedToken
 
 # Booking DB pool (shares SUPABASE_DB_URL with token_store)
@@ -199,6 +212,7 @@ from rate_limiter import (
     build_scoped_identifier,
     RateLimitScope,
     is_superuser,
+    _guest_ip,
 )
 try:
     from token_store import token_store
@@ -545,7 +559,40 @@ class BookingCheckoutRequest(BaseModel):
     slot_start: str  # ISO 8601 with timezone
     name: str = Field(..., min_length=1, max_length=100)
     email: EmailStr
-    notes: Optional[str] = Field(None, max_length=500)
+    notes: Optional[str] = Field(None, max_length=2000)
+    intake_brief_id: Optional[str] = Field(None, max_length=64)
+
+
+class IntakeMessageRequest(BaseModel):
+    # The next user reply only. History is server-owned inside the signed
+    # `session` token; the client cannot forge past turns or the turn count.
+    path: Literal["business", "individual"]
+    # Cap sits above the true max token size (see intake_agent.MAX_SESSION_TOKEN_CHARS);
+    # the old 16 KB cap 422'd valid server-issued tokens once the transcript grew.
+    session: Optional[str] = Field(None, max_length=MAX_SESSION_TOKEN_CHARS)
+    message: str = Field("", max_length=2000)
+
+
+class IntakeBriefRequest(BaseModel):
+    # Persisting a brief requires a valid signed intake session (proves a real
+    # interview happened). The brief is the client-reviewed/edited version; it is
+    # re-validated + clamped server-side before the write.
+    session: str = Field(..., max_length=MAX_SESSION_TOKEN_CHARS)
+    brief: dict = Field(default_factory=dict)
+    name: Optional[str] = Field(None, max_length=100)
+    email: Optional[str] = Field(None, max_length=200)
+    recommended_next_step: Optional[str] = Field(None, max_length=8)
+    booking_id: Optional[str] = Field(None, max_length=64)
+
+
+class FreeConsultRequest(BaseModel):
+    """Free enterprise fit-call booking (no payment). Mirrors the paid
+    checkout request but skips Stripe — the slot is confirmed directly."""
+    slot_start: str  # ISO 8601 with timezone
+    name: str = Field(..., min_length=1, max_length=100)
+    email: EmailStr
+    notes: Optional[str] = Field(None, max_length=2000)
+    intake_brief_id: Optional[str] = Field(None, max_length=64)
 
 
 class BookingSlot(BaseModel):
@@ -1596,6 +1643,7 @@ async def create_booking_checkout(req: BookingCheckoutRequest):
                 "slot_start": req.slot_start,
                 "client_name": req.name,
                 "client_email": req.email,
+                "intake_brief_id": req.intake_brief_id or "",
             },
             customer_email=req.email,
             success_url=f"{SITE_ORIGIN}/consult?status=success&session_id={{CHECKOUT_SESSION_ID}}",
@@ -1632,6 +1680,486 @@ async def create_booking_checkout(req: BookingCheckoutRequest):
             logger.error("[BOOKING] Failed to update stripe_session_id: %s", exc)
 
     return JSONResponse(content={"url": session.url})
+
+
+# In-process anti-automation for the de-walled unauthenticated endpoints.
+# Keyed by the TRUSTED visitor IP (_guest_ip resolves the Cloudflare-forwarded
+# caller when TRUST_FORWARDED_IP is on, not the tunnel peer) so buckets are
+# per-visitor, and spoofed forwarding headers are rejected when trust is off.
+# DEBT: in-memory / per-process — resets on restart. Upgrade to the Redis
+# rate_limiter when it grows an unauthenticated per-endpoint mode.
+_RATE_BUCKETS: dict[str, dict[str, list[float]]] = {}
+
+
+def _rate_key(request: Request) -> str:
+    return _guest_ip(request)
+
+
+def _check_rate(request: Request, bucket: str, window_s: int, limit: int, detail: str) -> None:
+    key = _rate_key(request)
+    now = time.time()
+    store = _RATE_BUCKETS.setdefault(bucket, {})
+    hits = [t for t in store.get(key, []) if now - t < window_s]
+    if len(hits) >= limit:
+        raise HTTPException(status_code=429, detail=detail)
+    hits.append(now)
+    store[key] = hits
+
+
+def _check_free_consult_rate(request: Request) -> None:
+    _check_rate(request, "free_consult", 900, 6,
+                "Too many booking attempts. Please wait a few minutes and try again.")
+
+
+async def _assert_slot_offered(slot_start: "_DateTime") -> None:
+    """Revalidate `slot_start` against the SAME availability source as
+    GET /api/booking/slots (office hours, 30-min boundaries, 90-day horizon,
+    Google Calendar freebusy). Raises HTTPException if the instant is not a
+    currently-offered 30-min slot start."""
+    from datetime import date as _date_type
+    from calendar_service import BOOKING_TIMEZONE
+    from zoneinfo import ZoneInfo
+
+    tz = ZoneInfo(BOOKING_TIMEZONE)
+    local_date = slot_start.astimezone(tz).date()
+
+    today = _date_type.today()
+    if local_date < today:
+        raise HTTPException(status_code=400, detail="Cannot book a slot in the past.")
+    if (local_date - today).days > 90:
+        raise HTTPException(status_code=400, detail="Cannot book more than 90 days in advance.")
+
+    try:
+        offered = await get_available_slots(local_date, "30")
+    except Exception as exc:
+        logger.error("[BOOKING] Free-consult availability lookup failed: %s", exc)
+        raise HTTPException(status_code=503, detail="Availability is temporarily unavailable. Please try again.")
+
+    for s in offered:
+        try:
+            if _DateTime.fromisoformat(s["start"]) == slot_start:
+                return
+        except (ValueError, TypeError, KeyError):
+            continue
+    raise HTTPException(
+        status_code=409,
+        detail="That time is no longer available. Please pick another slot.",
+    )
+
+
+@app.post("/api/booking/free")
+async def create_free_consult(req: FreeConsultRequest, request: Request):
+    """Book a FREE enterprise fit call (no payment).
+
+    De-walled direct booking. The slot is server-side revalidated against the
+    same availability source as the paid flow, rate-limited per IP, and only
+    confirmed once the Google Calendar event is created — a calendar failure
+    frees the slot and surfaces an error (never a false "confirmed"). Stored
+    as a schema-valid 30-min booking with amount 0; the free/fit framing lives
+    in notes + the admin alert. Intake context rides in `notes` and is copied
+    to both admin recipients (D5).
+    """
+    _check_free_consult_rate(request)
+
+    # Parse and validate slot_start (tz-aware, future)
+    try:
+        slot_start = _DateTime.fromisoformat(req.slot_start)
+        if slot_start.tzinfo is None:
+            raise ValueError("Timezone required")
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid slot_start: {exc}")
+
+    if slot_start <= _DateTime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="Cannot book a slot in the past.")
+
+    # Enforce horizon / office hours / boundaries / calendar availability
+    await _assert_slot_offered(slot_start)
+
+    from datetime import timedelta
+    slot_end = slot_start + timedelta(minutes=30)
+
+    booking_id = str(uuid.uuid4())
+    free_session_id = f"free_{booking_id}"
+
+    pool = await _get_booking_pool()
+    if pool is not None:
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    UPDATE bookings
+                    SET status = 'expired', updated_at = NOW()
+                    WHERE status = 'hold'
+                      AND created_at < NOW() - INTERVAL '30 minutes'
+                    """
+                )
+
+                # Atomic overlap-safe insert: the overlap check and the insert
+                # are ONE statement, so there is no app-level read-then-write gap
+                # (session_type is stored schema-valid '30'; free/fit is encoded
+                # by amount_cents = 0 and the 'free_' session id). The partial
+                # UNIQUE(slot_start) index additionally guards identical-start
+                # races. 0 rows inserted => an overlapping hold/confirmed exists.
+                # DEBT: true cross-path overlap safety (a 60-min paid booking
+                # straddling this 30-min slot under concurrent uncommitted writes)
+                # needs a tstzrange GIST exclusion constraint on the bookings
+                # table — not present in the current schema. The paid checkout
+                # path shares this gap. Upgrade when 30/60-min bookings are taken
+                # concurrently at volume or the first real double-book is observed.
+                try:
+                    insert_status = await conn.execute(
+                        """
+                        INSERT INTO bookings (
+                            id, stripe_session_id, session_type,
+                            slot_start, slot_end, client_name, client_email,
+                            notes, status, amount_cents
+                        )
+                        SELECT $1, $2, '30', $3, $4, $5, $6, $7, 'hold', 0
+                        WHERE NOT EXISTS (
+                            SELECT 1 FROM bookings
+                            WHERE status IN ('hold', 'confirmed')
+                              AND slot_start < $4
+                              AND slot_end > $3
+                        )
+                        """,
+                        uuid.UUID(booking_id),
+                        free_session_id,
+                        slot_start,
+                        slot_end,
+                        req.name,
+                        req.email,
+                        req.notes,
+                    )
+                except Exception as db_exc:
+                    # Identical-start collision caught by the partial unique index.
+                    logger.warning("[BOOKING] Free-consult slot conflict: %s", db_exc)
+                    raise HTTPException(
+                        status_code=409,
+                        detail="That time is no longer available. Please pick another slot.",
+                    )
+
+                # asyncpg returns a command tag like "INSERT 0 1"; "INSERT 0 0"
+                # means the NOT EXISTS guard blocked it — the slot is taken.
+                if insert_status.strip().endswith(" 0"):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="That time is no longer available. Please pick another slot.",
+                    )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.error("[BOOKING] Free-consult DB insert failed: %s", exc)
+            raise HTTPException(status_code=500, detail="Booking system error. Please try again.")
+    else:
+        logger.warning("[BOOKING] No database — proceeding without hold (dev mode)")
+
+    # Create the calendar event. Only a successful event confirms the booking;
+    # a failure frees the slot and returns an error (B3 — never a false success).
+    calendar_event_id = None
+    meet_link = None
+    try:
+        cal_result = await create_booking_event(
+            session_type="30",
+            slot_start=slot_start,
+            name=req.name,
+            email=req.email,
+            notes=req.notes,
+        )
+        calendar_event_id = cal_result.get("event_id")
+        meet_link = cal_result.get("meet_link")
+    except Exception as exc:
+        logger.error("[BOOKING] Free-consult calendar event failed: %s", exc)
+        if pool is not None:
+            try:
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        "UPDATE bookings SET status = 'expired', updated_at = NOW() WHERE id = $1",
+                        uuid.UUID(booking_id),
+                    )
+            except Exception:
+                pass
+        raise HTTPException(
+            status_code=502,
+            detail="We couldn't confirm that time on the calendar. Please pick another slot — you have not been booked.",
+        )
+
+    if pool is not None:
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    UPDATE bookings
+                    SET status = 'confirmed', calendar_event_id = $1, meet_link = $2, updated_at = NOW()
+                    WHERE id = $3
+                    """,
+                    calendar_event_id,
+                    meet_link,
+                    uuid.UUID(booking_id),
+                )
+        except Exception as exc:
+            logger.error("[BOOKING] Free-consult status update failed: %s", exc)
+
+    # Link the intake brief (if any) to this booking.
+    await _link_brief_to_booking(req.intake_brief_id, booking_id, req.email)
+
+    # Confirmed — fire notifications (session_type "fit" is a display-only label
+    # for the admin alert; the DB row stays '30').
+    try:
+        await send_booking_notification(
+            name=req.name, email=req.email,
+            session_type="fit", slot_start=req.slot_start,
+            notes=req.notes,
+        )
+    except Exception as exc:
+        logger.error("[BOOKING] Telegram notification failed (non-blocking): %s", exc)
+
+    try:
+        await send_admin_booking_alert(
+            name=req.name, email=req.email,
+            session_type="fit", slot_start=req.slot_start,
+            notes=req.notes, meet_link=meet_link,
+        )
+    except Exception as exc:
+        logger.error("[BOOKING] Admin email alert failed (non-blocking): %s", exc)
+
+    try:
+        await send_booking_confirmation_email(
+            name=req.name, email=req.email,
+            session_type="30", slot_start=req.slot_start, meet_link=meet_link,
+            notes=req.notes,
+        )
+    except Exception as exc:
+        logger.error("[BOOKING] Confirmation email failed (non-blocking): %s", exc)
+
+    return JSONResponse(content={
+        "id": booking_id,
+        "status": "confirmed",
+        "meet_link": meet_link,
+        "slot_start": req.slot_start,
+    })
+
+
+# ---------------------------------------------------------------------------
+# AI Brief Agent (Phase 2) — /consult intake chat
+# ---------------------------------------------------------------------------
+
+def _check_intake_rate(request: Request) -> None:
+    # ~12-turn interview + a couple of retries; keyed per trusted visitor IP.
+    _check_rate(request, "intake", 900, 40,
+                "Too many messages. Please slow down and try again shortly.")
+
+
+# Per-session turn ledger for replay defense. Signed tokens are stateless, so an
+# OLD (or concurrently duplicated) token can be resubmitted to fork state and
+# re-spend model calls below the 12-turn cap. The ledger records the highest turn
+# already CONSUMED per `sid`; a token is accepted only if its turn strictly
+# exceeds that. The check + record is a single atomic compare-and-set under a
+# lock and happens BEFORE the model call, so two concurrent uses of the same
+# token can't both spend. Pure server-side state is unavoidable for replay
+# detection.
+# DEBT: in-memory / per-process — a restart clears it, so tokens are replayable
+# again until their ~2h TTL (intake_agent.SESSION_TTL_SECONDS) expires. Upgrade
+# to Redis when the booking limiter grows a shared unauthenticated store.
+_INTAKE_SESSION_TURNS: dict[str, tuple[int, float]] = {}
+_INTAKE_LEDGER_LOCK = threading.Lock()
+_INTAKE_LEDGER_MAX = 20000
+
+
+def _prune_session_ledger(now: float) -> None:
+    # Caller holds _INTAKE_LEDGER_LOCK.
+    if len(_INTAKE_SESSION_TURNS) <= _INTAKE_LEDGER_MAX:
+        return
+    from intake_agent import SESSION_TTL_SECONDS
+    stale = [k for k, (_, ts) in _INTAKE_SESSION_TURNS.items() if now - ts > SESSION_TTL_SECONDS]
+    for k in stale:
+        _INTAKE_SESSION_TURNS.pop(k, None)
+    # Hard fallback if still oversized (all fresh): drop the oldest half.
+    if len(_INTAKE_SESSION_TURNS) > _INTAKE_LEDGER_MAX:
+        for k in sorted(_INTAKE_SESSION_TURNS, key=lambda k: _INTAKE_SESSION_TURNS[k][1])[: _INTAKE_LEDGER_MAX // 2]:
+            _INTAKE_SESSION_TURNS.pop(k, None)
+
+
+def _intake_reserve_turn(sid: str, turns: int) -> bool:
+    """Atomic compare-and-set. Returns True and reserves `turns` for `sid` if it
+    strictly advances the highest turn already consumed; False if it's a stale or
+    concurrently-duplicated (replayed) token. Consuming BEFORE the model call is
+    what stops two concurrent identical tokens from both spending."""
+    now = time.time()
+    with _INTAKE_LEDGER_LOCK:
+        prev = _INTAKE_SESSION_TURNS.get(sid)
+        if prev is not None and turns <= prev[0]:
+            return False
+        _INTAKE_SESSION_TURNS[sid] = (turns, now)
+        _prune_session_ledger(now)
+    return True
+
+
+def _intake_release_turn(sid: str, turns: int) -> None:
+    """Roll back a reservation whose turn never spent a model call (transient
+    502): without this, retrying the same valid token would 409 forever. Only
+    rolls back if our reservation is still the latest, and only to turns-1 —
+    never below what any prior token had already consumed."""
+    with _INTAKE_LEDGER_LOCK:
+        cur = _INTAKE_SESSION_TURNS.get(sid)
+        if cur is not None and cur[0] == turns:
+            _INTAKE_SESSION_TURNS[sid] = (turns - 1, time.time())
+
+
+def _require_bound_session(state: dict) -> None:
+    """Hard-reject any signed token lacking a session id or numeric issued-at.
+    Such tokens (pre-fix, never deployed) would otherwise bypass expiry + the
+    replay ledger and retain indefinite-replay behavior."""
+    if not state.get("sid") or not isinstance(state.get("iat"), (int, float)):
+        raise HTTPException(status_code=401, detail="intake_session_invalid")
+
+
+async def _link_brief_to_booking(brief_id: Optional[str], booking_id: str, email: Optional[str] = None) -> None:
+    """Best-effort: attach a stored intake brief to the booking it produced."""
+    if not brief_id:
+        return
+    pool = await _get_booking_pool()
+    if pool is None:
+        return
+    try:
+        bid = uuid.UUID(brief_id)
+    except Exception:
+        return
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE intake_briefs SET booking_id = $1, client_email = COALESCE($2, client_email) WHERE id = $3",
+                booking_id, email, bid,
+            )
+    except Exception as exc:
+        logger.error("[INTAKE] Failed to link brief %s to booking %s: %s", brief_id, booking_id, exc)
+
+
+@app.post("/api/intake/message")
+async def intake_message(req: IntakeMessageRequest, request: Request):
+    """One turn of the guided intake interview.
+
+    Server-authoritative: the transcript + turn count + running brief live in the
+    signed `session` token, not in a client-supplied history. The browser sends
+    only the next user reply. Scope-locked, turn-capped, rate-limited, output
+    schema-validated. On any failure the client falls back to the guided form."""
+    _check_intake_rate(request)
+
+    if not intake_available():
+        raise HTTPException(status_code=503, detail="intake_unavailable")
+
+    # Resolve server-owned session state from the signed token (or start fresh).
+    if req.session:
+        state = intake_verify_session(req.session)
+        if state is None:
+            # Tampered or expired token — restart cleanly (client falls back or reseeds).
+            raise HTTPException(status_code=400, detail="intake_session_invalid")
+        # Path is fixed by the session, not the per-request field.
+        if state.get("path") not in ("business", "individual"):
+            raise HTTPException(status_code=400, detail="intake_session_invalid")
+        # Reject unbound legacy tokens (no sid/iat) outright — they'd bypass
+        # expiry + the ledger. Then atomically reserve this turn BEFORE any model
+        # call: a stale OR concurrently-duplicated token is a 409 (no double-spend).
+        _require_bound_session(state)
+        if not _intake_reserve_turn(state["sid"], int(state.get("turns", 0))):
+            raise HTTPException(status_code=409, detail="intake_session_stale")
+        reserved = (state["sid"], int(state.get("turns", 0)))
+    else:
+        state = intake_new_state(req.path)
+        reserved = None
+
+    # Server-enforced turn cap — cannot be bypassed by the client.
+    if int(state.get("turns", 0)) >= MAX_USER_TURNS:
+        brief = state.get("brief", {}) or {}
+        # Enforce the min-useful-brief invariant on the cap path too: a thin brief
+        # forced to the cap is NOT complete — the client hands off to the guided
+        # form (carrying the partial brief) rather than booking on one field.
+        capped_complete = intake_min_brief_ok(state.get("path"), brief)
+        reply = (
+            "I've got enough to prepare your brief. Review it on the right, correct anything I misread, then choose how to book below."
+            if capped_complete else
+            "We've covered a lot of ground. Let me hand you to a short form to capture the last details so Yanqing has what he needs."
+        )
+        return JSONResponse(content={
+            "reply": reply,
+            "brief": brief,
+            "quick_replies": [],
+            "complete": capped_complete,
+            "recommended_next_step": "fit" if state.get("path") == "business" else "30",
+            "session": intake_sign_session(intake_fit_session({**state, "complete": capped_complete})),
+            "capped": True,
+        })
+
+    try:
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, lambda: intake_run_turn(state, req.message))
+        new_state = result.pop("state")
+        result["session"] = intake_sign_session(new_state)
+        return JSONResponse(content=result)
+    except Exception as exc:
+        # The turn never spent a model result — release the reservation so the
+        # client can retry the same valid token instead of 409ing forever.
+        if reserved is not None:
+            _intake_release_turn(*reserved)
+        logger.error("[INTAKE] Turn failed: %s", exc)
+        raise HTTPException(status_code=502, detail="intake_error")
+
+
+@app.post("/api/intake/brief")
+async def intake_store_brief(req: IntakeBriefRequest, request: Request):
+    """Persist a prospect-approved brief. Requires a valid signed intake session
+    (proves a real interview) and re-validates/clamps the brief before writing —
+    randoms cannot spray arbitrary JSON into the table. Rate-limited. Returns a
+    brief_id the booking references. Never blocks the funnel on DB errors."""
+    import hashlib
+
+    _check_rate(request, "intake_brief", 900, 20,
+                "Too many submissions. Please try again shortly.")
+
+    # Gate on a valid, bound session token — no valid interview, no write.
+    state = intake_verify_session(req.session)
+    if state is None:
+        raise HTTPException(status_code=400, detail="intake_session_invalid")
+    _require_bound_session(state)
+    path = state.get("path") if state.get("path") in ("business", "individual") else "unknown"
+
+    # Re-validate + clamp the (client-edited) brief server-side.
+    brief = intake_clamp_brief(req.brief)
+    step = req.recommended_next_step if req.recommended_next_step in ("fit", "30", "60") else None
+
+    ip_hash = hashlib.sha256(_guest_ip(request).encode("utf-8")).hexdigest()[:32]
+
+    pool = await _get_booking_pool()
+    if pool is None:
+        logger.warning("[INTAKE] No DB — brief not persisted (dev mode)")
+        return JSONResponse(content={"brief_id": None, "stored": False})
+
+    booking_uuid = None
+    if req.booking_id:
+        try:
+            booking_uuid = uuid.UUID(req.booking_id)
+        except Exception:
+            booking_uuid = None
+
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO intake_briefs (path, brief, client_name, client_email, recommended_next_step, booking_id, source_ip_hash)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                RETURNING id
+                """,
+                path,
+                json.dumps(brief),
+                (req.name or None),
+                (req.email or None),
+                step,
+                booking_uuid,
+                ip_hash,
+            )
+        return JSONResponse(content={"brief_id": str(row["id"]), "stored": True})
+    except Exception as exc:
+        logger.error("[INTAKE] Brief persist failed (non-blocking): %s", exc)
+        return JSONResponse(content={"brief_id": None, "stored": False})
 
 
 @app.post("/api/booking/webhook")
@@ -1749,6 +2277,13 @@ async def booking_webhook(request: Request):
             booking["id"],
         )
 
+    # Link the intake brief (if the checkout carried one) to this booking.
+    await _link_brief_to_booking(
+        metadata.get("intake_brief_id") or None,
+        str(booking["id"]),
+        client_email or booking.get("client_email"),
+    )
+
     # Send Telegram notification (fire-and-forget)
     try:
         await send_booking_notification(
@@ -1756,6 +2291,7 @@ async def booking_webhook(request: Request):
             email=client_email or booking["client_email"],
             session_type=session_type or booking["session_type"],
             slot_start=slot_start_str or str(booking["slot_start"]),
+            notes=booking.get("notes"),
         )
     except Exception as exc:
         logger.error("[BOOKING] Telegram notification failed (non-blocking): %s", exc)
@@ -1781,6 +2317,7 @@ async def booking_webhook(request: Request):
             session_type=session_type or booking["session_type"],
             slot_start=slot_start_str or str(booking["slot_start"]),
             meet_link=meet_link,
+            notes=booking.get("notes"),
         )
     except Exception as exc:
         logger.error("[BOOKING] Confirmation email failed (non-blocking): %s", exc)

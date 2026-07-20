@@ -21,15 +21,24 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 TELEGRAM_API_BASE = "https://api.telegram.org"
 
 
+def _escape_html(text: str) -> str:
+    return (
+        text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    )
+
+
 async def send_booking_notification(
     name: str,
     email: str,
     session_type: str,
     slot_start: str,
+    notes: str | None = None,
 ) -> bool:
     """Send Telegram message via Bot API. Fire-and-forget, errors are logged not raised.
 
-    Uses TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID env vars.
+    Uses TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID env vars. When `notes` are
+    present (e.g. the AI intake brief that rode into the booking), they are
+    included so Yanqing sees the brief on the Telegram ping too.
 
     Returns True if sent, False on error.
     """
@@ -37,11 +46,15 @@ async def send_booking_notification(
         logger.warning("[TELEGRAM] Bot token or chat ID not configured — skipping notification")
         return False
 
+    kind = "Enterprise fit call (free)" if session_type == "fit" else f"{session_type}min session"
     message = (
         "\U0001f5d3 New consulting booking!\n"
-        f"{name} ({email})\n"
-        f"{session_type}min session at {slot_start}"
+        f"{_escape_html(name)} ({_escape_html(email)})\n"
+        f"{kind} at {_escape_html(slot_start)}"
     )
+    if notes and notes.strip():
+        # HTML parse_mode below — escape the untrusted brief text.
+        message += "\n\n<b>Brief / context</b>\n" + _escape_html(notes.strip()[:1500])
 
     url = f"{TELEGRAM_API_BASE}/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
