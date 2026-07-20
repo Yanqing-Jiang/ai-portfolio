@@ -190,12 +190,8 @@ const Layout: React.FC = () => {
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
 
-  // Show hint once on first visit (check localStorage). Skip entirely on
-  // marketing routes so a landing/consult visit doesn't silently consume the
-  // legacy sidebar's one-time hint before the user reaches a project route.
+  // Show hint once on first visit (check localStorage)
   useEffect(() => {
-    const onMarketingRoute = location.pathname === '/' || location.pathname === '/consult';
-    if (onMarketingRoute) return;
     const hasSeenHint = localStorage.getItem('sidebarHintSeen');
     if (!hasSeenHint) {
       // Show immediately on first visit
@@ -208,7 +204,7 @@ const Layout: React.FC = () => {
       }, 3000);
       return () => clearTimeout(timer);
     }
-  }, [location.pathname]);
+  }, []);
 
   // Also dismiss hint on scroll (backup)
   useEffect(() => {
@@ -270,25 +266,18 @@ const Layout: React.FC = () => {
     navigate(targetPath);
   };
 
-  // Marketing routes carry their own top nav (landing refactor Phase 1) — hide
-  // the legacy sidebar, floating toggle, and first-visit hint there.
-  const hideShellChrome = location.pathname === '/' || location.pathname === '/consult';
-
   return (
     <div className="flex h-[100dvh] bg-[#010208] text-white font-sans overflow-hidden">
-      {!hideShellChrome && (
-        <Sidebar
-          isSidebarOpen={isSidebarOpen}
-          projectData={PROJECT_DATA}
-          selectedProject={activeProject}
-          onSelectProject={goProject}
-          onGoHome={goHome}
-        />
-      )}
+      <Sidebar
+        isSidebarOpen={isSidebarOpen}
+        projectData={PROJECT_DATA}
+        selectedProject={activeProject}
+        onSelectProject={goProject}
+        onGoHome={goHome}
+      />
 
       <div className="relative flex-1 flex flex-col min-w-0 transition-all duration-500 ease-in-out">
         {/* Sidebar toggle button */}
-        {!hideShellChrome && (
         <button
           onClick={() => {
             setIsSidebarOpen(!isSidebarOpen);
@@ -305,10 +294,9 @@ const Layout: React.FC = () => {
         >
           {isSidebarOpen ? <ChevronLeftIcon /> : <ChevronRightIcon />}
         </button>
-        )}
 
         {/* Sidebar hint tooltip with premium animated arrow - shows once */}
-        {!hideShellChrome && showSidebarHint && !isSidebarOpen && (
+        {showSidebarHint && !isSidebarOpen && (
           <div className="fixed top-4 left-[64px] z-50 flex items-center gap-4 animate-fade-in pointer-events-none">
             {/* Premium Stylish Arrow */}
             <div className="relative flex items-center animate-bounce-horizontal">
