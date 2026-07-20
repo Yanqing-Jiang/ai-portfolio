@@ -8,7 +8,7 @@ import { Clock, Loader2, CheckCircle2 } from 'lucide-react';
 import { CalendarPicker } from './CalendarPicker';
 import { BookingConfirmation } from './BookingConfirmation';
 import { useAvailableSlots } from './useAvailableSlots';
-import { IntakeChat } from './IntakeChat';
+import { IntakeChat, type Brief } from './IntakeChat';
 import { configService } from '@/services/config';
 import { DEFAULT_OG_IMAGE } from '@/constants/seo';
 
@@ -226,7 +226,7 @@ export const ConsultingPage: React.FC = () => {
 
     // Chat completed: attach the brief, preselect the recommended step, persist
     // the brief (best-effort), and drop into the booking cards + scheduling.
-    const handleBriefReady = (notes: string, recommendedNextStep: string, brief: Record<string, unknown>) => {
+    const handleBriefReady = (notes: string, recommendedNextStep: string, brief: Brief) => {
         setBriefNotes(notes);
         if (recommendedNextStep === 'fit' || recommendedNextStep === '30' || recommendedNextStep === '60') {
             setSelected(recommendedNextStep as Offering);

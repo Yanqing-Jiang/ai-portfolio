@@ -14,7 +14,7 @@ import { configService } from '@/services/config';
 
 type Path = 'business' | 'individual';
 
-interface Brief {
+export interface Brief {
     desired_outcome?: string;
     current_workflow?: string;
     people_and_frequency?: string;
