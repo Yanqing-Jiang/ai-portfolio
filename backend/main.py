@@ -1749,34 +1749,33 @@ async def create_free_consult(req: FreeConsultRequest, request: Request):
                     """
                 )
 
-                # Overlap-aware conflict check (the UNIQUE(slot_start) index only
-                # guards identical starts; a 60-min paid booking can straddle us).
-                overlap = await conn.fetchrow(
-                    """
-                    SELECT 1 FROM bookings
-                    WHERE status IN ('hold', 'confirmed')
-                      AND slot_start < $2
-                      AND slot_end > $1
-                    LIMIT 1
-                    """,
-                    slot_start, slot_end,
-                )
-                if overlap is not None:
-                    raise HTTPException(
-                        status_code=409,
-                        detail="That time is no longer available. Please pick another slot.",
-                    )
-
+                # Atomic overlap-safe insert: the overlap check and the insert
+                # are ONE statement, so there is no app-level read-then-write gap
+                # (session_type is stored schema-valid '30'; free/fit is encoded
+                # by amount_cents = 0 and the 'free_' session id). The partial
+                # UNIQUE(slot_start) index additionally guards identical-start
+                # races. 0 rows inserted => an overlapping hold/confirmed exists.
+                # DEBT: true cross-path overlap safety (a 60-min paid booking
+                # straddling this 30-min slot under concurrent uncommitted writes)
+                # needs a tstzrange GIST exclusion constraint on the bookings
+                # table — not present in the current schema. The paid checkout
+                # path shares this gap. Upgrade when 30/60-min bookings are taken
+                # concurrently at volume or the first real double-book is observed.
                 try:
-                    # session_type is stored schema-valid ('30'); free/fit is
-                    # represented by amount_cents = 0 and the 'free_' session id.
-                    await conn.execute(
+                    insert_status = await conn.execute(
                         """
                         INSERT INTO bookings (
                             id, stripe_session_id, session_type,
                             slot_start, slot_end, client_name, client_email,
                             notes, status, amount_cents
-                        ) VALUES ($1, $2, '30', $3, $4, $5, $6, $7, 'hold', 0)
+                        )
+                        SELECT $1, $2, '30', $3, $4, $5, $6, $7, 'hold', 0
+                        WHERE NOT EXISTS (
+                            SELECT 1 FROM bookings
+                            WHERE status IN ('hold', 'confirmed')
+                              AND slot_start < $4
+                              AND slot_end > $3
+                        )
                         """,
                         uuid.UUID(booking_id),
                         free_session_id,
@@ -1786,10 +1785,17 @@ async def create_free_consult(req: FreeConsultRequest, request: Request):
                         req.email,
                         req.notes,
                     )
-                except HTTPException:
-                    raise
                 except Exception as db_exc:
+                    # Identical-start collision caught by the partial unique index.
                     logger.warning("[BOOKING] Free-consult slot conflict: %s", db_exc)
+                    raise HTTPException(
+                        status_code=409,
+                        detail="That time is no longer available. Please pick another slot.",
+                    )
+
+                # asyncpg returns a command tag like "INSERT 0 1"; "INSERT 0 0"
+                # means the NOT EXISTS guard blocked it — the slot is taken.
+                if insert_status.strip().endswith(" 0"):
                     raise HTTPException(
                         status_code=409,
                         detail="That time is no longer available. Please pick another slot.",

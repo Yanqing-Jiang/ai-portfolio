@@ -233,9 +233,12 @@ async def get_available_slots(target_date: date, session_type: str = "30") -> li
 
     except Exception as exc:
         logger.error("[CALENDAR] Freebusy query failed: %s", exc)
-        # Graceful degradation: return all slots as available rather than failing
-        # The Supabase check in main.py will still filter holds/confirmed bookings
-        busy_ranges = []
+        # Fail closed: when the calendar's busy state is unknown we must NOT
+        # assume every slot is free — that would let a booking land on a real
+        # (calendar-busy) time. Surface the error so callers reject/skip rather
+        # than over-offer. Both callers (GET /api/booking/slots and the free
+        # booking's slot revalidation) already translate this into a 5xx/409.
+        raise RuntimeError("calendar_freebusy_unavailable") from exc
 
     # Filter out slots that overlap with busy periods (including buffer)
     free_slot_indices: list[int] = []

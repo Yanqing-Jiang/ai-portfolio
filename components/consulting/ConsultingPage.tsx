@@ -103,6 +103,9 @@ export const ConsultingPage: React.FC = () => {
     // Buyer intent from landing (?path=&offer=), preserved into notes/preselect.
     const [pathIntent, setPathIntent] = useState<string | null>(null);
     const [offerIntent, setOfferIntent] = useState<string | null>(null);
+    // Generic (param-less) entry opens with the business-vs-personal fork
+    // before the priced cards. Param'd visits skip it and preselect directly.
+    const [showFork, setShowFork] = useState(true);
 
     // Scheduling
     const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -123,9 +126,9 @@ export const ConsultingPage: React.FC = () => {
         if (offer) setOfferIntent(offer);
         // Preselect the offering. Offer intent is finer-grained than path:
         // pipeline/delivery-team are enterprise (free fit call); personal-agent
-        // and website are individual (working session).
-        if (offer === 'personal-agent' || offer === 'website' || path === 'individual') setSelected('30');
-        else if (offer === 'pipeline' || offer === 'delivery-team' || path === 'enterprise') setSelected('fit');
+        // and website are individual (working session). Any of these skip the fork.
+        if (offer === 'personal-agent' || offer === 'website' || path === 'individual') { setSelected('30'); setShowFork(false); }
+        else if (offer === 'pipeline' || offer === 'delivery-team' || path === 'enterprise') { setSelected('fit'); setShowFork(false); }
         const context = params.get('context');
         if (context === 'invoice-reconciliation') {
             setImprove('An invoice reconciliation / AP workflow similar to the case study.');
@@ -272,7 +275,53 @@ export const ConsultingPage: React.FC = () => {
                 <p className="mt-4 text-[13px] text-[#A8A096]">No sign-in. Prices and availability are visible.</p>
             </section>
 
+            {/* Generic entry: business-workflow vs personal-system fork */}
+            {showFork && (
+                <section className="mx-auto max-w-[1080px] px-6 pb-4">
+                    <p className="mb-6 text-[15px] font-semibold text-[#F1EADF]">What are you trying to improve?</p>
+                    <div className="grid gap-5 sm:grid-cols-2">
+                        {[
+                            {
+                                key: 'enterprise', pick: 'fit' as Offering,
+                                label: 'A business workflow',
+                                blurb: 'Remove expensive work from an operating process and put a metric on it. Starts with a free fit call.',
+                            },
+                            {
+                                key: 'individual', pick: '30' as Offering,
+                                label: 'My personal system',
+                                blurb: 'A personal agent that remembers you, or a zero-maintenance site. Starts with a working session.',
+                            },
+                        ].map((f) => (
+                            <button
+                                key={f.key}
+                                onClick={() => {
+                                    setPathIntent(f.key);
+                                    setSelected(f.pick);
+                                    setSelectedTime(null);
+                                    setFreeConfirmed(null);
+                                    setShowFork(false);
+                                }}
+                                className="text-left rounded-[6px] border border-[#37332E] bg-[#191816]/40 p-7 transition-colors hover:border-[#F04A32]"
+                            >
+                                <h2 className="text-[24px] font-bold text-[#F1EADF]">{f.label}</h2>
+                                <p className="mt-3 text-[15px] leading-[1.5] text-[#A8A096]">{f.blurb}</p>
+                                <span className="mt-5 inline-flex items-center gap-2 text-[14px] font-semibold text-[#F1EADF]">
+                                    Choose <span className="text-[#F04A32]">→</span>
+                                </span>
+                            </button>
+                        ))}
+                    </div>
+                    <p className="mt-6 text-[14px] text-[#A8A096]">
+                        Not sure?{' '}
+                        <button onClick={() => setShowFork(false)} className="font-semibold text-[#F1EADF] underline decoration-[#F04A32] decoration-2 underline-offset-4">
+                            See all three calls and prices →
+                        </button>
+                    </p>
+                </section>
+            )}
+
             {/* Offering cards */}
+            {!showFork && (
             <section className="mx-auto max-w-[1080px] px-6 pb-4">
                 {offerLabel && (
                     <p className="mb-6 inline-block rounded-[4px] border border-[#37332E] bg-[#191816] px-4 py-2 text-[13px] text-[#A8A096]">
@@ -317,6 +366,7 @@ export const ConsultingPage: React.FC = () => {
                 </div>
                 <p className="mt-5 text-[14px] text-[#A8A096]">Builds receive a fixed proposal after scoping.</p>
             </section>
+            )}
 
             {/* Context form + scheduling */}
             <AnimatePresence>

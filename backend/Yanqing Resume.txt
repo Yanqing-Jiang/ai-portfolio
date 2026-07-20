@@ -1,8 +1,8 @@
 # Yanqing Jiang
 
-Current Location: Seattle, WA  
-Email: jiangyanqing91@gmail.com  
-Cell: (270) 978-9240  
+Current Location: Seattle, WA
+Email: jiangyanqing91@gmail.com
+Cell: (270) 978-9240
 AI Portfolio Website: yanqing.app
 Pre-AI website: www.jiangyanqing.com
 
@@ -10,9 +10,9 @@ Pre-AI website: www.jiangyanqing.com
 
 ## Work Experience
 
-### **Procter & Gamble**  
-**Advance Analytics Senior Manager**  
-*Amazon Sales Team, Seattle, WA*  
+### **Procter & Gamble**
+**Advance Analytics Senior Manager**
+*Amazon Sales Team, Seattle, WA*
 **Jul 2024 – Present**
 
 - Lead development of analytics products for the Highest Growth team in P&G
@@ -21,33 +21,33 @@ Pre-AI website: www.jiangyanqing.com
 
 ---
 
-### **Procter & Gamble**  
-**Analytics & Insight Senior Manager**  
-*Walgreens Sales Team, Chicago, IL*  
+### **Procter & Gamble**
+**Analytics & Insight Senior Manager**
+*Walgreens Sales Team, Chicago, IL*
 **Apr 2022 – Jun 2024**
 
 - Built an end-to-end machine learning pipeline that generated $150M+ incremental sales under a year
 - Developed full-stack GenAI website saving 1,000+ hours annually.
-- Tech lead in a multi-function team project that out-performed a multimillion-dollar AI company on store level forecasting algorithm. Added $70M incremental sales in a 3 month 
-- Lead development and alignment of enterprise BI & Analytics products, including terabyte level data management, cloud-base data platforms, digital product development cycles 
+- Tech lead in a multi-function team project that out-performed a multimillion-dollar AI company on store level forecasting algorithm. Added $70M incremental sales in a 3 month
+- Lead development and alignment of enterprise BI & Analytics products, including terabyte level data management, cloud-base data platforms, digital product development cycles
 - Lead digital commerce analytics transformation, driving sales team’s adoption of digital strategies and revolutionizing BI platform with automation, actionable insights and opportunity detection. Reversed digital growth rate from -8% to 20% under a year
 
 ---
 
-### **Archer Daniels Midland**  
-**Data Analytics Engineer**  
-*Global Procurement & Supply Chain, Decatur, IL*  
+### **Archer Daniels Midland**
+**Data Analytics Engineer**
+*Global Procurement & Supply Chain, Decatur, IL*
 **Jan 2020 – Mar 2022**
 
-- Built an end-to-end project management application for global teams with 400+ members, cut communication time by more than 80%, and saved $300K+ yearly budget 
+- Built an end-to-end project management application for global teams with 400+ members, cut communication time by more than 80%, and saved $300K+ yearly budget
 - Administered MS SQL Server database with 100+ large-scale tables and weekly ETL pipelines.
 - Managed enterprise data visualization and analytics solutions in Power Platform (Power BI premium, PowerApps, Power Automate…etc)
 
 ---
 
-### **U.S. Army**  
-**Supply Specialist**  
-*2-35 Infantry Battalion, Schofield Barracks, HI*  
+### **U.S. Army**
+**Supply Specialist**
+*2-35 Infantry Battalion, Schofield Barracks, HI*
 **Nov 2015 – Jan 2020**
 
 - First E4 soldier to serve as GTC Program Manager and DTS Approving Official.
@@ -55,9 +55,9 @@ Pre-AI website: www.jiangyanqing.com
 
 ---
 
-### ****  
-**Ecommerce Retailer**  
-*Alpha J Store, Inc. – City of Industry, CA*  
+### ****
+**Ecommerce Retailer**
+*Alpha J Store, Inc. – City of Industry, CA*
 **Jan 2014 – Nov 2015**
 
 - Built an E-commerce business from $0 to $1.2M revenue with 1000+ SKUs in Amazon, eBay, and Etsy
@@ -99,17 +99,17 @@ Pre-AI website: www.jiangyanqing.com
 * Performance tuning/optimization, troubleshooting, and production support
 ## Education
 
-- **The Ohio State University**, Max M. Fisher College of Business  
+- **The Ohio State University**, Max M. Fisher College of Business
   *B.S. in Corporate Finance* (Jan 2012 – Dec 2013)
 
-- **Murray State University**  
+- **Murray State University**
   *(Jan 2010 – Dec 2011)*
 
 ---
 
 ## 📜 Certificates
 
-- **Machine Learning Specialization** – DeepLearning.AI  
-- **Data Analyst Professional Certificate** – IBM  
-- **Data Science Professional Certificate** – IBM  
-- **SQL Server for Database Administrators** – DataCamp  
+- **Machine Learning Specialization** – DeepLearning.AI
+- **Data Analyst Professional Certificate** – IBM
+- **Data Science Professional Certificate** – IBM
+- **SQL Server for Database Administrators** – DataCamp
