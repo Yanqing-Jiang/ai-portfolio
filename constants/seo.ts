@@ -1,7 +1,18 @@
 export const SITE_BASE_URL = 'https://yanqing.app';
-export const SITE_NAME = 'Yanqing Jiang AI & ML Portfolio';
+export const SITE_NAME = 'Yanqing Jiang';
 export const DEFAULT_OG_IMAGE = 'https://yanqinghot.blob.core.windows.net/public-access/OG-Page.png';
-export const DEFAULT_THEME_COLOR = '#111827';
+export const DEFAULT_THEME_COLOR = '#12110F';
+
+// Visible commercial-front-door navigation (mirrors the on-page nav). Emitted
+// as SiteNavigationElement so structured nav matches what users see — the old
+// project chronology stays in WebSite.hasPart, not in navigation.
+export const LANDING_NAV = [
+  { name: 'What I build', url: `${SITE_BASE_URL}/#build` },
+  { name: 'Proof', url: `${SITE_BASE_URL}/#proof` },
+  { name: 'Process', url: `${SITE_BASE_URL}/#process` },
+  { name: 'Writing', url: `${SITE_BASE_URL}/blog` },
+  { name: 'Start a project', url: `${SITE_BASE_URL}/consult` },
+];
 export const DEFAULT_TWITTER_HANDLE = '@yanqing_j';
 
 export const DEFAULT_SAME_AS = [

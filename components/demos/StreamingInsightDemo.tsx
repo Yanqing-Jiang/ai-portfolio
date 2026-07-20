@@ -404,7 +404,7 @@ export const HolographicTerminal: React.FC = () => {
                     },
                     {
                         icon: <Mail className="w-4 h-4" />,
-                        href: 'mailto:jiangyanqing90@gmail.com',
+                        href: 'mailto:jiangyanqing91@gmail.com',
                         color: '#94a3b8',
                         label: 'Email'
                     }

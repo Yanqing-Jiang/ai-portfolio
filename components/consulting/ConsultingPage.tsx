@@ -79,6 +79,16 @@ const FAQ = [
 
 const slotSessionType = (offering: Offering): '30' | '60' => (offering === '60' ? '60' : '30');
 
+// Buyer intent carried from the landing offer CTAs (?offer=...).
+const OFFER_LABELS: Record<string, string> = {
+    pipeline: 'Enterprise agentic pipelines',
+    'delivery-team': 'Embedded AI delivery team',
+    'personal-agent': 'Personal agent OS',
+    website: 'Zero-maintenance personal website',
+};
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 export const ConsultingPage: React.FC = () => {
     const [selected, setSelected] = useState<Offering | null>(null);
 
@@ -89,6 +99,10 @@ export const ConsultingPage: React.FC = () => {
     const [name, setName] = useState('');
     const [email, setEmail] = useState('');
     const [company, setCompany] = useState('');
+
+    // Buyer intent from landing (?path=&offer=), preserved into notes/preselect.
+    const [pathIntent, setPathIntent] = useState<string | null>(null);
+    const [offerIntent, setOfferIntent] = useState<string | null>(null);
 
     // Scheduling
     const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -104,8 +118,14 @@ export const ConsultingPage: React.FC = () => {
         if (typeof window === 'undefined') return;
         const params = new URLSearchParams(window.location.search);
         const path = params.get('path');
-        if (path === 'enterprise') setSelected('fit');
-        else if (path === 'individual') setSelected('30');
+        const offer = params.get('offer');
+        if (path) setPathIntent(path);
+        if (offer) setOfferIntent(offer);
+        // Preselect the offering. Offer intent is finer-grained than path:
+        // pipeline/delivery-team are enterprise (free fit call); personal-agent
+        // and website are individual (working session).
+        if (offer === 'personal-agent' || offer === 'website' || path === 'individual') setSelected('30');
+        else if (offer === 'pipeline' || offer === 'delivery-team' || path === 'enterprise') setSelected('fit');
         const context = params.get('context');
         if (context === 'invoice-reconciliation') {
             setImprove('An invoice reconciliation / AP workflow similar to the case study.');
@@ -117,12 +137,14 @@ export const ConsultingPage: React.FC = () => {
     }, []);
 
     const activeOffering = OFFERINGS.find((o) => o.id === selected) ?? null;
-    const { slots, loading: slotsLoading } = useAvailableSlots(
+    const offerLabel = offerIntent ? OFFER_LABELS[offerIntent] ?? null : null;
+    const { slots, loading: slotsLoading, error: slotsError } = useAvailableSlots(
         selectedDate,
         selected ? slotSessionType(selected) : '30'
     );
 
-    const contextValid = improve.trim() && today.trim() && useful.trim() && name.trim() && email.trim();
+    const emailValid = EMAIL_RE.test(email.trim());
+    const contextValid = !!(improve.trim() && today.trim() && useful.trim() && name.trim() && emailValid);
     const canSubmit = !!(selected && contextValid && selectedTime);
 
     const formatSlotTime = (iso: string) => {
@@ -139,7 +161,9 @@ export const ConsultingPage: React.FC = () => {
 
     const buildNotes = () => {
         const lines = [
-            `Path: ${activeOffering?.label ?? selected}`,
+            `Call: ${activeOffering?.label ?? selected}`,
+            pathIntent ? `Buyer path: ${pathIntent}` : null,
+            offerLabel ? `Interested in: ${offerLabel}` : (offerIntent ? `Interested in: ${offerIntent}` : null),
             company.trim() ? `Company: ${company.trim()}` : null,
             '',
             `What are you trying to improve?\n${improve.trim()}`,
@@ -250,6 +274,11 @@ export const ConsultingPage: React.FC = () => {
 
             {/* Offering cards */}
             <section className="mx-auto max-w-[1080px] px-6 pb-4">
+                {offerLabel && (
+                    <p className="mb-6 inline-block rounded-[4px] border border-[#37332E] bg-[#191816] px-4 py-2 text-[13px] text-[#A8A096]">
+                        You're here about <span className="font-semibold text-[#F1EADF]">{offerLabel}</span>. Pick a call below — I'll have the context.
+                    </p>
+                )}
                 <div className="grid gap-5 sm:grid-cols-3">
                     {OFFERINGS.map((o) => {
                         const active = selected === o.id;
@@ -355,6 +384,8 @@ export const ConsultingPage: React.FC = () => {
                                                 <div className="flex items-center gap-2 py-3 text-[#A8A096]">
                                                     <Loader2 className="h-4 w-4 animate-spin" /> Loading times…
                                                 </div>
+                                            ) : slotsError ? (
+                                                <p className="py-3 text-[#F04A32]">Couldn't load availability. Please try again in a moment.</p>
                                             ) : slots.length === 0 ? (
                                                 <p className="py-3 text-[#A8A096]">No available times for this date.</p>
                                             ) : (

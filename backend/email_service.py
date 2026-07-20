@@ -162,10 +162,19 @@ def _build_email_html(
     session_type: str,
     slot_start_iso: str,
     meet_link: Optional[str],
+    notes: Optional[str] = None,
 ) -> str:
-    """Return an HTML email body with booking details, Meet link, and
-    reschedule/cancel instructions."""
+    """Return an HTML email body with booking details, Meet link, the context
+    the client shared, and reschedule/cancel instructions."""
     duration = "60 minutes" if session_type == "60" else "30 minutes"
+
+    context_block = ""
+    if notes and notes.strip():
+        import html as _html
+        safe_notes = _html.escape(notes.strip()).replace("\n", "<br>")
+        context_block = f"""
+          <p style="margin:24px 0 6px 0;font-family:Arial,sans-serif;font-size:14px;color:#202124;"><strong>What you shared</strong></p>
+          <div style="font-family:Arial,sans-serif;font-size:13px;color:#5f6368;line-height:1.5;background:#f8f9fa;border-radius:6px;padding:12px 16px;">{safe_notes}</div>"""
 
     # Format the slot start time for display (best-effort, tz-aware)
     try:
@@ -223,6 +232,7 @@ def _build_email_html(
             </tr>
             {meet_block}
           </table>
+          {context_block}
           <p style="margin:24px 0 8px 0;font-family:Arial,sans-serif;font-size:14px;color:#202124;line-height:1.5;">
             <strong>Need to reschedule or cancel?</strong><br>
             Just reply to this email and I'll take care of it. No need to explain — simply let me know the new time you'd prefer, or that you'd like to cancel.
@@ -257,6 +267,7 @@ async def send_booking_confirmation_email(
     session_type: str,
     slot_start: str,
     meet_link: Optional[str] = None,
+    notes: Optional[str] = None,
 ) -> bool:
     """Send a booking confirmation email via Gmail API.
 
@@ -290,6 +301,7 @@ async def send_booking_confirmation_email(
             session_type=session_type,
             slot_start_iso=slot_start,
             meet_link=meet_link,
+            notes=notes,
         )
 
         # Build the RFC822 message — MIMEMultipart("alternative") for HTML + plain

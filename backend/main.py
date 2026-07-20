@@ -1643,19 +1643,80 @@ async def create_booking_checkout(req: BookingCheckoutRequest):
     return JSONResponse(content={"url": session.url})
 
 
+# Basic in-process anti-automation for the de-walled free endpoint. Keyed by
+# client IP, sliding window. Not distributed (single-process backend), but it
+# stops a naive loop from spraying calendar invites + dual-admin email.
+# DEBT: in-memory only — resets on restart and is per-process. Upgrade to the
+# Redis rate_limiter when it grows an unauthenticated per-endpoint limiter.
+_FREE_CONSULT_HITS: dict[str, list[float]] = {}
+_FREE_CONSULT_WINDOW_S = 900  # 15 minutes
+_FREE_CONSULT_MAX = 6
+
+
+def _check_free_consult_rate(request: Request) -> None:
+    ip = request.client.host if request.client else "unknown"
+    now = time.time()
+    hits = [t for t in _FREE_CONSULT_HITS.get(ip, []) if now - t < _FREE_CONSULT_WINDOW_S]
+    if len(hits) >= _FREE_CONSULT_MAX:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many booking attempts. Please wait a few minutes and try again.",
+        )
+    hits.append(now)
+    _FREE_CONSULT_HITS[ip] = hits
+
+
+async def _assert_slot_offered(slot_start: "_DateTime") -> None:
+    """Revalidate `slot_start` against the SAME availability source as
+    GET /api/booking/slots (office hours, 30-min boundaries, 90-day horizon,
+    Google Calendar freebusy). Raises HTTPException if the instant is not a
+    currently-offered 30-min slot start."""
+    from datetime import date as _date_type
+    from calendar_service import BOOKING_TIMEZONE
+    from zoneinfo import ZoneInfo
+
+    tz = ZoneInfo(BOOKING_TIMEZONE)
+    local_date = slot_start.astimezone(tz).date()
+
+    today = _date_type.today()
+    if local_date < today:
+        raise HTTPException(status_code=400, detail="Cannot book a slot in the past.")
+    if (local_date - today).days > 90:
+        raise HTTPException(status_code=400, detail="Cannot book more than 90 days in advance.")
+
+    try:
+        offered = await get_available_slots(local_date, "30")
+    except Exception as exc:
+        logger.error("[BOOKING] Free-consult availability lookup failed: %s", exc)
+        raise HTTPException(status_code=503, detail="Availability is temporarily unavailable. Please try again.")
+
+    for s in offered:
+        try:
+            if _DateTime.fromisoformat(s["start"]) == slot_start:
+                return
+        except (ValueError, TypeError, KeyError):
+            continue
+    raise HTTPException(
+        status_code=409,
+        detail="That time is no longer available. Please pick another slot.",
+    )
+
+
 @app.post("/api/booking/free")
-async def create_free_consult(req: FreeConsultRequest):
+async def create_free_consult(req: FreeConsultRequest, request: Request):
     """Book a FREE enterprise fit call (no payment).
 
-    De-walled direct booking: validates the slot, inserts a confirmed row,
-    creates the calendar event, and fires the same Telegram / admin-alert /
-    confirmation-email notifications as the paid flow. session_type "fit"
-    is treated as a 30-minute call. Intake context (the required form) rides
-    in `notes` and is copied to both admin recipients (D5).
+    De-walled direct booking. The slot is server-side revalidated against the
+    same availability source as the paid flow, rate-limited per IP, and only
+    confirmed once the Google Calendar event is created — a calendar failure
+    frees the slot and surfaces an error (never a false "confirmed"). Stored
+    as a schema-valid 30-min booking with amount 0; the free/fit framing lives
+    in notes + the admin alert. Intake context rides in `notes` and is copied
+    to both admin recipients (D5).
     """
-    session_type = "fit"
+    _check_free_consult_rate(request)
 
-    # Parse and validate slot_start
+    # Parse and validate slot_start (tz-aware, future)
     try:
         slot_start = _DateTime.fromisoformat(req.slot_start)
         if slot_start.tzinfo is None:
@@ -1665,6 +1726,9 @@ async def create_free_consult(req: FreeConsultRequest):
 
     if slot_start <= _DateTime.now(timezone.utc):
         raise HTTPException(status_code=400, detail="Cannot book a slot in the past.")
+
+    # Enforce horizon / office hours / boundaries / calendar availability
+    await _assert_slot_offered(slot_start)
 
     from datetime import timedelta
     slot_end = slot_start + timedelta(minutes=30)
@@ -1684,29 +1748,51 @@ async def create_free_consult(req: FreeConsultRequest):
                       AND created_at < NOW() - INTERVAL '30 minutes'
                     """
                 )
+
+                # Overlap-aware conflict check (the UNIQUE(slot_start) index only
+                # guards identical starts; a 60-min paid booking can straddle us).
+                overlap = await conn.fetchrow(
+                    """
+                    SELECT 1 FROM bookings
+                    WHERE status IN ('hold', 'confirmed')
+                      AND slot_start < $2
+                      AND slot_end > $1
+                    LIMIT 1
+                    """,
+                    slot_start, slot_end,
+                )
+                if overlap is not None:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="That time is no longer available. Please pick another slot.",
+                    )
+
                 try:
+                    # session_type is stored schema-valid ('30'); free/fit is
+                    # represented by amount_cents = 0 and the 'free_' session id.
                     await conn.execute(
                         """
                         INSERT INTO bookings (
                             id, stripe_session_id, session_type,
                             slot_start, slot_end, client_name, client_email,
                             notes, status, amount_cents
-                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'hold', 0)
+                        ) VALUES ($1, $2, '30', $3, $4, $5, $6, $7, 'hold', 0)
                         """,
                         uuid.UUID(booking_id),
                         free_session_id,
-                        session_type,
                         slot_start,
                         slot_end,
                         req.name,
                         req.email,
                         req.notes,
                     )
+                except HTTPException:
+                    raise
                 except Exception as db_exc:
                     logger.warning("[BOOKING] Free-consult slot conflict: %s", db_exc)
                     raise HTTPException(
                         status_code=409,
-                        detail="This time slot is no longer available. Please choose another.",
+                        detail="That time is no longer available. Please pick another slot.",
                     )
         except HTTPException:
             raise
@@ -1716,8 +1802,8 @@ async def create_free_consult(req: FreeConsultRequest):
     else:
         logger.warning("[BOOKING] No database — proceeding without hold (dev mode)")
 
-    # Confirm the booking directly (no payment step). Create calendar event.
-    new_status = "confirmed"
+    # Create the calendar event. Only a successful event confirms the booking;
+    # a failure frees the slot and returns an error (B3 — never a false success).
     calendar_event_id = None
     meet_link = None
     try:
@@ -1732,7 +1818,19 @@ async def create_free_consult(req: FreeConsultRequest):
         meet_link = cal_result.get("meet_link")
     except Exception as exc:
         logger.error("[BOOKING] Free-consult calendar event failed: %s", exc)
-        new_status = "calendar_failed"
+        if pool is not None:
+            try:
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        "UPDATE bookings SET status = 'expired', updated_at = NOW() WHERE id = $1",
+                        uuid.UUID(booking_id),
+                    )
+            except Exception:
+                pass
+        raise HTTPException(
+            status_code=502,
+            detail="We couldn't confirm that time on the calendar. Please pick another slot — you have not been booked.",
+        )
 
     if pool is not None:
         try:
@@ -1740,10 +1838,9 @@ async def create_free_consult(req: FreeConsultRequest):
                 await conn.execute(
                     """
                     UPDATE bookings
-                    SET status = $1, calendar_event_id = $2, meet_link = $3, updated_at = NOW()
-                    WHERE id = $4
+                    SET status = 'confirmed', calendar_event_id = $1, meet_link = $2, updated_at = NOW()
+                    WHERE id = $3
                     """,
-                    new_status,
                     calendar_event_id,
                     meet_link,
                     uuid.UUID(booking_id),
@@ -1751,11 +1848,12 @@ async def create_free_consult(req: FreeConsultRequest):
         except Exception as exc:
             logger.error("[BOOKING] Free-consult status update failed: %s", exc)
 
-    # Fire-and-forget notifications (same as paid flow).
+    # Confirmed — fire notifications (session_type "fit" is a display-only label
+    # for the admin alert; the DB row stays '30').
     try:
         await send_booking_notification(
             name=req.name, email=req.email,
-            session_type=session_type, slot_start=req.slot_start,
+            session_type="fit", slot_start=req.slot_start,
         )
     except Exception as exc:
         logger.error("[BOOKING] Telegram notification failed (non-blocking): %s", exc)
@@ -1763,7 +1861,7 @@ async def create_free_consult(req: FreeConsultRequest):
     try:
         await send_admin_booking_alert(
             name=req.name, email=req.email,
-            session_type=session_type, slot_start=req.slot_start,
+            session_type="fit", slot_start=req.slot_start,
             notes=req.notes, meet_link=meet_link,
         )
     except Exception as exc:
@@ -1773,13 +1871,14 @@ async def create_free_consult(req: FreeConsultRequest):
         await send_booking_confirmation_email(
             name=req.name, email=req.email,
             session_type="30", slot_start=req.slot_start, meet_link=meet_link,
+            notes=req.notes,
         )
     except Exception as exc:
         logger.error("[BOOKING] Confirmation email failed (non-blocking): %s", exc)
 
     return JSONResponse(content={
         "id": booking_id,
-        "status": new_status,
+        "status": "confirmed",
         "meet_link": meet_link,
         "slot_start": req.slot_start,
     })
@@ -1932,6 +2031,7 @@ async def booking_webhook(request: Request):
             session_type=session_type or booking["session_type"],
             slot_start=slot_start_str or str(booking["slot_start"]),
             meet_link=meet_link,
+            notes=booking.get("notes"),
         )
     except Exception as exc:
         logger.error("[BOOKING] Confirmation email failed (non-blocking): %s", exc)

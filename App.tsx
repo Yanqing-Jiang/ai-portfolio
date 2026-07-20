@@ -190,8 +190,12 @@ const Layout: React.FC = () => {
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
 
-  // Show hint once on first visit (check localStorage)
+  // Show hint once on first visit (check localStorage). Skip entirely on
+  // marketing routes so a landing/consult visit doesn't silently consume the
+  // legacy sidebar's one-time hint before the user reaches a project route.
   useEffect(() => {
+    const onMarketingRoute = location.pathname === '/' || location.pathname === '/consult';
+    if (onMarketingRoute) return;
     const hasSeenHint = localStorage.getItem('sidebarHintSeen');
     if (!hasSeenHint) {
       // Show immediately on first visit
@@ -204,7 +208,7 @@ const Layout: React.FC = () => {
       }, 3000);
       return () => clearTimeout(timer);
     }
-  }, []);
+  }, [location.pathname]);
 
   // Also dismiss hint on scroll (backup)
   useEffect(() => {

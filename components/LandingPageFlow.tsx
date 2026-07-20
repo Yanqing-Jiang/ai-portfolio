@@ -1,6 +1,6 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { motion, useReducedMotion } from 'framer-motion';
+import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 // @ts-ignore
 import { Helmet } from 'react-helmet-async';
 import type { Project, ProjectYear } from '../types';
@@ -8,10 +8,11 @@ import {
     DEFAULT_OG_IMAGE,
     DEFAULT_THEME_COLOR,
     DEFAULT_TWITTER_HANDLE,
+    LANDING_NAV,
     LANDING_SEO,
     SITE_NAME,
 } from '../constants/seo';
-import { buildLandingSchemas, buildPersonSchema, toNavigationFromProjects } from '../constants/structuredData';
+import { buildLandingSchemas, buildPersonSchema } from '../constants/structuredData';
 
 /*
  * Landing refactor Phase 1 — the commercial front door.
@@ -63,7 +64,7 @@ const LinkCTA: React.FC<{ to: string; children: React.ReactNode; onClick?: () =>
     <Link
         to={to}
         onClick={onClick}
-        className="group inline-flex items-center gap-2 text-[15px] font-semibold text-[#F1EADF] transition-colors hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#F04A32]"
+        className="group inline-flex min-h-[48px] items-center gap-2 py-2 text-[15px] font-semibold text-[#F1EADF] transition-colors hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#F04A32]"
     >
         {children}
         <span className="text-[#F04A32] transition-transform duration-200 group-hover:translate-x-1">→</span>
@@ -80,14 +81,16 @@ interface LandingPageFlowProps {
 }
 
 const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelectProject }) => {
+    const [menuOpen, setMenuOpen] = useState(false);
     const allProjects = useMemo(
         () => projectData.filter((g) => !g.hiddenOnLanding).flatMap((y) => y.projects),
         [projectData]
     );
-    const navigationLinks = useMemo(() => toNavigationFromProjects(allProjects), [allProjects]);
+    // SiteNavigation schema mirrors the visible commercial nav, not the legacy
+    // project chronology (which stays in WebSite.hasPart via buildWebsiteSchema).
     const landingSchemas = useMemo(
-        () => buildLandingSchemas(allProjects, navigationLinks),
-        [allProjects, navigationLinks]
+        () => buildLandingSchemas(allProjects, LANDING_NAV),
+        [allProjects]
     );
     const personSchema = useMemo(() => buildPersonSchema(), []);
     const landingKeywords = useMemo(() => LANDING_SEO.keywords.join(', '), []);
@@ -132,6 +135,27 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                 ))}
             </Helmet>
 
+            {/* Hero clip-reveal — text is always in the DOM (crawlable, no-JS
+                visible); the animation only runs when motion is allowed. */}
+            <style>{`
+                .hero-h1 .hero-line { display: block; }
+                @media (prefers-reduced-motion: no-preference) {
+                    .hero-h1 .hero-line { overflow: hidden; padding-top: 0.12em; margin-top: -0.12em; }
+                    .hero-h1 .hero-line-inner {
+                        display: inline-block;
+                        animation: heroClipReveal 800ms cubic-bezier(0.22, 1, 0.36, 1) both;
+                    }
+                    .hero-h1 .hero-line:nth-child(2) .hero-line-inner { animation-delay: 120ms; }
+                    .hero-h1 .hero-period {
+                        display: inline-block;
+                        animation: heroPeriodIn 320ms ease both;
+                        animation-delay: 820ms;
+                    }
+                    @keyframes heroClipReveal { from { transform: translateY(105%); } to { transform: translateY(0); } }
+                    @keyframes heroPeriodIn { from { opacity: 0; } to { opacity: 1; } }
+                }
+            `}</style>
+
             {/* ── Section 0 — Nav ─────────────────────────────────────── */}
             <header className="sticky top-0 z-50 border-b border-[#37332E] bg-[#12110F]/90 backdrop-blur-md">
                 <nav className="mx-auto flex h-16 max-w-[1280px] items-center justify-between px-6 lg:px-10">
@@ -144,21 +168,70 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                         <a href="#process" className="text-[14px] text-[#A8A096] transition-colors hover:text-[#F1EADF]">Process</a>
                         <Link to="/blog" className="text-[14px] text-[#A8A096] transition-colors hover:text-[#F1EADF]">Writing</Link>
                     </div>
-                    <Link
-                        to="/consult"
-                        className="rounded-[4px] bg-[#F04A32] px-4 py-2 text-[13px] font-semibold text-[#12110F] transition-colors hover:bg-[#D63B27]"
-                    >
-                        Start a project
-                    </Link>
+                    <div className="flex items-center gap-3">
+                        <Link
+                            to="/consult"
+                            className="rounded-[4px] bg-[#F04A32] px-4 py-2 text-[13px] font-semibold text-[#12110F] transition-colors hover:bg-[#D63B27]"
+                        >
+                            Start a project
+                        </Link>
+                        <button
+                            type="button"
+                            onClick={() => setMenuOpen(true)}
+                            aria-label="Open menu"
+                            aria-expanded={menuOpen}
+                            className="flex min-h-[44px] min-w-[44px] items-center justify-center text-[14px] font-semibold text-[#F1EADF] md:hidden"
+                        >
+                            Menu
+                        </button>
+                    </div>
                 </nav>
             </header>
+
+            {/* Mobile menu sheet */}
+            <AnimatePresence>
+                {menuOpen && (
+                    <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="fixed inset-0 z-[60] bg-[#12110F] px-6 py-6 md:hidden"
+                    >
+                        <div className="flex h-16 items-center justify-between">
+                            <span className="text-[15px] font-bold text-[#F1EADF]">Yanqing Jiang</span>
+                            <button
+                                type="button"
+                                onClick={() => setMenuOpen(false)}
+                                aria-label="Close menu"
+                                className="flex min-h-[44px] min-w-[44px] items-center justify-center text-[14px] font-semibold text-[#F1EADF]"
+                            >
+                                Close
+                            </button>
+                        </div>
+                        <div className="mt-8 flex flex-col gap-6">
+                            <a href="#build" onClick={() => setMenuOpen(false)} className="text-[22px] font-semibold text-[#F1EADF]">What I build</a>
+                            <a href="#proof" onClick={() => setMenuOpen(false)} className="text-[22px] font-semibold text-[#F1EADF]">Proof</a>
+                            <a href="#process" onClick={() => setMenuOpen(false)} className="text-[22px] font-semibold text-[#F1EADF]">Process</a>
+                            <Link to="/blog" onClick={() => setMenuOpen(false)} className="text-[22px] font-semibold text-[#F1EADF]">Writing</Link>
+                            <Link
+                                to="/consult"
+                                onClick={() => setMenuOpen(false)}
+                                className="mt-4 inline-flex min-h-[48px] items-center justify-center rounded-[4px] bg-[#F04A32] px-6 text-[16px] font-semibold text-[#12110F]"
+                            >
+                                Start a project
+                            </Link>
+                        </div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
 
             <main id="top">
                 {/* ── Section 1 — Hero + proof rail ───────────────────── */}
                 <section className="mx-auto max-w-[1280px] px-6 pt-20 pb-24 sm:pt-28 lg:px-10 lg:pt-32 lg:pb-32">
                     <Eyebrow>Yanqing Jiang · Advanced Analytics at P&amp;G</Eyebrow>
-                    <h1 className="mt-8 font-black leading-[0.86] tracking-[-0.06em] text-[#F1EADF]" style={{ fontSize: 'clamp(52px, 12vw, 190px)' }}>
-                        AI agent<br />system builder<span className="text-[#F04A32]">.</span>
+                    <h1 className="hero-h1 mt-8 font-black leading-[0.86] tracking-[-0.06em] text-[#F1EADF]" style={{ fontSize: 'clamp(52px, 12vw, 190px)' }}>
+                        <span className="hero-line"><span className="hero-line-inner">AI agent</span></span>
+                        <span className="hero-line"><span className="hero-line-inner">system builder<span className="hero-period text-[#F04A32]">.</span></span></span>
                     </h1>
                     <div className="mt-10 grid gap-10 lg:grid-cols-[1.4fr_1fr] lg:items-end">
                         <p className="max-w-[46ch] text-[18px] leading-[1.5] text-[#A8A096] sm:text-[20px]">
@@ -174,7 +247,7 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
 
                     {/* Proof rail */}
                     <div className="mt-16 border-t border-[#37332E] pt-8">
-                        <dl className="grid grid-cols-1 gap-8 sm:grid-cols-3" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                        <dl className="grid grid-cols-2 gap-8 sm:grid-cols-3" style={{ fontVariantNumeric: 'tabular-nums' }}>
                             {[
                                 { n: '4,000+', l: 'hours automated' },
                                 { n: '$150M', l: 'in decisions influenced' },
