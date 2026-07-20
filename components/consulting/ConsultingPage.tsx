@@ -89,11 +89,39 @@ const OFFER_LABELS: Record<string, string> = {
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+// Synchronously read landing intent from the live URL. SSR/prerender-safe:
+// returns nulls when `window` is absent (the prerendered /consult has no query
+// string, so it renders the fork). The app mounts with createRoot (see
+// index.tsx) — NOT hydrateRoot — so the first client render can depend on the
+// real URL without any hydration reconciliation/mismatch, and param'd entries
+// render their preselect immediately with no chooser flash.
+const readIntent = (): { path: string | null; offer: string | null; context: string | null } => {
+    if (typeof window === 'undefined') return { path: null, offer: null, context: null };
+    const p = new URLSearchParams(window.location.search);
+    return { path: p.get('path'), offer: p.get('offer'), context: p.get('context') };
+};
+
+// Offer intent is finer-grained than path: pipeline/delivery-team are
+// enterprise (free fit call); personal-agent/website are individual (working
+// session). Returns null when nothing was specified (generic entry).
+const intentToOffering = (path: string | null, offer: string | null): Offering | null => {
+    if (offer === 'personal-agent' || offer === 'website' || path === 'individual' || path === 'personal') return '30';
+    if (offer === 'pipeline' || offer === 'delivery-team' || path === 'enterprise' || path === 'business') return 'fit';
+    return null;
+};
+
 export const ConsultingPage: React.FC = () => {
-    const [selected, setSelected] = useState<Offering | null>(null);
+    const initialIntent = readIntent();
+    const initialSelected = intentToOffering(initialIntent.path, initialIntent.offer);
+
+    const [selected, setSelected] = useState<Offering | null>(initialSelected);
 
     // Required context form
-    const [improve, setImprove] = useState('');
+    const [improve, setImprove] = useState(
+        initialIntent.context === 'invoice-reconciliation'
+            ? 'An invoice reconciliation / AP workflow similar to the case study.'
+            : ''
+    );
     const [today, setToday] = useState('');
     const [useful, setUseful] = useState('');
     const [name, setName] = useState('');
@@ -101,11 +129,12 @@ export const ConsultingPage: React.FC = () => {
     const [company, setCompany] = useState('');
 
     // Buyer intent from landing (?path=&offer=), preserved into notes/preselect.
-    const [pathIntent, setPathIntent] = useState<string | null>(null);
-    const [offerIntent, setOfferIntent] = useState<string | null>(null);
-    // Generic (param-less) entry opens with the business-vs-personal fork
-    // before the priced cards. Param'd visits skip it and preselect directly.
-    const [showFork, setShowFork] = useState(true);
+    const [pathIntent, setPathIntent] = useState<string | null>(initialIntent.path);
+    const [offerIntent, setOfferIntent] = useState<string | null>(initialIntent.offer);
+    // Generic (param-less) entry opens with the business-vs-personal fork before
+    // the priced cards. Derived synchronously from the URL so a param'd entry
+    // never renders the chooser (no flash). Param-less entry keeps it as first render.
+    const [showFork, setShowFork] = useState<boolean>(() => !(initialIntent.path || initialIntent.offer));
 
     // Scheduling
     const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -116,24 +145,10 @@ export const ConsultingPage: React.FC = () => {
     const [freeConfirmed, setFreeConfirmed] = useState<{ slot: string; meetLink?: string | null } | null>(null);
     const [confirmationSessionId, setConfirmationSessionId] = useState<string | null>(null);
 
-    // Preselect path from landing (?path=enterprise|individual&offer=...)
+    // Stripe redirect confirmation (post-mount is fine — it swaps the whole view).
     useEffect(() => {
         if (typeof window === 'undefined') return;
         const params = new URLSearchParams(window.location.search);
-        const path = params.get('path');
-        const offer = params.get('offer');
-        if (path) setPathIntent(path);
-        if (offer) setOfferIntent(offer);
-        // Preselect the offering. Offer intent is finer-grained than path:
-        // pipeline/delivery-team are enterprise (free fit call); personal-agent
-        // and website are individual (working session). Any of these skip the fork.
-        if (offer === 'personal-agent' || offer === 'website' || path === 'individual') { setSelected('30'); setShowFork(false); }
-        else if (offer === 'pipeline' || offer === 'delivery-team' || path === 'enterprise') { setSelected('fit'); setShowFork(false); }
-        const context = params.get('context');
-        if (context === 'invoice-reconciliation') {
-            setImprove('An invoice reconciliation / AP workflow similar to the case study.');
-        }
-        // Stripe redirect confirmation
         const status = params.get('status');
         const sessionId = params.get('session_id');
         if (status === 'success' && sessionId) setConfirmationSessionId(sessionId);
