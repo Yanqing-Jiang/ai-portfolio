@@ -1994,6 +1994,17 @@ def _intake_reserve_turn(sid: str, turns: int) -> bool:
     return True
 
 
+def _intake_release_turn(sid: str, turns: int) -> None:
+    """Roll back a reservation whose turn never spent a model call (transient
+    502): without this, retrying the same valid token would 409 forever. Only
+    rolls back if our reservation is still the latest, and only to turns-1 —
+    never below what any prior token had already consumed."""
+    with _INTAKE_LEDGER_LOCK:
+        cur = _INTAKE_SESSION_TURNS.get(sid)
+        if cur is not None and cur[0] == turns:
+            _INTAKE_SESSION_TURNS[sid] = (turns - 1, time.time())
+
+
 def _require_bound_session(state: dict) -> None:
     """Hard-reject any signed token lacking a session id or numeric issued-at.
     Such tokens (pre-fix, never deployed) would otherwise bypass expiry + the
@@ -2051,8 +2062,10 @@ async def intake_message(req: IntakeMessageRequest, request: Request):
         _require_bound_session(state)
         if not _intake_reserve_turn(state["sid"], int(state.get("turns", 0))):
             raise HTTPException(status_code=409, detail="intake_session_stale")
+        reserved = (state["sid"], int(state.get("turns", 0)))
     else:
         state = intake_new_state(req.path)
+        reserved = None
 
     # Server-enforced turn cap — cannot be bypassed by the client.
     if int(state.get("turns", 0)) >= MAX_USER_TURNS:
@@ -2083,6 +2096,10 @@ async def intake_message(req: IntakeMessageRequest, request: Request):
         result["session"] = intake_sign_session(new_state)
         return JSONResponse(content=result)
     except Exception as exc:
+        # The turn never spent a model result — release the reservation so the
+        # client can retry the same valid token instead of 409ing forever.
+        if reserved is not None:
+            _intake_release_turn(*reserved)
         logger.error("[INTAKE] Turn failed: %s", exc)
         raise HTTPException(status_code=502, detail="intake_error")
 

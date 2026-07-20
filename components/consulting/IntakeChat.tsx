@@ -124,8 +124,8 @@ const coerceTurn = (data: unknown): TurnResult => {
             return q;
         }).slice(0, 3);
     }
-    // recommended_next_step: strict — must be a string when present (no default).
-    if (d.recommended_next_step !== undefined && d.recommended_next_step !== null && typeof d.recommended_next_step !== 'string') {
+    // recommended_next_step: strict — server contract requires a string ('' when unsure).
+    if (typeof d.recommended_next_step !== 'string') {
         throw new Error('intake: recommended_next_step must be a string');
     }
     return {
@@ -133,7 +133,7 @@ const coerceTurn = (data: unknown): TurnResult => {
         brief,
         quick_replies: quick,
         complete: d.complete,
-        recommended_next_step: typeof d.recommended_next_step === 'string' ? d.recommended_next_step : '',
+        recommended_next_step: d.recommended_next_step,
         session: d.session,
         capped: d.capped === true,
     };

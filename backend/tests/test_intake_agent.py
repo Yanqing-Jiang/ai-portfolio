@@ -361,6 +361,27 @@ def test_intake_message_rejects_stale_turn_replay(monkeypatch):
     assert ok.status_code == 200
 
 
+def test_intake_message_502_releases_reservation_for_retry(monkeypatch):
+    monkeypatch.setattr(main, "intake_available", lambda: True)
+    calls = {"n": 0}
+
+    def flaky_turn(state, message):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("transient model failure")
+        return _fake_turn(state, message)
+
+    monkeypatch.setattr(main, "intake_run_turn", flaky_turn)
+    client = TestClient(main.app)
+    tok1 = client.post("/api/intake/message", json={"path": "business", "message": "hi"}).json()["session"]
+    # Second turn fails transiently -> 502; the reservation must be released.
+    fail = client.post("/api/intake/message", json={"path": "business", "session": tok1, "message": "again"})
+    assert fail.status_code == 502
+    # Retrying the SAME valid token succeeds instead of 409ing forever.
+    retry = client.post("/api/intake/message", json={"path": "business", "session": tok1, "message": "again"})
+    assert retry.status_code == 200
+
+
 # --- Max-size session walk (field cap) --------------------------------------
 
 def test_max_session_walk_fits_field_cap_and_endpoint(monkeypatch):
