@@ -69,11 +69,12 @@ def test_min_brief_ok():
     assert ia.min_brief_ok("business", ok)
 
 
-def test_validate_output_clamps_and_enum():
+def test_validate_output_clamps_enum_and_length():
+    # Valid types: unknown enum coerces to "", quick_replies clamp to 3.
     out = ia._validate_output({
         "reply": "hi",
         "brief": {"desired_outcome": "y"},
-        "quick_replies": ["a", 5, "b", "c", "d"],
+        "quick_replies": ["a", "b", "c", "d"],
         "complete": True,
         "recommended_next_step": "bogus",
     })
@@ -82,9 +83,59 @@ def test_validate_output_clamps_and_enum():
     assert out["reply"] == "hi"
 
 
-def test_validate_output_malformed_raises():
+def test_validate_output_rejects_type_violations():
+    # Strict: type violations RAISE (no silent coercion), incl. bool("false").
     with pytest.raises(ValueError):
         ia._validate_output("not an object")
+    with pytest.raises(ValueError):  # complete: "false" must not become True
+        ia._validate_output({"reply": "hi", "brief": {}, "complete": "false", "recommended_next_step": ""})
+    with pytest.raises(ValueError):  # numeric brief field, not stringified
+        ia._validate_output({"reply": "hi", "brief": {"desired_outcome": 42}, "complete": True, "recommended_next_step": ""})
+    with pytest.raises(ValueError):  # non-string quick_reply item
+        ia._validate_output({"reply": "hi", "brief": {}, "quick_replies": ["a", 5], "complete": True, "recommended_next_step": ""})
+    with pytest.raises(ValueError):  # non-string open_question
+        ia._validate_output({"reply": "hi", "brief": {"open_questions": [1]}, "complete": True, "recommended_next_step": ""})
+    with pytest.raises(ValueError):  # non-string reply
+        ia._validate_output({"reply": 5, "brief": {}, "complete": True, "recommended_next_step": ""})
+
+
+def test_run_turn_retries_once_then_fails(monkeypatch):
+    # First model output malformed, second valid -> run_turn recovers on retry.
+    calls = {"n": 0}
+
+    def _flaky_create(**kwargs):
+        calls["n"] += 1
+        payload = ({"reply": 5} if calls["n"] == 1
+                   else {"reply": "ok", "brief": {}, "quick_replies": [], "complete": False, "recommended_next_step": ""})
+        return _FakeResp(payload)
+
+    class _Msgs:
+        create = staticmethod(_flaky_create)
+
+    class _Client:
+        messages = _Msgs()
+
+    monkeypatch.setattr(ia, "_get_client", lambda: _Client())
+    res = ia.run_turn(ia.new_state("business"), "hi")
+    assert calls["n"] == 2 and res["reply"] == "ok"
+
+    # Both malformed -> raises (endpoint turns this into a 502 / form fallback).
+    calls["n"] = 0
+
+    def _always_bad(**kwargs):
+        calls["n"] += 1
+        return _FakeResp({"reply": 5})
+
+    class _Msgs2:
+        create = staticmethod(_always_bad)
+
+    class _Client2:
+        messages = _Msgs2()
+
+    monkeypatch.setattr(ia, "_get_client", lambda: _Client2())
+    with pytest.raises(ValueError):
+        ia.run_turn(ia.new_state("business"), "hi")
+    assert calls["n"] == 2
 
 
 # --- run_turn (model faked) -------------------------------------------------
@@ -182,16 +233,33 @@ def test_intake_message_rejects_forged_session(monkeypatch):
     assert r.status_code == 400
 
 
-def test_intake_message_server_turn_cap(monkeypatch):
+def test_intake_message_cap_thin_brief_not_complete(monkeypatch):
+    # Cap reached with a ONE-field brief: capped, but NOT complete — the min-brief
+    # invariant holds on the cap path, so the client hands off to the form.
     monkeypatch.setattr(main, "intake_available", lambda: True)
     monkeypatch.setattr(main, "intake_run_turn", _fake_turn)
     client = TestClient(main.app)
-    # Craft an over-cap session token server-side; the client cannot bypass it.
-    capped = main.intake_sign_session({"path": "business", "turns": main.MAX_USER_TURNS, "transcript": [], "brief": {"desired_outcome": "g"}})
+    capped = main.intake_sign_session({"sid": "sidcapthin", "path": "business", "turns": main.MAX_USER_TURNS,
+                                       "transcript": [], "brief": {"desired_outcome": "g"}})
     r = client.post("/api/intake/message", json={"path": "business", "session": capped, "message": "one more"})
     assert r.status_code == 200
-    assert r.json().get("capped") is True
-    assert r.json()["complete"] is True
+    body = r.json()
+    assert body.get("capped") is True
+    assert body["complete"] is False  # thin brief cannot auto-complete at the cap
+
+
+def test_intake_message_cap_full_brief_completes(monkeypatch):
+    # Cap reached with a useful brief: capped AND complete -> booking handoff.
+    monkeypatch.setattr(main, "intake_available", lambda: True)
+    monkeypatch.setattr(main, "intake_run_turn", _fake_turn)
+    client = TestClient(main.app)
+    full = {"desired_outcome": "goal", "current_workflow": "manual", "success_metric": "hrs"}
+    capped = main.intake_sign_session({"sid": "sidcapfull", "path": "business", "turns": main.MAX_USER_TURNS,
+                                       "transcript": [], "brief": full})
+    r = client.post("/api/intake/message", json={"path": "business", "session": capped, "message": "one more"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body.get("capped") is True and body["complete"] is True
 
 
 def test_intake_message_503_when_unconfigured(monkeypatch):
@@ -243,3 +311,160 @@ def test_mocked_end_to_end_intake_to_brief(monkeypatch):
         "name": "A", "email": "a@b.com", "recommended_next_step": "fit",
     })
     assert brief_res.status_code == 200
+
+
+# --- Token expiry -----------------------------------------------------------
+
+def test_session_expiry():
+    import time as _t
+    fresh = ia.new_state("business")
+    assert ia.verify_session(ia.sign_session(fresh)) is not None
+    # Backdate iat past the TTL -> token is rejected (verify returns None).
+    stale = {**fresh, "iat": int(_t.time()) - ia.SESSION_TTL_SECONDS - 60}
+    assert ia.session_expired(stale) is True
+    assert ia.verify_session(ia.sign_session(stale)) is None
+    # A state with no iat never expires (legacy/non-time-bound fixtures).
+    assert ia.session_expired({"path": "business", "turns": 0}) is False
+
+
+def test_intake_message_rejects_expired_token(monkeypatch):
+    import time as _t
+    monkeypatch.setattr(main, "intake_available", lambda: True)
+    monkeypatch.setattr(main, "intake_run_turn", _fake_turn)
+    client = TestClient(main.app)
+    expired = main.intake_sign_session({
+        "sid": "sidexpired", "iat": int(_t.time()) - ia.SESSION_TTL_SECONDS - 60,
+        "path": "business", "turns": 2, "transcript": [], "brief": {},
+    })
+    r = client.post("/api/intake/message", json={"path": "business", "session": expired, "message": "hi"})
+    assert r.status_code == 400  # expired -> invalid -> client falls back to form
+
+
+# --- Replay / stale-turn rejection ------------------------------------------
+
+def test_intake_message_rejects_stale_turn_replay(monkeypatch):
+    monkeypatch.setattr(main, "intake_available", lambda: True)
+    monkeypatch.setattr(main, "intake_run_turn", _fake_turn)
+    client = TestClient(main.app)
+    # Turn 1 (fresh) -> token1; advance to turn 2 -> token2.
+    tok1 = client.post("/api/intake/message", json={"path": "business", "message": "hi"}).json()["session"]
+    tok2 = client.post("/api/intake/message", json={"path": "business", "session": tok1, "message": "again"}).json()["session"]
+    assert main.intake_verify_session(tok2)["turns"] == 2
+    # Replaying the OLD turn-1 token now that the sid has advanced -> 409 stale.
+    replay = client.post("/api/intake/message", json={"path": "business", "session": tok1, "message": "replayed"})
+    assert replay.status_code == 409
+    # The current token still works.
+    ok = client.post("/api/intake/message", json={"path": "business", "session": tok2, "message": "keep going"})
+    assert ok.status_code == 200
+
+
+# --- Max-size session walk (field cap) --------------------------------------
+
+def test_max_session_walk_fits_field_cap_and_endpoint(monkeypatch):
+    # A legally-maximal session token must be BELOW the request-model cap (the old
+    # 16 KB cap 422'd valid tokens) and be accepted by the endpoint.
+    msg = "x" * ia.MAX_TRANSCRIPT_MSG_CHARS
+    transcript = [{"role": "user" if i % 2 == 0 else "assistant", "content": msg}
+                  for i in range(2 * ia.MAX_USER_TURNS + 2)]
+    brief = {f: "y" * ia.MAX_FIELD_CHARS for f in ia.BRIEF_STR_FIELDS}
+    brief["open_questions"] = ["q" * ia.MAX_OPEN_QUESTION_CHARS] * ia.MAX_OPEN_QUESTIONS
+    state = {"sid": "sidmax", "iat": int(__import__("time").time()), "path": "business",
+             "turns": ia.MAX_USER_TURNS, "transcript": transcript, "brief": brief}
+    token = ia.sign_session(state)
+    assert len(token) < ia.MAX_SESSION_TOKEN_CHARS
+    assert len(token) > 16000  # would have 422'd under the old cap
+
+    monkeypatch.setattr(main, "intake_available", lambda: True)
+    monkeypatch.setattr(main, "intake_run_turn", _fake_turn)
+    client = TestClient(main.app)
+    # At the cap with a full brief -> 200 (capped completion), NOT a 422 on size.
+    r = client.post("/api/intake/message", json={"path": "business", "session": token, "message": "hi"})
+    assert r.status_code == 200
+    assert r.json().get("capped") is True
+
+
+# --- Trust-mode IP derivation -----------------------------------------------
+
+class _FakeClient:
+    def __init__(self, host):
+        self.host = host
+
+
+class _FakeReq:
+    def __init__(self, headers, host="10.0.0.1"):
+        self.headers = headers
+        self.client = _FakeClient(host)
+
+
+def test_guest_ip_trust_off_ignores_spoofed_headers(monkeypatch):
+    import rate_limiter as rl
+    monkeypatch.setattr(rl, "TRUST_FORWARDED_IP", False)
+    req = _FakeReq({"cf-connecting-ip": "1.2.3.4", "x-forwarded-for": "5.6.7.8"}, host="10.0.0.1")
+    # Trust off: forwarded headers are spoofable -> use the peer only.
+    assert rl._guest_ip(req) == "10.0.0.1"
+
+
+def test_guest_ip_trust_on_uses_forwarded(monkeypatch):
+    import rate_limiter as rl
+    monkeypatch.setattr(rl, "TRUST_FORWARDED_IP", True)
+    # CF header wins when present.
+    assert rl._guest_ip(_FakeReq({"cf-connecting-ip": "1.2.3.4", "x-forwarded-for": "5.6.7.8"})) == "1.2.3.4"
+    # Falls back to the XFF first hop when CF is absent.
+    assert rl._guest_ip(_FakeReq({"x-forwarded-for": "5.6.7.8, 9.9.9.9"})) == "5.6.7.8"
+    # No forwarded headers -> peer.
+    assert rl._guest_ip(_FakeReq({}, host="10.0.0.2")) == "10.0.0.2"
+
+
+# --- Brief -> booking DB linkage --------------------------------------------
+
+def test_link_brief_to_booking_executes_update(monkeypatch):
+    import asyncio
+    captured = {}
+
+    class _Conn:
+        async def execute(self, sql, *args):
+            captured["sql"] = sql
+            captured["args"] = args
+
+    class _Acquire:
+        async def __aenter__(self):
+            return _Conn()
+
+        async def __aexit__(self, *a):
+            return False
+
+    class _Pool:
+        def acquire(self):
+            return _Acquire()
+
+    async def _fake_pool():
+        return _Pool()
+
+    monkeypatch.setattr(main, "_get_booking_pool", _fake_pool)
+    brief_id = "123e4567-e89b-12d3-a456-426614174000"
+    asyncio.run(main._link_brief_to_booking(brief_id, "booking-77", "c@d.com"))
+    assert "UPDATE intake_briefs" in captured["sql"]
+    assert "booking_id" in captured["sql"]
+    # UUID-parsed brief id, booking id, and email are threaded into the UPDATE.
+    assert str(captured["args"][2]) == brief_id
+    assert captured["args"][0] == "booking-77"
+    assert captured["args"][1] == "c@d.com"
+
+
+def test_link_brief_to_booking_ignores_bad_uuid(monkeypatch):
+    import asyncio
+    called = {"n": 0}
+
+    class _Pool:
+        def acquire(self):
+            called["n"] += 1
+            raise AssertionError("should not acquire on bad uuid")
+
+    async def _fake_pool():
+        return _Pool()
+
+    monkeypatch.setattr(main, "_get_booking_pool", _fake_pool)
+    # Bad UUID and empty id are no-ops (never touch the pool).
+    asyncio.run(main._link_brief_to_booking("not-a-uuid", "booking-77", None))
+    asyncio.run(main._link_brief_to_booking(None, "booking-77", None))
+    assert called["n"] == 0

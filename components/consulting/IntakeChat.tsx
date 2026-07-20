@@ -33,6 +33,7 @@ interface TurnResult {
     complete: boolean;
     recommended_next_step: string; // 'fit' | '30' | '60' | ''
     session?: string;
+    capped?: boolean;
 }
 
 interface Msg { role: 'user' | 'assistant'; content: string }
@@ -83,26 +84,48 @@ const briefCount = (b: Brief): number =>
     STR_FIELDS.filter((f) => (b[f.key] as string | undefined)?.trim()).length +
     ((b.open_questions && b.open_questions.filter(Boolean).length) ? 1 : 0);
 
-// Defensive client-side validation of a turn response before it hits state.
+// Strict client-side validation of a turn response — mirrors the server's
+// _validate_output. THROWS on a malformed/type-violating turn (which callTurn
+// catches and turns into the guided-form fallback) rather than silently
+// defaulting bad values into React state.
 const coerceTurn = (data: unknown): TurnResult => {
-    const d = (data ?? {}) as Record<string, unknown>;
-    const rawBrief = (d.brief && typeof d.brief === 'object') ? d.brief as Record<string, unknown> : {};
+    if (!data || typeof data !== 'object') throw new Error('intake: turn not an object');
+    const d = data as Record<string, unknown>;
+    if (typeof d.reply !== 'string') throw new Error('intake: reply must be a string');
+    if (typeof d.complete !== 'boolean') throw new Error('intake: complete must be a boolean');
+    // Every real server turn returns a signed session; its absence means a broken
+    // response we must not continue from.
+    if (typeof d.session !== 'string' || !d.session) throw new Error('intake: missing session');
+    if (d.brief !== undefined && (typeof d.brief !== 'object' || d.brief === null || Array.isArray(d.brief))) {
+        throw new Error('intake: brief must be an object');
+    }
+    const rawBrief = (d.brief as Record<string, unknown>) ?? {};
     const brief: Brief = {};
     for (const f of STR_FIELDS) {
         const v = rawBrief[f.key as string];
-        if (typeof v === 'string' && v.trim()) (brief as Record<string, unknown>)[f.key] = v;
+        if (v === undefined || v === null || v === '') continue;
+        if (typeof v !== 'string') throw new Error(`intake: brief.${String(f.key)} must be a string`);
+        if (v.trim()) (brief as Record<string, unknown>)[f.key] = v;
     }
-    if (Array.isArray(rawBrief.open_questions)) {
-        const oq = (rawBrief.open_questions as unknown[]).filter((q): q is string => typeof q === 'string');
+    if (rawBrief.open_questions !== undefined && rawBrief.open_questions !== null) {
+        if (!Array.isArray(rawBrief.open_questions)) throw new Error('intake: open_questions must be an array');
+        const oq = (rawBrief.open_questions as unknown[]).map((q) => {
+            if (typeof q !== 'string') throw new Error('intake: open_questions items must be strings');
+            return q;
+        }).filter((q) => q.trim());
         if (oq.length) brief.open_questions = oq;
     }
+    if (d.quick_replies !== undefined && d.quick_replies !== null && !Array.isArray(d.quick_replies)) {
+        throw new Error('intake: quick_replies must be an array');
+    }
     return {
-        reply: typeof d.reply === 'string' ? d.reply : 'Could you tell me a bit more?',
+        reply: d.reply,
         brief,
         quick_replies: Array.isArray(d.quick_replies) ? (d.quick_replies as unknown[]).filter((q): q is string => typeof q === 'string').slice(0, 3) : [],
-        complete: d.complete === true,
+        complete: d.complete,
         recommended_next_step: typeof d.recommended_next_step === 'string' ? d.recommended_next_step : '',
-        session: typeof d.session === 'string' ? d.session : undefined,
+        session: d.session,
+        capped: d.capped === true,
     };
 };
 
@@ -130,20 +153,27 @@ export const IntakeChat: React.FC<IntakeChatProps> = ({ path, onComplete, onFall
     const startedRef = useRef(false);
     const briefRef = useRef<Brief>({});
     briefRef.current = brief;
+    // Mirror `touched` in a ref so an in-flight merge reads the CURRENT edit set,
+    // not the stale closure captured when the request started (edit-clobber race).
+    const touchedRef = useRef<Set<string>>(touched);
+    touchedRef.current = touched;
 
     const backendUrl = useMemo(() => configService.getBackendUrl().replace(/\/$/, ''), []);
 
     const mergeServerBrief = (server: Brief) => {
         setBrief((prev) => {
+            // Read the live edit set from the ref — a field the user touched while
+            // this request was in flight must not be overwritten by the merge.
+            const t = touchedRef.current;
             const next: Brief = { ...prev };
             const flash = new Set<string>();
             for (const f of STR_FIELDS) {
-                if (touched.has(f.key as string)) continue; // never clobber user edits
+                if (t.has(f.key as string)) continue; // never clobber user edits
                 const b = (server[f.key] as string | undefined) || '';
                 const a = (prev[f.key] as string | undefined) || '';
                 if (b && a !== b) { (next as Record<string, unknown>)[f.key] = b; flash.add(f.key as string); }
             }
-            if (!touched.has('open_questions') && server.open_questions && server.open_questions.length) {
+            if (!t.has('open_questions') && server.open_questions && server.open_questions.length) {
                 next.open_questions = server.open_questions;
                 flash.add('open_questions');
             }
@@ -169,6 +199,11 @@ export const IntakeChat: React.FC<IntakeChatProps> = ({ path, onComplete, onFall
             setQuickReplies(data.quick_replies);
             setNextStep(data.recommended_next_step);
             setComplete(data.complete);
+            // Turn cap reached but the brief is too thin to book on: hand off to the
+            // guided form (carrying the partial brief) instead of a dead-end chat.
+            if (data.capped && !data.complete) {
+                onFallback(cleanBrief(briefRef.current));
+            }
         } catch {
             setError(true);
             // Progressive enhancement: auto-fall-back to the form, carrying the

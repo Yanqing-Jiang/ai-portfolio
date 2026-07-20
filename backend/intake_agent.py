@@ -26,6 +26,8 @@ import hmac
 import json
 import logging
 import os
+import time
+import uuid
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -36,11 +38,25 @@ INTAKE_MAX_TOKENS = int(os.getenv("INTAKE_MAX_TOKENS", "1024"))
 
 # Server-authoritative bounds.
 MAX_USER_TURNS = 12          # hard cap on prospect turns per session
-MAX_MSG_CHARS = 2000         # per user reply
-MAX_ASSISTANT_CHARS = 2000   # per stored assistant reply
+MAX_MSG_CHARS = 2000         # per user reply (what the model sees THIS turn)
+MAX_ASSISTANT_CHARS = 2000   # per returned assistant reply (display fidelity)
+# What we STORE per message inside the signed token for future-turn context.
+# Deliberately smaller than the live per-message caps so the token stays bounded
+# (the brief keeps full 800-char/field fidelity — only rolling chat context is
+# trimmed). See _max_state_bytes / test_max_session_walk for the derived ceiling.
+MAX_TRANSCRIPT_MSG_CHARS = 600
 MAX_FIELD_CHARS = 800        # per brief string field
 MAX_OPEN_QUESTIONS = 6
 MAX_OPEN_QUESTION_CHARS = 300
+
+# Signed-session lifetime: an interview can't outlive this, which also bounds how
+# long a captured token remains replayable after a process restart clears the
+# in-memory turn ledger. ~2h is generous for a 12-turn chat.
+SESSION_TTL_SECONDS = int(os.getenv("INTAKE_SESSION_TTL", "7200"))
+# Field cap for the request-model `session` string. Must sit ABOVE the true max
+# token size a legally-maximal session produces (~35 KB under the bounds above);
+# the old 16 KB cap 422'd valid tokens by turn 6. Verified by test_max_session_walk.
+MAX_SESSION_TOKEN_CHARS = 60000
 
 BRIEF_STR_FIELDS = [
     "desired_outcome", "current_workflow", "people_and_frequency",
@@ -122,9 +138,18 @@ def sign_session(state: dict) -> str:
     return f"{payload}.{_b64e(sig)}"
 
 
+def session_expired(state: dict) -> bool:
+    """True if a signed state carries an `iat` older than SESSION_TTL_SECONDS.
+    States without `iat` (legacy / non-time-bound test fixtures) never expire."""
+    iat = state.get("iat")
+    if not isinstance(iat, (int, float)):
+        return False
+    return (time.time() - float(iat)) > SESSION_TTL_SECONDS
+
+
 def verify_session(token: str) -> Optional[dict]:
     """Verify + decode a session token. Returns the state dict or None if the
-    token is missing, malformed, or tampered with."""
+    token is missing, malformed, tampered with, or expired (past its TTL)."""
     if not token or "." not in token:
         return None
     try:
@@ -134,6 +159,8 @@ def verify_session(token: str) -> Optional[dict]:
             return None
         state = json.loads(_b64d(payload).decode("utf-8"))
         if not isinstance(state, dict):
+            return None
+        if session_expired(state):
             return None
         return state
     except Exception:
@@ -145,7 +172,17 @@ def _norm_path(path: str) -> str:
 
 
 def new_state(path: str) -> dict:
-    return {"path": _norm_path(path), "turns": 0, "transcript": [], "brief": {}}
+    # `sid` binds the token to one interview and `iat` bounds its lifetime; both
+    # are signed, so a client cannot forge or extend them. The server tracks the
+    # highest `turns` seen per `sid` to reject stale-token replay.
+    return {
+        "sid": uuid.uuid4().hex,
+        "iat": int(time.time()),
+        "path": _norm_path(path),
+        "turns": 0,
+        "transcript": [],
+        "brief": {},
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -294,23 +331,82 @@ def _system_prompt(path: str) -> str:
     return _SHARED_GUARDRAILS + "\n" + script
 
 
+def _strict_brief(raw: Any) -> dict:
+    """Strict, type-checked brief extraction from MODEL output. Unlike
+    `clamp_brief` (lenient — used for client-edited input), this REJECTS wrong
+    types instead of coercing them: a numeric/boolean field or a non-string
+    open-question raises rather than being silently stringified. Empty strings
+    (the model's placeholder for unknown fields) are dropped, not rejected."""
+    if not isinstance(raw, dict):
+        raise ValueError("brief must be an object")
+    out: dict[str, Any] = {}
+    for f in BRIEF_STR_FIELDS:
+        v = raw.get(f)
+        if v is None:
+            continue
+        if not isinstance(v, str):
+            raise ValueError(f"brief.{f} must be a string")
+        v = v.strip()[:MAX_FIELD_CHARS]
+        if v:
+            out[f] = v
+    oq = raw.get("open_questions")
+    if oq is not None:
+        if not isinstance(oq, list):
+            raise ValueError("open_questions must be a list")
+        items = []
+        for q in oq:
+            if not isinstance(q, str):
+                raise ValueError("open_questions items must be strings")
+            q = q.strip()[:MAX_OPEN_QUESTION_CHARS]
+            if q:
+                items.append(q)
+        if items:
+            out["open_questions"] = items[:MAX_OPEN_QUESTIONS]
+    return out
+
+
 def _validate_output(payload: Any) -> dict:
-    """Strictly validate + clamp the submit_turn tool output. Raises on shape
-    violation so the caller can convert it to a graceful fallback."""
+    """Strictly validate the submit_turn tool output. REJECTS type violations
+    (raises ValueError) rather than coercing them — e.g. `complete: "false"` or
+    a numeric brief field is a hard error, not a silently-True/stringified value.
+    Length caps and unknown-enum -> "" are the only coercions kept. The caller
+    retries once, then falls the turn back to the form."""
     if not isinstance(payload, dict):
         raise ValueError("tool output not an object")
-    reply = _clamp_str(payload.get("reply"), MAX_ASSISTANT_CHARS) or "Could you tell me a bit more?"
-    brief = clamp_brief(payload.get("brief"))
+    if not isinstance(payload.get("reply"), str):
+        raise ValueError("reply must be a string")
+    reply = payload["reply"].strip()[:MAX_ASSISTANT_CHARS] or "Could you tell me a bit more?"
+
+    brief = _strict_brief(payload.get("brief"))
+
     quick = payload.get("quick_replies")
-    quick_list = [_clamp_str(q, 60) for q in quick] if isinstance(quick, list) else []
-    quick_list = [q for q in quick_list if q][:3]
-    step = payload.get("recommended_next_step")
-    step = step if step in NEXT_STEPS else ""
+    if quick is None:
+        quick = []
+    if not isinstance(quick, list):
+        raise ValueError("quick_replies must be a list")
+    quick_list = []
+    for q in quick:
+        if not isinstance(q, str):
+            raise ValueError("quick_replies items must be strings")
+        q = q.strip()[:60]
+        if q:
+            quick_list.append(q)
+    quick_list = quick_list[:3]
+
+    if not isinstance(payload.get("complete"), bool):
+        raise ValueError("complete must be a boolean")
+
+    step = payload.get("recommended_next_step", "")
+    if not isinstance(step, str):
+        raise ValueError("recommended_next_step must be a string")
+    if step not in NEXT_STEPS:
+        step = ""
+
     return {
         "reply": reply,
         "brief": brief,
         "quick_replies": quick_list,
-        "complete": bool(payload.get("complete")),
+        "complete": payload["complete"],
         "recommended_next_step": step,
     }
 
@@ -334,9 +430,11 @@ def run_turn(state: dict, user_message: str) -> dict:
     path = _norm_path(state.get("path", "business"))
     transcript = state.get("transcript") or []
 
+    # The model sees the full-length reply THIS turn; but what we persist into the
+    # signed token for future context is trimmed, keeping the token bounded.
     um = _clamp_str(user_message, MAX_MSG_CHARS)
     if um:
-        transcript = transcript + [{"role": "user", "content": um}]
+        transcript = transcript + [{"role": "user", "content": _clamp_str(um, MAX_TRANSCRIPT_MSG_CHARS)}]
 
     # Build model messages from the SERVER-owned transcript only.
     convo = [{"role": m["role"], "content": m["content"]} for m in transcript
@@ -344,33 +442,42 @@ def run_turn(state: dict, user_message: str) -> dict:
     if not convo or convo[0]["role"] != "user":
         convo.insert(0, {"role": "user", "content": "Let's start."})
 
-    resp = client.messages.create(
-        model=INTAKE_MODEL,
-        max_tokens=INTAKE_MAX_TOKENS,
-        system=_system_prompt(path),
-        messages=convo,
-        tools=[_SUBMIT_TURN_TOOL],
-        tool_choice={"type": "tool", "name": "submit_turn"},
-        thinking={"type": "disabled"},
-    )
+    def _one_call() -> dict:
+        resp = client.messages.create(
+            model=INTAKE_MODEL,
+            max_tokens=INTAKE_MAX_TOKENS,
+            system=_system_prompt(path),
+            messages=convo,
+            tools=[_SUBMIT_TURN_TOOL],
+            tool_choice={"type": "tool", "name": "submit_turn"},
+            thinking={"type": "disabled"},
+        )
+        payload = None
+        for block in resp.content:
+            if getattr(block, "type", None) == "tool_use" and getattr(block, "name", None) == "submit_turn":
+                payload = block.input
+                break
+        if payload is None:
+            raise RuntimeError("intake_no_tool_output")
+        return _validate_output(payload)  # strict — raises on malformed types
 
-    payload = None
-    for block in resp.content:
-        if getattr(block, "type", None) == "tool_use" and getattr(block, "name", None) == "submit_turn":
-            payload = block.input
-            break
-    if payload is None:
-        raise RuntimeError("intake_no_tool_output")
-
-    out = _validate_output(payload)
+    # Strict validation: one retry, then let the failure propagate so the endpoint
+    # returns 502 and the frontend falls back to the guided form.
+    try:
+        out = _one_call()
+    except (ValueError, RuntimeError) as exc:
+        logger.warning("[INTAKE] Invalid model output (%s) — retrying once", exc)
+        out = _one_call()
 
     merged = _merge_brief(state.get("brief") or {}, out["brief"])
-    transcript = transcript + [{"role": "assistant", "content": out["reply"]}]
+    transcript = transcript + [{"role": "assistant", "content": _clamp_str(out["reply"], MAX_TRANSCRIPT_MSG_CHARS)}]
 
     # Honor `complete` only when the deterministic invariant holds.
     complete = out["complete"] and min_brief_ok(path, merged)
 
     new_state_out = {
+        "sid": state.get("sid") or uuid.uuid4().hex,
+        "iat": int(state.get("iat") or time.time()),
         "path": path,
         "turns": int(state.get("turns", 0)) + 1,
         "transcript": transcript[-(2 * MAX_USER_TURNS + 2):],  # hard history bound

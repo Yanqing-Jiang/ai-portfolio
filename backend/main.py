@@ -98,8 +98,10 @@ from intake_agent import (
     sign_session as intake_sign_session,
     verify_session as intake_verify_session,
     clamp_brief as intake_clamp_brief,
+    min_brief_ok as intake_min_brief_ok,
     intake_available,
     MAX_USER_TURNS,
+    MAX_SESSION_TOKEN_CHARS,
 )
 from rate_limiter import parse_user_id, ParsedToken
 
@@ -563,7 +565,9 @@ class IntakeMessageRequest(BaseModel):
     # The next user reply only. History is server-owned inside the signed
     # `session` token; the client cannot forge past turns or the turn count.
     path: Literal["business", "individual"]
-    session: Optional[str] = Field(None, max_length=16000)  # signed session token
+    # Cap sits above the true max token size (see intake_agent.MAX_SESSION_TOKEN_CHARS);
+    # the old 16 KB cap 422'd valid server-issued tokens once the transcript grew.
+    session: Optional[str] = Field(None, max_length=MAX_SESSION_TOKEN_CHARS)
     message: str = Field("", max_length=2000)
 
 
@@ -571,7 +575,7 @@ class IntakeBriefRequest(BaseModel):
     # Persisting a brief requires a valid signed intake session (proves a real
     # interview happened). The brief is the client-reviewed/edited version; it is
     # re-validated + clamped server-side before the write.
-    session: str = Field(..., max_length=16000)
+    session: str = Field(..., max_length=MAX_SESSION_TOKEN_CHARS)
     brief: dict = Field(default_factory=dict)
     name: Optional[str] = Field(None, max_length=100)
     email: Optional[str] = Field(None, max_length=200)
@@ -1943,6 +1947,50 @@ def _check_intake_rate(request: Request) -> None:
                 "Too many messages. Please slow down and try again shortly.")
 
 
+# Per-session monotonic turn ledger for replay defense. Signed tokens are
+# stateless, so an OLD token can be resubmitted to fork state and re-spend model
+# calls below the 12-turn cap. We track the highest `turns` issued per `sid` and
+# reject any incoming token whose turn is behind it (a stale replay). Pure
+# server-side state is unavoidable for replay detection.
+# DEBT: in-memory / per-process — a restart clears it, so tokens are replayable
+# again until their ~2h TTL (SESSION_TTL_SECONDS) expires. Upgrade to Redis when
+# the booking limiter grows a shared unauthenticated store.
+_INTAKE_SESSION_TURNS: dict[str, tuple[int, float]] = {}
+_INTAKE_LEDGER_MAX = 20000
+
+
+def _prune_session_ledger(now: float) -> None:
+    if len(_INTAKE_SESSION_TURNS) <= _INTAKE_LEDGER_MAX:
+        return
+    from intake_agent import SESSION_TTL_SECONDS
+    stale = [k for k, (_, ts) in _INTAKE_SESSION_TURNS.items() if now - ts > SESSION_TTL_SECONDS]
+    for k in stale:
+        _INTAKE_SESSION_TURNS.pop(k, None)
+    # Hard fallback if still oversized (all fresh): drop the oldest half.
+    if len(_INTAKE_SESSION_TURNS) > _INTAKE_LEDGER_MAX:
+        for k in sorted(_INTAKE_SESSION_TURNS, key=lambda k: _INTAKE_SESSION_TURNS[k][1])[: _INTAKE_LEDGER_MAX // 2]:
+            _INTAKE_SESSION_TURNS.pop(k, None)
+
+
+def _intake_replay_ok(sid: Optional[str], turns: int) -> bool:
+    """True if a token at `turns` for `sid` is current/fresh; False if it is a
+    stale replay (behind the highest turn we've already issued for this sid)."""
+    if not sid:
+        return True
+    seen = _INTAKE_SESSION_TURNS.get(sid)
+    return seen is None or turns >= seen[0]
+
+
+def _intake_record_turn(sid: Optional[str], turns: int) -> None:
+    if not sid:
+        return
+    now = time.time()
+    prev = _INTAKE_SESSION_TURNS.get(sid)
+    if prev is None or turns >= prev[0]:
+        _INTAKE_SESSION_TURNS[sid] = (turns, now)
+    _prune_session_ledger(now)
+
+
 async def _link_brief_to_booking(brief_id: Optional[str], booking_id: str, email: Optional[str] = None) -> None:
     """Best-effort: attach a stored intake brief to the booking it produced."""
     if not brief_id:
@@ -1981,24 +2029,39 @@ async def intake_message(req: IntakeMessageRequest, request: Request):
     if req.session:
         state = intake_verify_session(req.session)
         if state is None:
-            # Tampered/expired token — restart cleanly (client falls back or reseeds).
+            # Tampered or expired token — restart cleanly (client falls back or reseeds).
             raise HTTPException(status_code=400, detail="intake_session_invalid")
         # Path is fixed by the session, not the per-request field.
         if state.get("path") not in ("business", "individual"):
             raise HTTPException(status_code=400, detail="intake_session_invalid")
+        # Replay defense: reject a stale token (behind this sid's highest turn).
+        if not _intake_replay_ok(state.get("sid"), int(state.get("turns", 0))):
+            raise HTTPException(status_code=409, detail="intake_session_stale")
     else:
         state = intake_new_state(req.path)
 
+    sid = state.get("sid")
+
     # Server-enforced turn cap — cannot be bypassed by the client.
     if int(state.get("turns", 0)) >= MAX_USER_TURNS:
-        brief = state.get("brief", {})
+        brief = state.get("brief", {}) or {}
+        # Enforce the min-useful-brief invariant on the cap path too: a thin brief
+        # forced to the cap is NOT complete — the client hands off to the guided
+        # form (carrying the partial brief) rather than booking on one field.
+        capped_complete = intake_min_brief_ok(state.get("path"), brief)
+        reply = (
+            "I've got enough to prepare your brief. Review it on the right, correct anything I misread, then choose how to book below."
+            if capped_complete else
+            "We've covered a lot of ground. Let me hand you to a short form to capture the last details so Yanqing has what he needs."
+        )
+        _intake_record_turn(sid, int(state.get("turns", 0)))
         return JSONResponse(content={
-            "reply": "I've got enough to prepare your brief. Review it on the right, correct anything I misread, then choose how to book below.",
+            "reply": reply,
             "brief": brief,
             "quick_replies": [],
-            "complete": True,
+            "complete": capped_complete,
             "recommended_next_step": "fit" if state.get("path") == "business" else "30",
-            "session": intake_sign_session({**state, "complete": True}),
+            "session": intake_sign_session({**state, "complete": capped_complete}),
             "capped": True,
         })
 
@@ -2006,6 +2069,7 @@ async def intake_message(req: IntakeMessageRequest, request: Request):
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(None, lambda: intake_run_turn(state, req.message))
         new_state = result.pop("state")
+        _intake_record_turn(new_state.get("sid"), int(new_state.get("turns", 0)))
         result["session"] = intake_sign_session(new_state)
         return JSONResponse(content=result)
     except Exception as exc:
