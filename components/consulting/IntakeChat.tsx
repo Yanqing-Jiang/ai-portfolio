@@ -115,13 +115,23 @@ const coerceTurn = (data: unknown): TurnResult => {
         }).filter((q) => q.trim());
         if (oq.length) brief.open_questions = oq;
     }
-    if (d.quick_replies !== undefined && d.quick_replies !== null && !Array.isArray(d.quick_replies)) {
-        throw new Error('intake: quick_replies must be an array');
+    // quick_replies: strict — every item must be a string (no silent filtering).
+    let quick: string[] = [];
+    if (d.quick_replies !== undefined && d.quick_replies !== null) {
+        if (!Array.isArray(d.quick_replies)) throw new Error('intake: quick_replies must be an array');
+        quick = (d.quick_replies as unknown[]).map((q) => {
+            if (typeof q !== 'string') throw new Error('intake: quick_replies items must be strings');
+            return q;
+        }).slice(0, 3);
+    }
+    // recommended_next_step: strict — must be a string when present (no default).
+    if (d.recommended_next_step !== undefined && d.recommended_next_step !== null && typeof d.recommended_next_step !== 'string') {
+        throw new Error('intake: recommended_next_step must be a string');
     }
     return {
         reply: d.reply,
         brief,
-        quick_replies: Array.isArray(d.quick_replies) ? (d.quick_replies as unknown[]).filter((q): q is string => typeof q === 'string').slice(0, 3) : [],
+        quick_replies: quick,
         complete: d.complete,
         recommended_next_step: typeof d.recommended_next_step === 'string' ? d.recommended_next_step : '',
         session: d.session,

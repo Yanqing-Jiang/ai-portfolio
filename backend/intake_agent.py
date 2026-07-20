@@ -131,11 +131,45 @@ def _b64d(s: str) -> bytes:
 
 
 def sign_session(state: dict) -> str:
-    """Serialize + HMAC-sign a session state dict -> opaque token."""
-    body = json.dumps(state, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    """Serialize + HMAC-sign a session state dict -> opaque token.
+
+    `ensure_ascii=False` keeps multibyte content (CJK/emoji) as compact UTF-8
+    bytes instead of 6-char `\\uXXXX` escapes — a 600-codepoint emoji message is
+    then ~2.4 KB of UTF-8, not ~14 KB of escapes. verify_session just json.loads
+    the decoded bytes, so this is transparent to verification."""
+    body = json.dumps(state, separators=(",", ":"), sort_keys=True, ensure_ascii=False).encode("utf-8")
     payload = _b64e(body)
     sig = hmac.new(_secret(), payload.encode("ascii"), hashlib.sha256).digest()
     return f"{payload}.{_b64e(sig)}"
+
+
+def fit_session_to_cap(state: dict) -> dict:
+    """Guarantee ``len(sign_session(state)) <= MAX_SESSION_TOKEN_CHARS`` by
+    trimming TRANSCRIPT content only — the brief keeps full 800-char/field
+    fidelity. Per-message CODEPOINT caps don't bound the SERIALIZED (UTF-8 →
+    base64) size once content is multibyte, so we measure the actual signed
+    token length and iteratively shrink the byte-heaviest message (dropping the
+    oldest once it can't shrink further). The bounded brief alone always fits
+    well under the cap, so this terminates."""
+    if len(sign_session(state)) <= MAX_SESSION_TOKEN_CHARS:
+        return state
+    state = dict(state)
+    transcript = [dict(m) for m in (state.get("transcript") or [])]
+    guard = 0
+    while transcript and guard < 100000:
+        state["transcript"] = transcript
+        if len(sign_session(state)) <= MAX_SESSION_TOKEN_CHARS:
+            break
+        guard += 1
+        idx = max(range(len(transcript)),
+                  key=lambda i: len(str(transcript[i].get("content", "")).encode("utf-8")))
+        content = str(transcript[idx].get("content", ""))
+        if len(content) <= 8:
+            transcript.pop(idx)
+            continue
+        transcript[idx]["content"] = content[: len(content) // 2]
+    state["transcript"] = transcript
+    return state
 
 
 def session_expired(state: dict) -> bool:
@@ -475,14 +509,14 @@ def run_turn(state: dict, user_message: str) -> dict:
     # Honor `complete` only when the deterministic invariant holds.
     complete = out["complete"] and min_brief_ok(path, merged)
 
-    new_state_out = {
+    new_state_out = fit_session_to_cap({
         "sid": state.get("sid") or uuid.uuid4().hex,
         "iat": int(state.get("iat") or time.time()),
         "path": path,
         "turns": int(state.get("turns", 0)) + 1,
         "transcript": transcript[-(2 * MAX_USER_TURNS + 2):],  # hard history bound
         "brief": merged,
-    }
+    })
     return {
         "state": new_state_out,
         "reply": out["reply"],

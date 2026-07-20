@@ -12,6 +12,7 @@ import json
 from datetime import datetime as _DateTime, timezone, timedelta
 import uuid
 import time
+import threading
 try:
     import stripe  # type: ignore
 except ImportError:  # pragma: no cover - optional dependency
@@ -99,6 +100,7 @@ from intake_agent import (
     verify_session as intake_verify_session,
     clamp_brief as intake_clamp_brief,
     min_brief_ok as intake_min_brief_ok,
+    fit_session_to_cap as intake_fit_session,
     intake_available,
     MAX_USER_TURNS,
     MAX_SESSION_TOKEN_CHARS,
@@ -1947,19 +1949,24 @@ def _check_intake_rate(request: Request) -> None:
                 "Too many messages. Please slow down and try again shortly.")
 
 
-# Per-session monotonic turn ledger for replay defense. Signed tokens are
-# stateless, so an OLD token can be resubmitted to fork state and re-spend model
-# calls below the 12-turn cap. We track the highest `turns` issued per `sid` and
-# reject any incoming token whose turn is behind it (a stale replay). Pure
-# server-side state is unavoidable for replay detection.
+# Per-session turn ledger for replay defense. Signed tokens are stateless, so an
+# OLD (or concurrently duplicated) token can be resubmitted to fork state and
+# re-spend model calls below the 12-turn cap. The ledger records the highest turn
+# already CONSUMED per `sid`; a token is accepted only if its turn strictly
+# exceeds that. The check + record is a single atomic compare-and-set under a
+# lock and happens BEFORE the model call, so two concurrent uses of the same
+# token can't both spend. Pure server-side state is unavoidable for replay
+# detection.
 # DEBT: in-memory / per-process — a restart clears it, so tokens are replayable
-# again until their ~2h TTL (SESSION_TTL_SECONDS) expires. Upgrade to Redis when
-# the booking limiter grows a shared unauthenticated store.
+# again until their ~2h TTL (intake_agent.SESSION_TTL_SECONDS) expires. Upgrade
+# to Redis when the booking limiter grows a shared unauthenticated store.
 _INTAKE_SESSION_TURNS: dict[str, tuple[int, float]] = {}
+_INTAKE_LEDGER_LOCK = threading.Lock()
 _INTAKE_LEDGER_MAX = 20000
 
 
 def _prune_session_ledger(now: float) -> None:
+    # Caller holds _INTAKE_LEDGER_LOCK.
     if len(_INTAKE_SESSION_TURNS) <= _INTAKE_LEDGER_MAX:
         return
     from intake_agent import SESSION_TTL_SECONDS
@@ -1972,23 +1979,27 @@ def _prune_session_ledger(now: float) -> None:
             _INTAKE_SESSION_TURNS.pop(k, None)
 
 
-def _intake_replay_ok(sid: Optional[str], turns: int) -> bool:
-    """True if a token at `turns` for `sid` is current/fresh; False if it is a
-    stale replay (behind the highest turn we've already issued for this sid)."""
-    if not sid:
-        return True
-    seen = _INTAKE_SESSION_TURNS.get(sid)
-    return seen is None or turns >= seen[0]
-
-
-def _intake_record_turn(sid: Optional[str], turns: int) -> None:
-    if not sid:
-        return
+def _intake_reserve_turn(sid: str, turns: int) -> bool:
+    """Atomic compare-and-set. Returns True and reserves `turns` for `sid` if it
+    strictly advances the highest turn already consumed; False if it's a stale or
+    concurrently-duplicated (replayed) token. Consuming BEFORE the model call is
+    what stops two concurrent identical tokens from both spending."""
     now = time.time()
-    prev = _INTAKE_SESSION_TURNS.get(sid)
-    if prev is None or turns >= prev[0]:
+    with _INTAKE_LEDGER_LOCK:
+        prev = _INTAKE_SESSION_TURNS.get(sid)
+        if prev is not None and turns <= prev[0]:
+            return False
         _INTAKE_SESSION_TURNS[sid] = (turns, now)
-    _prune_session_ledger(now)
+        _prune_session_ledger(now)
+    return True
+
+
+def _require_bound_session(state: dict) -> None:
+    """Hard-reject any signed token lacking a session id or numeric issued-at.
+    Such tokens (pre-fix, never deployed) would otherwise bypass expiry + the
+    replay ledger and retain indefinite-replay behavior."""
+    if not state.get("sid") or not isinstance(state.get("iat"), (int, float)):
+        raise HTTPException(status_code=401, detail="intake_session_invalid")
 
 
 async def _link_brief_to_booking(brief_id: Optional[str], booking_id: str, email: Optional[str] = None) -> None:
@@ -2034,13 +2045,14 @@ async def intake_message(req: IntakeMessageRequest, request: Request):
         # Path is fixed by the session, not the per-request field.
         if state.get("path") not in ("business", "individual"):
             raise HTTPException(status_code=400, detail="intake_session_invalid")
-        # Replay defense: reject a stale token (behind this sid's highest turn).
-        if not _intake_replay_ok(state.get("sid"), int(state.get("turns", 0))):
+        # Reject unbound legacy tokens (no sid/iat) outright — they'd bypass
+        # expiry + the ledger. Then atomically reserve this turn BEFORE any model
+        # call: a stale OR concurrently-duplicated token is a 409 (no double-spend).
+        _require_bound_session(state)
+        if not _intake_reserve_turn(state["sid"], int(state.get("turns", 0))):
             raise HTTPException(status_code=409, detail="intake_session_stale")
     else:
         state = intake_new_state(req.path)
-
-    sid = state.get("sid")
 
     # Server-enforced turn cap — cannot be bypassed by the client.
     if int(state.get("turns", 0)) >= MAX_USER_TURNS:
@@ -2054,14 +2066,13 @@ async def intake_message(req: IntakeMessageRequest, request: Request):
             if capped_complete else
             "We've covered a lot of ground. Let me hand you to a short form to capture the last details so Yanqing has what he needs."
         )
-        _intake_record_turn(sid, int(state.get("turns", 0)))
         return JSONResponse(content={
             "reply": reply,
             "brief": brief,
             "quick_replies": [],
             "complete": capped_complete,
             "recommended_next_step": "fit" if state.get("path") == "business" else "30",
-            "session": intake_sign_session({**state, "complete": capped_complete}),
+            "session": intake_sign_session(intake_fit_session({**state, "complete": capped_complete})),
             "capped": True,
         })
 
@@ -2069,7 +2080,6 @@ async def intake_message(req: IntakeMessageRequest, request: Request):
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(None, lambda: intake_run_turn(state, req.message))
         new_state = result.pop("state")
-        _intake_record_turn(new_state.get("sid"), int(new_state.get("turns", 0)))
         result["session"] = intake_sign_session(new_state)
         return JSONResponse(content=result)
     except Exception as exc:
@@ -2088,10 +2098,11 @@ async def intake_store_brief(req: IntakeBriefRequest, request: Request):
     _check_rate(request, "intake_brief", 900, 20,
                 "Too many submissions. Please try again shortly.")
 
-    # Gate on a valid session token — no valid interview, no write.
+    # Gate on a valid, bound session token — no valid interview, no write.
     state = intake_verify_session(req.session)
     if state is None:
         raise HTTPException(status_code=400, detail="intake_session_invalid")
+    _require_bound_session(state)
     path = state.get("path") if state.get("path") in ("business", "individual") else "unknown"
 
     # Re-validate + clamp the (client-edited) brief server-side.

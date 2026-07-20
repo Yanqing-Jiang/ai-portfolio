@@ -6,10 +6,13 @@ invariant, per-visitor rate limiting, and a mocked intake -> brief-persist flow
 (no live model or DB needed).
 """
 import sys
+import time
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+
+_now = time.time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -239,8 +242,8 @@ def test_intake_message_cap_thin_brief_not_complete(monkeypatch):
     monkeypatch.setattr(main, "intake_available", lambda: True)
     monkeypatch.setattr(main, "intake_run_turn", _fake_turn)
     client = TestClient(main.app)
-    capped = main.intake_sign_session({"sid": "sidcapthin", "path": "business", "turns": main.MAX_USER_TURNS,
-                                       "transcript": [], "brief": {"desired_outcome": "g"}})
+    capped = main.intake_sign_session({"sid": "sidcapthin", "iat": int(_now()), "path": "business",
+                                       "turns": main.MAX_USER_TURNS, "transcript": [], "brief": {"desired_outcome": "g"}})
     r = client.post("/api/intake/message", json={"path": "business", "session": capped, "message": "one more"})
     assert r.status_code == 200
     body = r.json()
@@ -254,8 +257,8 @@ def test_intake_message_cap_full_brief_completes(monkeypatch):
     monkeypatch.setattr(main, "intake_run_turn", _fake_turn)
     client = TestClient(main.app)
     full = {"desired_outcome": "goal", "current_workflow": "manual", "success_metric": "hrs"}
-    capped = main.intake_sign_session({"sid": "sidcapfull", "path": "business", "turns": main.MAX_USER_TURNS,
-                                       "transcript": [], "brief": full})
+    capped = main.intake_sign_session({"sid": "sidcapfull", "iat": int(_now()), "path": "business",
+                                       "turns": main.MAX_USER_TURNS, "transcript": [], "brief": full})
     r = client.post("/api/intake/message", json={"path": "business", "session": capped, "message": "one more"})
     assert r.status_code == 200
     body = r.json()
@@ -468,3 +471,82 @@ def test_link_brief_to_booking_ignores_bad_uuid(monkeypatch):
     asyncio.run(main._link_brief_to_booking("not-a-uuid", "booking-77", None))
     asyncio.run(main._link_brief_to_booking(None, "booking-77", None))
     assert called["n"] == 0
+
+
+# --- Unicode session size (serialized-length fitting) -----------------------
+
+def test_fit_session_bounds_unicode_max_state():
+    # A legally max-bounded state whose transcript is emoji / CJG-heavy. Under the
+    # old ASCII-escaping + codepoint clamp this signed to ~350K chars; now it must
+    # be trimmed to fit the request cap while the FULL brief is preserved.
+    for filler in ("😀", "漢字", "🚀🌍"):
+        msg = filler * (ia.MAX_TRANSCRIPT_MSG_CHARS // len(filler))
+        transcript = [{"role": "user" if i % 2 == 0 else "assistant", "content": msg}
+                      for i in range(2 * ia.MAX_USER_TURNS + 2)]
+        brief = {f: "outcome " + filler * 50 for f in ia.BRIEF_STR_FIELDS}
+        brief["open_questions"] = [filler * 30] * ia.MAX_OPEN_QUESTIONS
+        state = {"sid": "sidu", "iat": int(_now()), "path": "business",
+                 "turns": ia.MAX_USER_TURNS, "transcript": transcript, "brief": brief}
+        # Unbounded sign would be far over the cap.
+        assert len(ia.sign_session(state)) > ia.MAX_SESSION_TOKEN_CHARS
+        fitted = ia.fit_session_to_cap(state)
+        tok = ia.sign_session(fitted)
+        assert len(tok) <= ia.MAX_SESSION_TOKEN_CHARS
+        assert ia.verify_session(tok) is not None
+        # The full brief survived the trim (only transcript is shed).
+        assert fitted["brief"] == brief
+
+
+def test_run_turn_issues_capped_token_for_unicode(monkeypatch):
+    # End to end: a turn whose model reply + prior transcript are emoji-heavy still
+    # issues a token within the cap (fit applied inside run_turn).
+    big = "🚀" * ia.MAX_TRANSCRIPT_MSG_CHARS
+    prior = ia.new_state("business")
+    prior["transcript"] = [{"role": "user" if i % 2 == 0 else "assistant", "content": big}
+                           for i in range(2 * ia.MAX_USER_TURNS)]
+    prior["turns"] = ia.MAX_USER_TURNS - 1
+    monkeypatch.setattr(ia, "_get_client", lambda: _fake_client({
+        "reply": "🌍" * 2000, "brief": {"desired_outcome": "🚀" * 800},
+        "quick_replies": [], "complete": False, "recommended_next_step": "",
+    }))
+    res = ia.run_turn(prior, "😀" * 2000)
+    assert len(ia.sign_session(res["state"])) <= ia.MAX_SESSION_TOKEN_CHARS
+
+
+# --- Atomic replay (concurrent identical token) -----------------------------
+
+def test_intake_message_concurrent_identical_token_single_spend(monkeypatch):
+    import concurrent.futures as cf
+    monkeypatch.setattr(main, "intake_available", lambda: True)
+    monkeypatch.setattr(main, "intake_run_turn", _fake_turn)
+    tok1 = TestClient(main.app).post("/api/intake/message", json={"path": "business", "message": "hi"}).json()["session"]
+
+    def _fire(_):
+        # Own client per thread (httpx clients aren't shared across threads).
+        return TestClient(main.app).post(
+            "/api/intake/message", json={"path": "business", "session": tok1, "message": "same"}).status_code
+
+    with cf.ThreadPoolExecutor(max_workers=2) as ex:
+        codes = list(ex.map(_fire, range(2)))
+    # Exactly one concurrent use of the identical token is honored; the other is
+    # rejected as a stale/duplicate replay (no double model spend).
+    assert codes.count(200) == 1
+    assert 409 in codes
+
+
+# --- Legacy (unbound) token hard-reject -------------------------------------
+
+def test_intake_message_rejects_unbound_legacy_token(monkeypatch):
+    monkeypatch.setattr(main, "intake_available", lambda: True)
+    monkeypatch.setattr(main, "intake_run_turn", _fake_turn)
+    client = TestClient(main.app)
+    # A pre-fix token with neither sid nor iat must be hard-rejected (401), not
+    # accepted with indefinite-replay behavior.
+    legacy = main.intake_sign_session({"path": "business", "turns": 3, "transcript": [], "brief": {}})
+    r = client.post("/api/intake/message", json={"path": "business", "session": legacy, "message": "hi"})
+    assert r.status_code == 401
+    # Missing just the iat is also rejected.
+    no_iat = main.intake_sign_session({"sid": "x", "path": "business", "turns": 3, "transcript": [], "brief": {}})
+    assert client.post("/api/intake/message", json={"path": "business", "session": no_iat, "message": "hi"}).status_code == 401
+    # And the brief endpoint rejects an unbound token too.
+    assert client.post("/api/intake/brief", json={"session": legacy, "brief": {"desired_outcome": "x"}}).status_code == 401
