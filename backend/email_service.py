@@ -33,8 +33,22 @@ GMAIL_CREDENTIALS_PATH = os.getenv(
     "GMAIL_CREDENTIALS_PATH", "~/.gmail-mcp/credentials.json"
 )
 BOOKING_TIMEZONE = os.getenv("BOOKING_TIMEZONE", "America/Los_Angeles")
-# Admin alert recipient for new bookings. If empty, the admin alert is skipped.
-ADMIN_ALERT_EMAIL = os.getenv("ADMIN_ALERT_EMAIL", "jiangyanqing90@gmail.com")
+# Admin alert recipient(s) for new bookings / consult intake. Comma-separated list.
+# Every consult + context-form submission is copied to BOTH addresses (D5).
+# If empty, the admin alert is skipped.
+ADMIN_ALERT_EMAIL = os.getenv(
+    "ADMIN_ALERT_EMAIL", "yanqing.app@gmail.com,jiangyanqing91@gmail.com"
+)
+
+
+def _admin_alert_recipients() -> list[str]:
+    """Parse ADMIN_ALERT_EMAIL into a de-duplicated list of addresses."""
+    seen: list[str] = []
+    for part in (ADMIN_ALERT_EMAIL or "").split(","):
+        addr = part.strip()
+        if addr and addr not in seen:
+            seen.append(addr)
+    return seen
 
 # Scopes must match the ones the stored token was granted for.
 GMAIL_SCOPES = [
@@ -346,7 +360,8 @@ async def send_admin_booking_alert(
     sent only to the admin address, never to the client. Fire-and-forget:
     returns True on success, False otherwise; never raises.
     """
-    if not ADMIN_ALERT_EMAIL:
+    recipients = _admin_alert_recipients()
+    if not recipients:
         return False
 
     service = _get_gmail_service()
@@ -355,12 +370,15 @@ async def send_admin_booking_alert(
         return False
 
     try:
-        duration = "60" if session_type == "60" else "30"
-        subject = f"New consult booking — {name or 'unknown'} ({duration} min)"
+        is_free = session_type == "fit"
+        duration = "30" if is_free else ("60" if session_type == "60" else "30")
+        kind = "Enterprise fit call (FREE)" if is_free else f"{duration}-min session"
+        subject = f"New consult booking — {name or 'unknown'} ({kind})"
 
         lines = [
             "New consult booking confirmed on yanqing.app/consult",
             "",
+            f"Type:     {kind}",
             f"Name:     {name or '(none)'}",
             f"Email:    {email or '(none)'}",
             f"Duration: {duration} minutes",
@@ -373,7 +391,7 @@ async def send_admin_booking_alert(
         plain_text = "\n".join(lines) + "\n"
 
         mime_msg = MIMEText(plain_text, "plain", "utf-8")
-        mime_msg["To"] = ADMIN_ALERT_EMAIL
+        mime_msg["To"] = ", ".join(recipients)
         mime_msg["From"] = (
             f"Yanqing Bookings <{GMAIL_FROM_EMAIL}>"
             if "@" in GMAIL_FROM_EMAIL
@@ -396,7 +414,7 @@ async def send_admin_booking_alert(
             ).execute(),
         )
 
-        logger.info("[GMAIL] Admin booking alert sent to %s", ADMIN_ALERT_EMAIL)
+        logger.info("[GMAIL] Admin booking alert sent to %s", ", ".join(recipients))
         return True
 
     except Exception as exc:

@@ -10,66 +10,80 @@ export const DEFAULT_SAME_AS = [
   'https://github.com/Yanqing-Jiang',
 ];
 
+// Human-visible AND JSON-LD metrics (D4 approved). The "200% trading gain"
+// was dropped from landing per the refactor plan (risk-sensitive, off-offer);
+// it survives on the project page with its shutdown context.
 export const LANDING_METRICS = [
   {
     name: 'AutomationHoursSaved',
-    description: 'Estimated labor hours automated through AI workflow orchestration and reporting copilots.',
+    description: 'Labor hours automated through AI workflow orchestration and reporting copilots in production systems.',
     value: 4000,
     unitText: 'Hours',
   },
   {
-    name: 'IncrementalRevenueInfluenced',
-    description: 'Business value from analytics automation, experimentation, and forecasting programs.',
+    name: 'DecisionsInfluenced',
+    description: 'Business decisions influenced by analytics automation, experimentation, and forecasting programs.',
     value: 150000000,
     unitText: 'USD',
   },
   {
-    name: 'AgenticTradeGain',
-    description: 'Peak realized gain produced by the LangGraph-powered agentic trading bot proof of concept.',
-    value: 200,
+    name: 'AnalystHoursSaved',
+    description: 'Analyst hours saved annually by the LLM invoice reconciliation pipeline.',
+    value: 1000,
+    unitText: 'Hours',
+  },
+  {
+    name: 'LatePaymentReduction',
+    description: 'Reduction in late payments after the invoice reconciliation workflow shipped to production.',
+    value: 90,
     unitText: 'Percent',
   },
 ];
 
+// The four visible offers, verbatim to the landing page's two-path offers.
 export const LANDING_SERVICE_SUMMARY = [
   {
-    name: 'AI Agent Systems & Autonomy',
+    name: 'Enterprise agentic pipelines',
     description:
-      'Design LangGraph and multi-agent orchestrations that blend retrieval, memory, and clarifications for analytics and trading workflows.',
+      'Automate document-heavy, analytical, or multi-system work. Every build starts with a baseline - hours, cost, cycle time, error rate - and ships with telemetry around the result.',
     serviceType: 'AI Systems Engineering',
-    keywords: ['LangGraph', 'Agent Orchestration', 'Retrieval-Augmented Generation'],
+    keywords: ['Agentic Pipelines', 'Workflow Automation', 'Telemetry', 'Function Calling'],
     areaServed: 'Global',
   },
   {
-    name: 'Analytics Automation & Decision Ops',
+    name: 'Embedded AI delivery team',
     description:
-      'Ship telemetry-rich analytics copilots, alerting workflows, and narrative insights that compress analyst turnaround across commerce and media.',
-    serviceType: 'Analytics Automation',
-    keywords: ['Analytics Automation', 'Telemetry', 'Insight Copilots'],
+      'A five-person team across AI, data, product, and interface delivery that builds, instruments, launches, and hands over the system once the plan is agreed.',
+    serviceType: 'AI Delivery',
+    keywords: ['AI Delivery Team', 'Product', 'Data Engineering', 'Interface Design'],
     areaServed: 'Global',
   },
   {
-    name: 'Enterprise Data Activation',
+    name: 'Personal agent OS',
     description:
-      'Modernize Supabase, SQL Server, and Azure data stacks with governed views, vector indexes, and streaming pipelines that power AI copilots.',
-    serviceType: 'Data Engineering & Governance',
-    keywords: ['Supabase', 'SQL Server', 'Azure', 'Vector Indexes'],
+      'Short-term context, long-term memory, scheduled work, and controlled access to your tools - running on infrastructure you own. A system that compounds context over months.',
+    serviceType: 'Personal AI Systems',
+    keywords: ['Personal Agent', 'Long-Term Memory', 'MCP Tools', 'Scheduled Jobs'],
     areaServed: 'Global',
   },
   {
-    name: 'Experimentation & Forecasting Science',
+    name: 'Zero-maintenance personal website',
     description:
-      'Deploy experimentation scaffolding, causal models, and forecasting agents that inform investment and merchandising strategy.',
-    serviceType: 'Applied Data Science',
-    keywords: ['Experimentation', 'Forecasting', 'Causal Models'],
+      'Designed, built, hosted, maintained. Publishing, metadata, deployment, and monitoring are automated, while the site and content remain yours.',
+    serviceType: 'Web Systems',
+    keywords: ['Personal Website', 'Automated Publishing', 'Hosting', 'Monitoring'],
     areaServed: 'Global',
   },
 ];
 
 export const LANDING_SEO = {
-  title: 'Yanqing Jiang | AI Systems & Analytics Automation Portfolio',
+  title: 'Yanqing Jiang - AI Agent System Builder',
   description:
-    'AI Portfolio of Yanqing Jiang, senior Advanced Analytics Manager, specializing in Enterprise Agentic Workflows, GenAI production systems and Advanced Analytics solutions.',
+    'Yanqing Jiang designs and ships enterprise agentic pipelines, personal AI systems with durable memory, and zero-maintenance personal websites, backed by a five-person delivery team.',
+  // Social share framing (overrides title/description for og: and twitter:).
+  ogTitle: 'What It Takes to Make Agents Work in Production',
+  ogDescription:
+    'Case studies in agent memory, orchestration, analytics copilots, and end-to-end automation—from prototypes to production.',
   keywords: [
     'AI systems engineer',
     'analytics automation',

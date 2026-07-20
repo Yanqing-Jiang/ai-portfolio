@@ -266,18 +266,25 @@ const Layout: React.FC = () => {
     navigate(targetPath);
   };
 
+  // Marketing routes carry their own top nav (landing refactor Phase 1) — hide
+  // the legacy sidebar, floating toggle, and first-visit hint there.
+  const hideShellChrome = location.pathname === '/' || location.pathname === '/consult';
+
   return (
     <div className="flex h-[100dvh] bg-[#010208] text-white font-sans overflow-hidden">
-      <Sidebar
-        isSidebarOpen={isSidebarOpen}
-        projectData={PROJECT_DATA}
-        selectedProject={activeProject}
-        onSelectProject={goProject}
-        onGoHome={goHome}
-      />
+      {!hideShellChrome && (
+        <Sidebar
+          isSidebarOpen={isSidebarOpen}
+          projectData={PROJECT_DATA}
+          selectedProject={activeProject}
+          onSelectProject={goProject}
+          onGoHome={goHome}
+        />
+      )}
 
       <div className="relative flex-1 flex flex-col min-w-0 transition-all duration-500 ease-in-out">
         {/* Sidebar toggle button */}
+        {!hideShellChrome && (
         <button
           onClick={() => {
             setIsSidebarOpen(!isSidebarOpen);
@@ -294,9 +301,10 @@ const Layout: React.FC = () => {
         >
           {isSidebarOpen ? <ChevronLeftIcon /> : <ChevronRightIcon />}
         </button>
+        )}
 
         {/* Sidebar hint tooltip with premium animated arrow - shows once */}
-        {showSidebarHint && !isSidebarOpen && (
+        {!hideShellChrome && showSidebarHint && !isSidebarOpen && (
           <div className="fixed top-4 left-[64px] z-50 flex items-center gap-4 animate-fade-in pointer-events-none">
             {/* Premium Stylish Arrow */}
             <div className="relative flex items-center animate-bounce-horizontal">

@@ -545,7 +545,16 @@ class BookingCheckoutRequest(BaseModel):
     slot_start: str  # ISO 8601 with timezone
     name: str = Field(..., min_length=1, max_length=100)
     email: EmailStr
-    notes: Optional[str] = Field(None, max_length=500)
+    notes: Optional[str] = Field(None, max_length=2000)
+
+
+class FreeConsultRequest(BaseModel):
+    """Free enterprise fit-call booking (no payment). Mirrors the paid
+    checkout request but skips Stripe — the slot is confirmed directly."""
+    slot_start: str  # ISO 8601 with timezone
+    name: str = Field(..., min_length=1, max_length=100)
+    email: EmailStr
+    notes: Optional[str] = Field(None, max_length=2000)
 
 
 class BookingSlot(BaseModel):
@@ -1632,6 +1641,148 @@ async def create_booking_checkout(req: BookingCheckoutRequest):
             logger.error("[BOOKING] Failed to update stripe_session_id: %s", exc)
 
     return JSONResponse(content={"url": session.url})
+
+
+@app.post("/api/booking/free")
+async def create_free_consult(req: FreeConsultRequest):
+    """Book a FREE enterprise fit call (no payment).
+
+    De-walled direct booking: validates the slot, inserts a confirmed row,
+    creates the calendar event, and fires the same Telegram / admin-alert /
+    confirmation-email notifications as the paid flow. session_type "fit"
+    is treated as a 30-minute call. Intake context (the required form) rides
+    in `notes` and is copied to both admin recipients (D5).
+    """
+    session_type = "fit"
+
+    # Parse and validate slot_start
+    try:
+        slot_start = _DateTime.fromisoformat(req.slot_start)
+        if slot_start.tzinfo is None:
+            raise ValueError("Timezone required")
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid slot_start: {exc}")
+
+    if slot_start <= _DateTime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="Cannot book a slot in the past.")
+
+    from datetime import timedelta
+    slot_end = slot_start + timedelta(minutes=30)
+
+    booking_id = str(uuid.uuid4())
+    free_session_id = f"free_{booking_id}"
+
+    pool = await _get_booking_pool()
+    if pool is not None:
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    UPDATE bookings
+                    SET status = 'expired', updated_at = NOW()
+                    WHERE status = 'hold'
+                      AND created_at < NOW() - INTERVAL '30 minutes'
+                    """
+                )
+                try:
+                    await conn.execute(
+                        """
+                        INSERT INTO bookings (
+                            id, stripe_session_id, session_type,
+                            slot_start, slot_end, client_name, client_email,
+                            notes, status, amount_cents
+                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'hold', 0)
+                        """,
+                        uuid.UUID(booking_id),
+                        free_session_id,
+                        session_type,
+                        slot_start,
+                        slot_end,
+                        req.name,
+                        req.email,
+                        req.notes,
+                    )
+                except Exception as db_exc:
+                    logger.warning("[BOOKING] Free-consult slot conflict: %s", db_exc)
+                    raise HTTPException(
+                        status_code=409,
+                        detail="This time slot is no longer available. Please choose another.",
+                    )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.error("[BOOKING] Free-consult DB insert failed: %s", exc)
+            raise HTTPException(status_code=500, detail="Booking system error. Please try again.")
+    else:
+        logger.warning("[BOOKING] No database — proceeding without hold (dev mode)")
+
+    # Confirm the booking directly (no payment step). Create calendar event.
+    new_status = "confirmed"
+    calendar_event_id = None
+    meet_link = None
+    try:
+        cal_result = await create_booking_event(
+            session_type="30",
+            slot_start=slot_start,
+            name=req.name,
+            email=req.email,
+            notes=req.notes,
+        )
+        calendar_event_id = cal_result.get("event_id")
+        meet_link = cal_result.get("meet_link")
+    except Exception as exc:
+        logger.error("[BOOKING] Free-consult calendar event failed: %s", exc)
+        new_status = "calendar_failed"
+
+    if pool is not None:
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    UPDATE bookings
+                    SET status = $1, calendar_event_id = $2, meet_link = $3, updated_at = NOW()
+                    WHERE id = $4
+                    """,
+                    new_status,
+                    calendar_event_id,
+                    meet_link,
+                    uuid.UUID(booking_id),
+                )
+        except Exception as exc:
+            logger.error("[BOOKING] Free-consult status update failed: %s", exc)
+
+    # Fire-and-forget notifications (same as paid flow).
+    try:
+        await send_booking_notification(
+            name=req.name, email=req.email,
+            session_type=session_type, slot_start=req.slot_start,
+        )
+    except Exception as exc:
+        logger.error("[BOOKING] Telegram notification failed (non-blocking): %s", exc)
+
+    try:
+        await send_admin_booking_alert(
+            name=req.name, email=req.email,
+            session_type=session_type, slot_start=req.slot_start,
+            notes=req.notes, meet_link=meet_link,
+        )
+    except Exception as exc:
+        logger.error("[BOOKING] Admin email alert failed (non-blocking): %s", exc)
+
+    try:
+        await send_booking_confirmation_email(
+            name=req.name, email=req.email,
+            session_type="30", slot_start=req.slot_start, meet_link=meet_link,
+        )
+    except Exception as exc:
+        logger.error("[BOOKING] Confirmation email failed (non-blocking): %s", exc)
+
+    return JSONResponse(content={
+        "id": booking_id,
+        "status": new_status,
+        "meet_link": meet_link,
+        "slot_start": req.slot_start,
+    })
 
 
 @app.post("/api/booking/webhook")
