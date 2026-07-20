@@ -143,6 +143,9 @@ export const ConsultingPage: React.FC = () => {
     // holds the approved brief that rides into the booking notes.
     const [useChat, setUseChat] = useState(true);
     const [briefNotes, setBriefNotes] = useState<string | null>(null);
+    const [briefObj, setBriefObj] = useState<Brief | null>(null);
+    const [briefSession, setBriefSession] = useState<string | null>(null);
+    const [fallbackNotice, setFallbackNotice] = useState(false);
 
     // Scheduling
     const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -224,26 +227,56 @@ export const ConsultingPage: React.FC = () => {
         return lines.join('\n').slice(0, 1990);
     };
 
-    // Chat completed: attach the brief, preselect the recommended step, persist
-    // the brief (best-effort), and drop into the booking cards + scheduling.
-    const handleBriefReady = (notes: string, recommendedNextStep: string, brief: Brief) => {
+    // Chat completed: attach the reviewed brief + its signed session (used to
+    // authorize persistence at book time), preselect the recommended step, and
+    // drop into the booking cards + scheduling. Persistence happens at book time
+    // (once name/email exist) so the stored row can carry contact + booking id.
+    const handleBriefReady = (notes: string, recommendedNextStep: string, brief: Brief, session: string | null) => {
         setBriefNotes(notes);
+        setBriefObj(brief);
+        setBriefSession(session);
         if (recommendedNextStep === 'fit' || recommendedNextStep === '30' || recommendedNextStep === '60') {
             setSelected(recommendedNextStep as Offering);
         }
         setUseChat(false);
+    };
+
+    // Chat/endpoint failure: switch to the guided form and carry over whatever
+    // the agent captured so the prospect doesn't retype it.
+    const handleChatFallback = (partial?: Brief) => {
+        if (partial) {
+            if (partial.desired_outcome && !improve.trim()) setImprove(partial.desired_outcome);
+            if (partial.current_workflow && !today.trim()) setToday(partial.current_workflow);
+            const usefulSeed = partial.success_metric || partial.people_and_frequency;
+            if (usefulSeed && !useful.trim()) setUseful(usefulSeed);
+        }
+        setFallbackNotice(true);
+        setUseChat(false);
+    };
+
+    // Persist the reviewed brief (requires the signed session). Returns brief_id
+    // to attach to the booking, or null. Best-effort — never blocks the funnel.
+    const persistBrief = async (backendUrl: string, bookingId?: string): Promise<string | null> => {
+        if (!briefSession || !briefObj) return null;
         try {
-            const backendUrl = configService.getBackendUrl().replace(/\/$/, '');
-            fetch(`${backendUrl}/api/intake/brief`, {
+            const res = await fetch(`${backendUrl}/api/intake/brief`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    path: chatPath ?? 'unknown',
-                    brief,
-                    recommended_next_step: recommendedNextStep || null,
+                    session: briefSession,
+                    brief: briefObj,
+                    name: name.trim() || null,
+                    email: email.trim() || null,
+                    recommended_next_step: selected === 'fit' || selected === '30' || selected === '60' ? selected : null,
+                    booking_id: bookingId || null,
                 }),
-            }).catch(() => {});
-        } catch { /* best-effort persistence */ }
+            });
+            if (!res.ok) return null;
+            const data = await res.json();
+            return data.brief_id ?? null;
+        } catch {
+            return null;
+        }
     };
 
     const handleBook = async () => {
@@ -253,13 +286,16 @@ export const ConsultingPage: React.FC = () => {
         try {
             const backendUrl = configService.getBackendUrl().replace(/\/$/, '');
             const notes = buildNotes();
+            // Persist the reviewed brief first (chat path only) so the booking can
+            // reference it and the stored row carries contact info.
+            const intakeBriefId = await persistBrief(backendUrl);
 
             if (selected === 'fit') {
                 // Free enterprise fit call — direct booking, no payment.
                 const res = await fetch(`${backendUrl}/api/booking/free`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ slot_start: selectedTime, name, email, notes }),
+                    body: JSON.stringify({ slot_start: selectedTime, name, email, notes, intake_brief_id: intakeBriefId }),
                 });
                 if (!res.ok) {
                     const data = await res.json().catch(() => ({}));
@@ -272,7 +308,7 @@ export const ConsultingPage: React.FC = () => {
                 const res = await fetch(`${backendUrl}/api/booking/checkout`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ session_type: selected, slot_start: selectedTime, name, email, notes }),
+                    body: JSON.stringify({ session_type: selected, slot_start: selectedTime, name, email, notes, intake_brief_id: intakeBriefId }),
                 });
                 if (!res.ok) {
                     const data = await res.json().catch(() => ({}));
@@ -407,7 +443,7 @@ export const ConsultingPage: React.FC = () => {
                     <IntakeChat
                         path={chatPath}
                         onComplete={handleBriefReady}
-                        onFallback={() => setUseChat(false)}
+                        onFallback={handleChatFallback}
                     />
                 </section>
             )}
@@ -415,6 +451,11 @@ export const ConsultingPage: React.FC = () => {
             {/* Offering cards */}
             {!showFork && !showChat && (
             <section className="mx-auto max-w-[1080px] px-6 pb-4">
+                {fallbackNotice && (
+                    <p className="mb-6 inline-block rounded-[4px] border border-[#37332E] bg-[#191816] px-4 py-2 text-[13px] text-[#A8A096]">
+                        The intake agent is unavailable — use the quick form below. Anything you already told the agent is carried over.
+                    </p>
+                )}
                 {briefNotes && (
                     <p className="mb-6 inline-block rounded-[4px] border border-[#F04A32]/40 bg-[#191816] px-4 py-2 text-[13px] text-[#F1EADF]">
                         ✓ Your brief is ready and will be attached to the booking. Choose a call and time below.

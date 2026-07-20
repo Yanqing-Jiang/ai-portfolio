@@ -92,7 +92,15 @@ BOOKING_AMOUNT_CENTS = {
 from calendar_service import get_available_slots, create_booking_event, delete_booking_event
 from telegram_service import send_booking_notification
 from email_service import send_booking_confirmation_email, send_admin_booking_alert
-from intake_agent import run_intake_turn, brief_to_notes, intake_available, MAX_USER_TURNS
+from intake_agent import (
+    run_turn as intake_run_turn,
+    new_state as intake_new_state,
+    sign_session as intake_sign_session,
+    verify_session as intake_verify_session,
+    clamp_brief as intake_clamp_brief,
+    intake_available,
+    MAX_USER_TURNS,
+)
 from rate_limiter import parse_user_id, ParsedToken
 
 # Booking DB pool (shares SUPABASE_DB_URL with token_store)
@@ -200,6 +208,7 @@ from rate_limiter import (
     build_scoped_identifier,
     RateLimitScope,
     is_superuser,
+    _guest_ip,
 )
 try:
     from token_store import token_store
@@ -547,24 +556,27 @@ class BookingCheckoutRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     email: EmailStr
     notes: Optional[str] = Field(None, max_length=2000)
-
-
-class IntakeChatMessage(BaseModel):
-    role: Literal["user", "assistant"]
-    content: str = Field(..., max_length=4000)
+    intake_brief_id: Optional[str] = Field(None, max_length=64)
 
 
 class IntakeMessageRequest(BaseModel):
+    # The next user reply only. History is server-owned inside the signed
+    # `session` token; the client cannot forge past turns or the turn count.
     path: Literal["business", "individual"]
-    messages: list[IntakeChatMessage] = Field(..., max_length=60)
+    session: Optional[str] = Field(None, max_length=16000)  # signed session token
+    message: str = Field("", max_length=2000)
 
 
 class IntakeBriefRequest(BaseModel):
-    path: Literal["business", "individual", "unknown"] = "unknown"
+    # Persisting a brief requires a valid signed intake session (proves a real
+    # interview happened). The brief is the client-reviewed/edited version; it is
+    # re-validated + clamped server-side before the write.
+    session: str = Field(..., max_length=16000)
     brief: dict = Field(default_factory=dict)
     name: Optional[str] = Field(None, max_length=100)
     email: Optional[str] = Field(None, max_length=200)
     recommended_next_step: Optional[str] = Field(None, max_length=8)
+    booking_id: Optional[str] = Field(None, max_length=64)
 
 
 class FreeConsultRequest(BaseModel):
@@ -574,6 +586,7 @@ class FreeConsultRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     email: EmailStr
     notes: Optional[str] = Field(None, max_length=2000)
+    intake_brief_id: Optional[str] = Field(None, max_length=64)
 
 
 class BookingSlot(BaseModel):
@@ -1624,6 +1637,7 @@ async def create_booking_checkout(req: BookingCheckoutRequest):
                 "slot_start": req.slot_start,
                 "client_name": req.name,
                 "client_email": req.email,
+                "intake_brief_id": req.intake_brief_id or "",
             },
             customer_email=req.email,
             success_url=f"{SITE_ORIGIN}/consult?status=success&session_id={{CHECKOUT_SESSION_ID}}",
@@ -1662,27 +1676,33 @@ async def create_booking_checkout(req: BookingCheckoutRequest):
     return JSONResponse(content={"url": session.url})
 
 
-# Basic in-process anti-automation for the de-walled free endpoint. Keyed by
-# client IP, sliding window. Not distributed (single-process backend), but it
-# stops a naive loop from spraying calendar invites + dual-admin email.
-# DEBT: in-memory only — resets on restart and is per-process. Upgrade to the
-# Redis rate_limiter when it grows an unauthenticated per-endpoint limiter.
-_FREE_CONSULT_HITS: dict[str, list[float]] = {}
-_FREE_CONSULT_WINDOW_S = 900  # 15 minutes
-_FREE_CONSULT_MAX = 6
+# In-process anti-automation for the de-walled unauthenticated endpoints.
+# Keyed by the TRUSTED visitor IP (_guest_ip resolves the Cloudflare-forwarded
+# caller when TRUST_FORWARDED_IP is on, not the tunnel peer) so buckets are
+# per-visitor, and spoofed forwarding headers are rejected when trust is off.
+# DEBT: in-memory / per-process — resets on restart. Upgrade to the Redis
+# rate_limiter when it grows an unauthenticated per-endpoint mode.
+_RATE_BUCKETS: dict[str, dict[str, list[float]]] = {}
+
+
+def _rate_key(request: Request) -> str:
+    return _guest_ip(request)
+
+
+def _check_rate(request: Request, bucket: str, window_s: int, limit: int, detail: str) -> None:
+    key = _rate_key(request)
+    now = time.time()
+    store = _RATE_BUCKETS.setdefault(bucket, {})
+    hits = [t for t in store.get(key, []) if now - t < window_s]
+    if len(hits) >= limit:
+        raise HTTPException(status_code=429, detail=detail)
+    hits.append(now)
+    store[key] = hits
 
 
 def _check_free_consult_rate(request: Request) -> None:
-    ip = request.client.host if request.client else "unknown"
-    now = time.time()
-    hits = [t for t in _FREE_CONSULT_HITS.get(ip, []) if now - t < _FREE_CONSULT_WINDOW_S]
-    if len(hits) >= _FREE_CONSULT_MAX:
-        raise HTTPException(
-            status_code=429,
-            detail="Too many booking attempts. Please wait a few minutes and try again.",
-        )
-    hits.append(now)
-    _FREE_CONSULT_HITS[ip] = hits
+    _check_rate(request, "free_consult", 900, 6,
+                "Too many booking attempts. Please wait a few minutes and try again.")
 
 
 async def _assert_slot_offered(slot_start: "_DateTime") -> None:
@@ -1873,12 +1893,16 @@ async def create_free_consult(req: FreeConsultRequest, request: Request):
         except Exception as exc:
             logger.error("[BOOKING] Free-consult status update failed: %s", exc)
 
+    # Link the intake brief (if any) to this booking.
+    await _link_brief_to_booking(req.intake_brief_id, booking_id, req.email)
+
     # Confirmed — fire notifications (session_type "fit" is a display-only label
     # for the admin alert; the DB row stays '30').
     try:
         await send_booking_notification(
             name=req.name, email=req.email,
             session_type="fit", slot_start=req.slot_start,
+            notes=req.notes,
         )
     except Exception as exc:
         logger.error("[BOOKING] Telegram notification failed (non-blocking): %s", exc)
@@ -1913,54 +1937,76 @@ async def create_free_consult(req: FreeConsultRequest, request: Request):
 # AI Brief Agent (Phase 2) — /consult intake chat
 # ---------------------------------------------------------------------------
 
-# Per-IP anti-automation for the unauthenticated intake endpoint, mirroring the
-# free-consult limiter. A full interview is ~12 turns; allow a couple of retries.
-# DEBT: in-memory / per-process — upgrade to the Redis limiter when it grows an
-# unauthenticated per-endpoint mode.
-_INTAKE_HITS: dict[str, list[float]] = {}
-_INTAKE_WINDOW_S = 900  # 15 minutes
-_INTAKE_MAX = 40
-
-
 def _check_intake_rate(request: Request) -> None:
-    ip = request.client.host if request.client else "unknown"
-    now = time.time()
-    hits = [t for t in _INTAKE_HITS.get(ip, []) if now - t < _INTAKE_WINDOW_S]
-    if len(hits) >= _INTAKE_MAX:
-        raise HTTPException(status_code=429, detail="Too many messages. Please slow down and try again shortly.")
-    hits.append(now)
-    _INTAKE_HITS[ip] = hits
+    # ~12-turn interview + a couple of retries; keyed per trusted visitor IP.
+    _check_rate(request, "intake", 900, 40,
+                "Too many messages. Please slow down and try again shortly.")
+
+
+async def _link_brief_to_booking(brief_id: Optional[str], booking_id: str, email: Optional[str] = None) -> None:
+    """Best-effort: attach a stored intake brief to the booking it produced."""
+    if not brief_id:
+        return
+    pool = await _get_booking_pool()
+    if pool is None:
+        return
+    try:
+        bid = uuid.UUID(brief_id)
+    except Exception:
+        return
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE intake_briefs SET booking_id = $1, client_email = COALESCE($2, client_email) WHERE id = $3",
+                booking_id, email, bid,
+            )
+    except Exception as exc:
+        logger.error("[INTAKE] Failed to link brief %s to booking %s: %s", brief_id, booking_id, exc)
 
 
 @app.post("/api/intake/message")
 async def intake_message(req: IntakeMessageRequest, request: Request):
-    """One turn of the guided intake interview. Stateless: the client holds the
-    transcript. Scope-locked + turn-capped + rate-limited. On any failure the
-    client falls back to the guided context form (progressive enhancement)."""
+    """One turn of the guided intake interview.
+
+    Server-authoritative: the transcript + turn count + running brief live in the
+    signed `session` token, not in a client-supplied history. The browser sends
+    only the next user reply. Scope-locked, turn-capped, rate-limited, output
+    schema-validated. On any failure the client falls back to the guided form."""
     _check_intake_rate(request)
 
     if not intake_available():
-        # No model key configured — tell the client to use the form.
         raise HTTPException(status_code=503, detail="intake_unavailable")
 
-    # Turn cap: count prospect turns; force a graceful wrap-up past the cap.
-    user_turns = sum(1 for m in req.messages if m.role == "user")
-    if user_turns > MAX_USER_TURNS:
+    # Resolve server-owned session state from the signed token (or start fresh).
+    if req.session:
+        state = intake_verify_session(req.session)
+        if state is None:
+            # Tampered/expired token — restart cleanly (client falls back or reseeds).
+            raise HTTPException(status_code=400, detail="intake_session_invalid")
+        # Path is fixed by the session, not the per-request field.
+        if state.get("path") not in ("business", "individual"):
+            raise HTTPException(status_code=400, detail="intake_session_invalid")
+    else:
+        state = intake_new_state(req.path)
+
+    # Server-enforced turn cap — cannot be bypassed by the client.
+    if int(state.get("turns", 0)) >= MAX_USER_TURNS:
+        brief = state.get("brief", {})
         return JSONResponse(content={
             "reply": "I've got enough to prepare your brief. Review it on the right, correct anything I misread, then choose how to book below.",
-            "brief": {},
+            "brief": brief,
             "quick_replies": [],
             "complete": True,
-            "recommended_next_step": "fit" if req.path == "business" else "30",
+            "recommended_next_step": "fit" if state.get("path") == "business" else "30",
+            "session": intake_sign_session({**state, "complete": True}),
             "capped": True,
         })
 
     try:
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None,
-            lambda: run_intake_turn(req.path, [m.model_dump() for m in req.messages]),
-        )
+        result = await loop.run_in_executor(None, lambda: intake_run_turn(state, req.message))
+        new_state = result.pop("state")
+        result["session"] = intake_sign_session(new_state)
         return JSONResponse(content=result)
     except Exception as exc:
         logger.error("[INTAKE] Turn failed: %s", exc)
@@ -1969,31 +2015,53 @@ async def intake_message(req: IntakeMessageRequest, request: Request):
 
 @app.post("/api/intake/brief")
 async def intake_store_brief(req: IntakeBriefRequest, request: Request):
-    """Persist a completed, prospect-approved brief (best-effort). Returns a
-    brief_id the booking can reference. Never blocks the funnel on DB errors."""
+    """Persist a prospect-approved brief. Requires a valid signed intake session
+    (proves a real interview) and re-validates/clamps the brief before writing —
+    randoms cannot spray arbitrary JSON into the table. Rate-limited. Returns a
+    brief_id the booking references. Never blocks the funnel on DB errors."""
     import hashlib
 
-    ip = request.client.host if request.client else "unknown"
-    ip_hash = hashlib.sha256(ip.encode("utf-8")).hexdigest()[:32]
+    _check_rate(request, "intake_brief", 900, 20,
+                "Too many submissions. Please try again shortly.")
+
+    # Gate on a valid session token — no valid interview, no write.
+    state = intake_verify_session(req.session)
+    if state is None:
+        raise HTTPException(status_code=400, detail="intake_session_invalid")
+    path = state.get("path") if state.get("path") in ("business", "individual") else "unknown"
+
+    # Re-validate + clamp the (client-edited) brief server-side.
+    brief = intake_clamp_brief(req.brief)
+    step = req.recommended_next_step if req.recommended_next_step in ("fit", "30", "60") else None
+
+    ip_hash = hashlib.sha256(_guest_ip(request).encode("utf-8")).hexdigest()[:32]
 
     pool = await _get_booking_pool()
     if pool is None:
         logger.warning("[INTAKE] No DB — brief not persisted (dev mode)")
         return JSONResponse(content={"brief_id": None, "stored": False})
 
+    booking_uuid = None
+    if req.booking_id:
+        try:
+            booking_uuid = uuid.UUID(req.booking_id)
+        except Exception:
+            booking_uuid = None
+
     try:
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
-                INSERT INTO intake_briefs (path, brief, client_name, client_email, recommended_next_step, source_ip_hash)
-                VALUES ($1, $2, $3, $4, $5, $6)
+                INSERT INTO intake_briefs (path, brief, client_name, client_email, recommended_next_step, booking_id, source_ip_hash)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
                 RETURNING id
                 """,
-                req.path,
-                json.dumps(req.brief or {}),
-                req.name,
-                req.email,
-                req.recommended_next_step,
+                path,
+                json.dumps(brief),
+                (req.name or None),
+                (req.email or None),
+                step,
+                booking_uuid,
                 ip_hash,
             )
         return JSONResponse(content={"brief_id": str(row["id"]), "stored": True})
@@ -2117,6 +2185,13 @@ async def booking_webhook(request: Request):
             booking["id"],
         )
 
+    # Link the intake brief (if the checkout carried one) to this booking.
+    await _link_brief_to_booking(
+        metadata.get("intake_brief_id") or None,
+        str(booking["id"]),
+        client_email or booking.get("client_email"),
+    )
+
     # Send Telegram notification (fire-and-forget)
     try:
         await send_booking_notification(
@@ -2124,6 +2199,7 @@ async def booking_webhook(request: Request):
             email=client_email or booking["client_email"],
             session_type=session_type or booking["session_type"],
             slot_start=slot_start_str or str(booking["slot_start"]),
+            notes=booking.get("notes"),
         )
     except Exception as exc:
         logger.error("[BOOKING] Telegram notification failed (non-blocking): %s", exc)
