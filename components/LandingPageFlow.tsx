@@ -121,6 +121,9 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                 <meta property="og:url" content={LANDING_SEO.canonical} />
                 <meta property="og:site_name" content={SITE_NAME} />
                 <meta property="og:image" content={DEFAULT_OG_IMAGE} />
+                <meta property="og:image:width" content="1200" />
+                <meta property="og:image:height" content="630" />
+                <meta property="og:image:alt" content="AI agent system builder." />
                 <meta name="twitter:card" content="summary_large_image" />
                 <meta name="twitter:site" content={DEFAULT_TWITTER_HANDLE} />
                 <meta name="twitter:title" content={LANDING_SEO.ogTitle} />

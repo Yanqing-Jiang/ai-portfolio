@@ -8,7 +8,9 @@ import { Clock, Loader2, CheckCircle2 } from 'lucide-react';
 import { CalendarPicker } from './CalendarPicker';
 import { BookingConfirmation } from './BookingConfirmation';
 import { useAvailableSlots } from './useAvailableSlots';
+import { IntakeChat } from './IntakeChat';
 import { configService } from '@/services/config';
+import { DEFAULT_OG_IMAGE } from '@/constants/seo';
 
 /*
  * /consult — Phase 1 "Prices on the door" booking.
@@ -130,11 +132,17 @@ export const ConsultingPage: React.FC = () => {
 
     // Buyer intent from landing (?path=&offer=), preserved into notes/preselect.
     const [pathIntent, setPathIntent] = useState<string | null>(initialIntent.path);
-    const [offerIntent, setOfferIntent] = useState<string | null>(initialIntent.offer);
+    const offerIntent = initialIntent.offer; // never changes after mount
     // Generic (param-less) entry opens with the business-vs-personal fork before
     // the priced cards. Derived synchronously from the URL so a param'd entry
     // never renders the chooser (no flash). Param-less entry keeps it as first render.
     const [showFork, setShowFork] = useState<boolean>(() => !(initialIntent.path || initialIntent.offer));
+
+    // Phase 2 — AI Brief Agent. Chat-first when a path is known; falls back to
+    // the guided form on agent failure (progressive enhancement). `briefNotes`
+    // holds the approved brief that rides into the booking notes.
+    const [useChat, setUseChat] = useState(true);
+    const [briefNotes, setBriefNotes] = useState<string | null>(null);
 
     // Scheduling
     const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -162,8 +170,23 @@ export const ConsultingPage: React.FC = () => {
     );
 
     const emailValid = EMAIL_RE.test(email.trim());
-    const contextValid = !!(improve.trim() && today.trim() && useful.trim() && name.trim() && emailValid);
+    // In brief mode the rich context came from the chat, so only name + a valid
+    // email are still required; in form mode all three context fields are.
+    const contextValid = briefNotes
+        ? !!(name.trim() && emailValid)
+        : !!(improve.trim() && today.trim() && useful.trim() && name.trim() && emailValid);
     const canSubmit = !!(selected && contextValid && selectedTime);
+
+    // The chat interviews for 'business' | 'individual'; map the buyer path.
+    const chatPath: 'business' | 'individual' | null =
+        pathIntent === 'business' || pathIntent === 'enterprise'
+            ? 'business'
+            : pathIntent === 'individual' || pathIntent === 'personal'
+                ? 'individual'
+                : null;
+    // Show the chat when: a path is known, chat isn't disabled, no brief captured
+    // yet, and we're not on a confirmation screen.
+    const showChat = !!(chatPath && useChat && !briefNotes && !freeConfirmed && !confirmationSessionId);
 
     const formatSlotTime = (iso: string) => {
         try {
@@ -178,6 +201,14 @@ export const ConsultingPage: React.FC = () => {
     };
 
     const buildNotes = () => {
+        // Brief mode: the AI intake brief is the context; append call + company.
+        if (briefNotes) {
+            const extra = [
+                `Call: ${activeOffering?.label ?? selected}`,
+                company.trim() ? `Company: ${company.trim()}` : null,
+            ].filter(Boolean).join('\n');
+            return `${extra}\n\n${briefNotes}`.slice(0, 1990);
+        }
         const lines = [
             `Call: ${activeOffering?.label ?? selected}`,
             pathIntent ? `Buyer path: ${pathIntent}` : null,
@@ -191,6 +222,28 @@ export const ConsultingPage: React.FC = () => {
             `What would make the conversation useful?\n${useful.trim()}`,
         ].filter((l) => l !== null);
         return lines.join('\n').slice(0, 1990);
+    };
+
+    // Chat completed: attach the brief, preselect the recommended step, persist
+    // the brief (best-effort), and drop into the booking cards + scheduling.
+    const handleBriefReady = (notes: string, recommendedNextStep: string, brief: Record<string, unknown>) => {
+        setBriefNotes(notes);
+        if (recommendedNextStep === 'fit' || recommendedNextStep === '30' || recommendedNextStep === '60') {
+            setSelected(recommendedNextStep as Offering);
+        }
+        setUseChat(false);
+        try {
+            const backendUrl = configService.getBackendUrl().replace(/\/$/, '');
+            fetch(`${backendUrl}/api/intake/brief`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    path: chatPath ?? 'unknown',
+                    brief,
+                    recommended_next_step: recommendedNextStep || null,
+                }),
+            }).catch(() => {});
+        } catch { /* best-effort persistence */ }
     };
 
     const handleBook = async () => {
@@ -265,9 +318,16 @@ export const ConsultingPage: React.FC = () => {
             <Helmet>
                 <title>{seo.title}</title>
                 <meta name="description" content={seo.description} />
-                <meta property="og:title" content={seo.title} />
-                <meta property="og:description" content={seo.description} />
+                <meta property="og:type" content="website" />
+                <meta property="og:title" content="From Business Question to Action—Without a Dashboard" />
+                <meta property="og:description" content="See how agent systems turn business questions into SQL, charts, insights, and action—with humans in the loop." />
                 <meta property="og:url" content="https://yanqing.app/consult" />
+                <meta property="og:image" content={DEFAULT_OG_IMAGE} />
+                <meta property="og:image:width" content="1200" />
+                <meta property="og:image:height" content="630" />
+                <meta property="og:image:alt" content="AI agent system builder." />
+                <meta name="twitter:card" content="summary_large_image" />
+                <meta name="twitter:image" content={DEFAULT_OG_IMAGE} />
                 <link rel="canonical" href="https://yanqing.app/consult" />
             </Helmet>
 
@@ -335,10 +395,32 @@ export const ConsultingPage: React.FC = () => {
                 </section>
             )}
 
+            {/* AI Brief Agent — chat-first intake (Phase 2) */}
+            {showChat && chatPath && (
+                <section className="mx-auto max-w-[1080px] px-6 pb-8">
+                    <div className="mb-6">
+                        <h2 className="text-[22px] font-bold text-[#F1EADF]">Tell the agent what should work better.</h2>
+                        <p className="mt-2 max-w-[60ch] text-[15px] text-[#A8A096]">
+                            In a few minutes it will ask the questions Yanqing needs, build a brief you can edit, and route you to the right next step. No sign-in. Don't share confidential data or credentials.
+                        </p>
+                    </div>
+                    <IntakeChat
+                        path={chatPath}
+                        onComplete={handleBriefReady}
+                        onFallback={() => setUseChat(false)}
+                    />
+                </section>
+            )}
+
             {/* Offering cards */}
-            {!showFork && (
+            {!showFork && !showChat && (
             <section className="mx-auto max-w-[1080px] px-6 pb-4">
-                {offerLabel && (
+                {briefNotes && (
+                    <p className="mb-6 inline-block rounded-[4px] border border-[#F04A32]/40 bg-[#191816] px-4 py-2 text-[13px] text-[#F1EADF]">
+                        ✓ Your brief is ready and will be attached to the booking. Choose a call and time below.
+                    </p>
+                )}
+                {!briefNotes && offerLabel && (
                     <p className="mb-6 inline-block rounded-[4px] border border-[#37332E] bg-[#191816] px-4 py-2 text-[13px] text-[#A8A096]">
                         You're here about <span className="font-semibold text-[#F1EADF]">{offerLabel}</span>. Pick a call below — I'll have the context.
                     </p>
@@ -385,7 +467,7 @@ export const ConsultingPage: React.FC = () => {
 
             {/* Context form + scheduling */}
             <AnimatePresence>
-                {activeOffering && !freeConfirmed && (
+                {activeOffering && !freeConfirmed && !showChat && (
                     <motion.section
                         initial={{ opacity: 0, y: 24 }}
                         animate={{ opacity: 1, y: 0 }}
@@ -393,7 +475,32 @@ export const ConsultingPage: React.FC = () => {
                         className="mx-auto max-w-[1080px] px-6 py-12"
                     >
                         <div className="grid gap-12 lg:grid-cols-2">
-                            {/* Required context */}
+                            {/* Context — brief attached (from chat) OR the guided form */}
+                            {briefNotes ? (
+                                <div className="space-y-4">
+                                    <div>
+                                        <h2 className="text-[22px] font-bold text-[#F1EADF]">Your details</h2>
+                                        <p className="mt-2 text-[13px] text-[#A8A096]">
+                                            Your intake brief is attached. Just add your name and email so Yanqing can reach you.
+                                        </p>
+                                    </div>
+                                    <div className="grid gap-4 sm:grid-cols-2">
+                                        <input type="text" value={name} onChange={(e) => setName(e.target.value)}
+                                            maxLength={100} className={inputClass} placeholder="Name" />
+                                        <input type="email" value={email} onChange={(e) => setEmail(e.target.value)}
+                                            className={inputClass} placeholder="Email" />
+                                    </div>
+                                    <input type="text" value={company} onChange={(e) => setCompany(e.target.value)}
+                                        maxLength={120} className={inputClass} placeholder="Company (optional)" />
+                                    <details className="rounded-[6px] border border-[#37332E] bg-[#191816]/40 p-4">
+                                        <summary className="cursor-pointer text-[13px] font-semibold text-[#A8A096]">Review the brief being sent</summary>
+                                        <pre className="mt-3 whitespace-pre-wrap font-sans text-[13px] leading-[1.5] text-[#A8A096]">{briefNotes}</pre>
+                                    </details>
+                                    <button onClick={() => { setBriefNotes(null); setUseChat(true); }} className="text-[13px] text-[#A8A096] hover:text-[#F1EADF]">
+                                        ← Reopen the intake chat
+                                    </button>
+                                </div>
+                            ) : (
                             <div className="space-y-4">
                                 <div>
                                     <h2 className="text-[22px] font-bold text-[#F1EADF]">Add the context</h2>
@@ -425,6 +532,7 @@ export const ConsultingPage: React.FC = () => {
                                 <input type="text" value={company} onChange={(e) => setCompany(e.target.value)}
                                     maxLength={120} className={inputClass} placeholder="Company (optional)" />
                             </div>
+                            )}
 
                             {/* Scheduling */}
                             <div className="space-y-6">
@@ -433,7 +541,9 @@ export const ConsultingPage: React.FC = () => {
                                     <p className="mt-2 text-[13px] text-[#A8A096]">Mon–Fri 1–5pm PT · Sat–Sun 1–4:30pm PT</p>
                                 </div>
                                 {!contextValid && (
-                                    <p className="text-[13px] text-[#A8A096]">Fill in the context on the left to unlock scheduling.</p>
+                                    <p className="text-[13px] text-[#A8A096]">
+                                        {briefNotes ? 'Add your name and email to unlock scheduling.' : 'Fill in the context on the left to unlock scheduling.'}
+                                    </p>
                                 )}
                                 <div className={contextValid ? '' : 'pointer-events-none opacity-40'}>
                                     <CalendarPicker

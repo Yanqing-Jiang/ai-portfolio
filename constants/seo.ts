@@ -1,6 +1,6 @@
 export const SITE_BASE_URL = 'https://yanqing.app';
 export const SITE_NAME = 'Yanqing Jiang';
-export const DEFAULT_OG_IMAGE = 'https://yanqinghot.blob.core.windows.net/public-access/OG-Page.png';
+export const DEFAULT_OG_IMAGE = 'https://yanqinghot.blob.core.windows.net/public-access/og-agent-builder.png';
 export const DEFAULT_THEME_COLOR = '#12110F';
 
 // Visible commercial-front-door navigation (mirrors the on-page nav). Emitted
