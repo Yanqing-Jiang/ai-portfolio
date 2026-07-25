@@ -102,6 +102,21 @@ class _FakeConn:
             if "status = 'confirmed'" in s:
                 row["status"] = "confirmed"
             return "UPDATE 1"
+        # Cancel's CLAIM: whoever moves the row off a manageable status owns the
+        # cancellation. Zero rows means somebody else already did it.
+        if s.startswith("UPDATE bookings SET status = 'cancelled', cancelled_at"):
+            row = self.rows[args[0]]
+            if row["status"] not in args[1]:
+                return "UPDATE 0"
+            row["status"] = "cancelled"
+            return "UPDATE 1"
+        # Cancel's final write. Shares a prefix with the webhook outcome below, so
+        # it is matched on the columns only cancellation touches.
+        if s.startswith("UPDATE bookings SET status = $1") and "cancellation_reason" in s:
+            row = self.rows[args[4]]
+            row["status"] = args[0]
+            row["calendar_event_id"] = None
+            return "UPDATE 1"
         # The webhook's calendar-outcome write, on the already-promoted row.
         if s.startswith("UPDATE bookings SET status = $1"):
             row = self.rows[args[3]]
@@ -109,6 +124,9 @@ class _FakeConn:
             return "UPDATE 1"
         if s.startswith("UPDATE bookings SET status = 'rescheduled'"):
             row = self.rows[args[0]]
+            # A claim, not a blind update: a stale tab must lose here.
+            if "status = ANY($2::text[])" in s and row["status"] not in args[1]:
+                return "UPDATE 0"
             row["status"] = "rescheduled"
             if "stripe_session_id = 'superseded_'" in s:
                 row["stripe_session_id"] = f"superseded_{row['id']}"
@@ -754,3 +772,142 @@ def test_a_crash_after_payment_never_leaves_the_booking_on_hold(monkeypatch):
     )
     assert conn.rows[bid]["status"] == "confirmed"
     assert conn.rows[bid]["stripe_event_id"] == "evt_crash"
+
+
+# --- Reachable only once a Google Calendar is connected -------------------
+# `calendar_failed` cannot occur while no calendar exists (create_booking_event
+# no-ops). These pin the behaviour before credentials are mounted, because the
+# first Google hiccup after that produces exactly these rows.
+
+def test_a_calendar_failed_booking_can_still_be_cancelled(monkeypatch, confirmed_booking):
+    """BookingCard shows calendar_failed as "Confirmed". Refusing to cancel it
+    handed the client a green badge over a button that returned
+    "Cannot cancel booking with status 'calendar_failed'"."""
+    bid, booking = confirmed_booking
+    booking["status"] = "calendar_failed"
+    conn = _FakeConn({bid: booking})
+
+    async def get_pool():
+        return _FakePool(conn)
+
+    async def noop(*_a, **_k):
+        return True
+
+    monkeypatch.setattr(main, "_get_booking_pool", get_pool)
+    monkeypatch.setattr(main, "delete_booking_event", noop)
+    monkeypatch.setattr(main, "send_booking_notification", noop)
+    monkeypatch.setattr(main, "send_booking_confirmation_email", noop)
+    monkeypatch.setattr(main, "send_admin_booking_alert", noop)
+    monkeypatch.setattr(main, "stripe", None)
+
+    main.app.dependency_overrides[main.require_auth] = lambda: OWNER
+    try:
+        with TestClient(main.app) as client:
+            res = client.post(f"/api/booking/{bid}/cancel", json={"reason": "no longer needed"})
+    finally:
+        main.app.dependency_overrides.clear()
+
+    assert res.status_code == 200, res.text
+    assert conn.rows[bid]["status"] in ("cancelled", "refunded")
+
+
+def test_a_calendar_failed_booking_can_still_be_rescheduled(monkeypatch, confirmed_booking):
+    bid, booking = confirmed_booking
+    booking["status"] = "calendar_failed"
+    rows = {bid: booking}
+    new_slot = (datetime.now(timezone.utc) + timedelta(days=6)).replace(microsecond=0)
+
+    res, conn = _reschedule(monkeypatch, rows, new_slot.isoformat())
+
+    assert res.status_code == 200, res.text
+    assert conn.rows[bid]["status"] == "rescheduled"
+
+
+def test_a_stale_tab_cannot_reschedule_the_same_booking_twice(monkeypatch, confirmed_booking):
+    """Two attempts, one live booking — never two of Yanqing's hours for one client."""
+    bid, booking = confirmed_booking
+    rows = {bid: booking}
+    first = (datetime.now(timezone.utc) + timedelta(days=6)).replace(microsecond=0)
+
+    res1, conn = _reschedule(monkeypatch, rows, first.isoformat())
+    assert res1.status_code == 200
+
+    second = (datetime.now(timezone.utc) + timedelta(days=7)).replace(microsecond=0)
+    res2, conn2 = _reschedule(monkeypatch, conn.rows, second.isoformat())
+
+    assert res2.status_code == 400, res2.text
+    live = [r for r in conn2.rows.values() if r["status"] == "confirmed"]
+    assert len(live) == 1, f"expected exactly one live booking, got {len(live)}"
+
+
+@pytest.mark.asyncio
+async def test_the_superseding_update_is_a_claim_not_a_blind_write(confirmed_booking):
+    """The guard above is a read-then-act, so it only stops a *sequential* second
+    attempt. Under real concurrency both requests pass it and the SQL predicate is
+    the only thing left — so assert the predicate directly, which the endpoint
+    test above cannot reach single-threaded.
+    """
+    bid, booking = confirmed_booking
+    booking["status"] = "rescheduled"          # already superseded by a rival
+    conn = _FakeConn({bid: booking})
+
+    tag = await conn.execute(
+        """
+        UPDATE bookings
+        SET status = 'rescheduled',
+            stripe_session_id = 'superseded_' || id::text,
+            stripe_event_id = NULL,
+            updated_at = NOW()
+        WHERE id = $1 AND status = ANY($2::text[])
+        """,
+        bid, list(main.MANAGEABLE_STATUSES),
+    )
+
+    assert tag.strip().endswith(" 0"), "the loser of a concurrent reschedule must claim nothing"
+
+
+def test_a_failed_calendar_delete_alerts_the_owner(monkeypatch, confirmed_booking):
+    """The ledger is right and the client was told the truth, but Google still
+    shows the meeting. Silence there means Yanqing holds an hour for a call that
+    is not happening."""
+    bid, booking = confirmed_booking
+    booking["calendar_event_id"] = "evt_google_123"
+    conn = _FakeConn({bid: booking})
+    alerts: list[dict] = []
+
+    async def get_pool():
+        return _FakePool(conn)
+
+    async def boom(*_a, **_k):
+        raise RuntimeError("google says 500")
+
+    async def capture_alert(**kwargs):
+        alerts.append(kwargs)
+        return True
+
+    async def noop(*_a, **_k):
+        return True
+
+    monkeypatch.setattr(main, "_get_booking_pool", get_pool)
+    monkeypatch.setattr(main, "delete_booking_event", boom)
+    monkeypatch.setattr(main, "send_admin_booking_alert", capture_alert)
+    monkeypatch.setattr(main, "send_booking_notification", noop)
+    monkeypatch.setattr(main, "send_booking_confirmation_email", noop)
+    monkeypatch.setattr(main, "stripe", None)
+
+    main.app.dependency_overrides[main.require_auth] = lambda: OWNER
+    try:
+        with TestClient(main.app) as client:
+            res = client.post(f"/api/booking/{bid}/cancel", json={})
+    finally:
+        main.app.dependency_overrides.clear()
+
+    # The cancellation still succeeds — failing it would tell the client their
+    # cancellation did not happen, which is false.
+    assert res.status_code == 200, res.text
+    assert conn.rows[bid]["status"] in ("cancelled", "refunded")
+
+    assert len(alerts) == 1, "a stale calendar event was suppressed silently"
+    reason = alerts[0]["failure_reason"]
+    assert "evt_google_123" in reason
+    assert "your calendar" in reason

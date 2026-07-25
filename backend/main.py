@@ -91,7 +91,12 @@ BOOKING_AMOUNT_CENTS = {
     "60": 9000,   # $90
 }
 
-from calendar_service import get_available_slots, create_booking_event, delete_booking_event
+from calendar_service import (
+    get_available_slots,
+    create_booking_event,
+    delete_booking_event,
+    BOOKING_TIMEZONE,
+)
 from telegram_service import send_booking_notification
 from email_service import send_booking_confirmation_email, send_admin_booking_alert
 from intake_agent import (
@@ -116,6 +121,16 @@ from rate_limiter import parse_user_id, ParsedToken
 # confirmed — so leaving it out re-offered a slot somebody had already paid for.
 # `blocked` is the owner's own busy time (see BOOKING_NOTIFICATIONS.md).
 BLOCKING_STATUSES = ("hold", "confirmed", "calendar_failed", "blocked")
+
+# Statuses a client may cancel or reschedule. `calendar_failed` is a CONFIRMED
+# booking that merely failed to get a calendar event — BookingCard.tsx already
+# shows it as "Confirmed", so refusing to manage it handed the client a green
+# badge with buttons that returned "Cannot cancel booking with status
+# 'calendar_failed'". Unreachable while no calendar is connected; the moment one
+# is, any Google hiccup mid-booking produces exactly this row.
+MANAGEABLE_STATUSES = ("confirmed", "calendar_failed")
+
+_BOOKING_TZ = ZoneInfo(BOOKING_TIMEZONE)
 
 # One definition of the hold-expiry policy. Every path that reads or writes
 # availability sweeps first, so this ran verbatim in three places and any change
@@ -1461,7 +1476,6 @@ async def get_booking_slots(date: str, request: Request, session_type: str = "30
     Query param `session_type`: '30' or '60' (default '30').
     """
     from datetime import date as date_type
-    from calendar_service import BOOKING_TIMEZONE
 
     # Generous enough for a visitor clicking through a month, tight enough that the
     # endpoint isn't a free availability-scraping API.
@@ -1809,7 +1823,6 @@ async def _assert_slot_offered(slot_start: "_DateTime", session_type: str = "30"
     enforces that adjacency, so passing the real duration is what makes this a
     revalidation rather than a rubber stamp.
     """
-    from calendar_service import BOOKING_TIMEZONE
 
     tz = ZoneInfo(BOOKING_TIMEZONE)
     local_date = slot_start.astimezone(tz).date()
@@ -2671,7 +2684,7 @@ async def cancel_booking(booking_id: str, req: CancelBookingRequest, auth: Parse
         if not owns:
             raise HTTPException(status_code=403, detail="Not your booking.")
 
-        if row["status"] != "confirmed":
+        if row["status"] not in MANAGEABLE_STATUSES:
             raise HTTPException(status_code=400, detail=f"Cannot cancel booking with status '{row['status']}'.")
 
         slot_start = row["slot_start"]
@@ -2701,8 +2714,8 @@ async def cancel_booking(booking_id: str, req: CancelBookingRequest, auth: Parse
         # the reason and refund details.
         claim = await conn.execute(
             "UPDATE bookings SET status = 'cancelled', cancelled_at = NOW(), "
-            "updated_at = NOW() WHERE id = $1 AND status = 'confirmed'",
-            uuid.UUID(booking_id),
+            "updated_at = NOW() WHERE id = $1 AND status = ANY($2::text[])",
+            uuid.UUID(booking_id), list(MANAGEABLE_STATUSES),
         )
         if claim.strip().endswith(" 0"):
             raise HTTPException(status_code=409, detail="This booking is already cancelled.")
@@ -2725,13 +2738,21 @@ async def cancel_booking(booking_id: str, req: CancelBookingRequest, auth: Parse
                 logger.error("[BOOKING] Stripe refund failed for %s: %s", booking_id, exc)
                 # Continue with cancellation even if refund fails
 
-        # Delete Google Calendar event
+        # Delete Google Calendar event. Best-effort for the same reason as
+        # reschedule: the cancellation is already committed and refusing now would
+        # tell the client it did not happen. A suppressed failure means a meeting
+        # stays on YOUR calendar for a call that is not happening, so it is
+        # alerted rather than only logged.
+        calendar_drift: Optional[str] = None
         cal_event_id = row["calendar_event_id"]
         if cal_event_id:
             try:
                 await delete_booking_event(cal_event_id)
             except Exception as exc:
                 logger.error("[BOOKING] Calendar event deletion failed for %s: %s", booking_id, exc)
+                calendar_drift = (
+                    f"the event is still on your calendar (event {cal_event_id}): {exc}"
+                )
 
         # Update booking status
         new_status = "refunded" if refund_id else "cancelled"
@@ -2767,6 +2788,21 @@ async def cancel_booking(booking_id: str, req: CancelBookingRequest, auth: Parse
             )
     except Exception as exc:
         logger.error("[BOOKING] Cancellation email failed: %s", exc)
+
+    if calendar_drift:
+        try:
+            await send_admin_booking_alert(
+                name=row["client_name"], email=row["client_email"],
+                session_type=row["session_type"],
+                slot_start=slot_start.isoformat() if slot_start else "",
+                notes=None, meet_link=None,
+                failure_reason=(
+                    f"CANCELLED in the database, but {calendar_drift}. The client has "
+                    "been told it is cancelled; remove it from your calendar by hand."
+                ),
+            )
+        except Exception as exc:
+            logger.error("[BOOKING] Calendar-drift alert failed: %s", exc)
 
     # Send notification
     try:
@@ -2831,7 +2867,7 @@ async def reschedule_booking(booking_id: str, req: RescheduleBookingRequest, aut
         if not owns:
             raise HTTPException(status_code=403, detail="Not your booking.")
 
-        if row["status"] != "confirmed":
+        if row["status"] not in MANAGEABLE_STATUSES:
             raise HTTPException(status_code=400, detail=f"Cannot reschedule booking with status '{row['status']}'.")
 
         slot_start = row["slot_start"]
@@ -2863,17 +2899,26 @@ async def reschedule_booking(booking_id: str, req: RescheduleBookingRequest, aut
                 #   - stripe_event_id is UNIQUE where non-null (migration 013), so
                 #     it is released to NULL. Only paid rows have one, which is why
                 #     free reschedules never hit this.
-                await conn.execute(
+                # The status predicate makes this a CLAIM, not just an update. The
+                # check above is a read-then-act, so two tabs could both supersede
+                # the same booking and each insert its own live row — one client,
+                # two bookings, two of your hours gone.
+                superseded = await conn.execute(
                     """
                     UPDATE bookings
                     SET status = 'rescheduled',
                         stripe_session_id = 'superseded_' || id::text,
                         stripe_event_id = NULL,
                         updated_at = NOW()
-                    WHERE id = $1
+                    WHERE id = $1 AND status = ANY($2::text[])
                     """,
-                    uuid.UUID(booking_id),
+                    uuid.UUID(booking_id), list(MANAGEABLE_STATUSES),
                 )
+                if superseded.strip().endswith(" 0"):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="That booking was already changed. Reload and try again.",
+                    )
 
                 # Create new booking row
                 await conn.execute(
@@ -2897,17 +2942,34 @@ async def reschedule_booking(booking_id: str, req: RescheduleBookingRequest, aut
                     row["user_id"],
                     uuid.UUID(booking_id),
                 )
+        except HTTPException:
+            # Our own claim refusal above, already worded for the client. Without
+            # this it fell into the generic handler and blamed the new slot.
+            raise
         except Exception as db_exc:
             logger.error("[BOOKING] Reschedule DB error: %s", db_exc)
             raise HTTPException(status_code=409, detail="New time slot is no longer available.")
 
         # Delete old calendar event
+        # Calendar mutations are best-effort: the booking has already moved in the
+        # ledger, which is the record of truth, and failing the request now would
+        # tell the client their reschedule did not happen when it did. But a
+        # suppressed failure leaves YOUR calendar wrong — a ghost at the old time,
+        # or nothing at the new one — so each failure is collected and alerted
+        # below rather than only logged.
+        calendar_drift: list[str] = []
+
         cal_event_id = row["calendar_event_id"]
         if cal_event_id:
             try:
                 await delete_booking_event(cal_event_id)
             except Exception as exc:
                 logger.error("[BOOKING] Old calendar event deletion failed: %s", exc)
+                calendar_drift.append(
+                    f"the old {slot_start.astimezone(_BOOKING_TZ).isoformat() if slot_start else '?'} "
+                    f"event is still on your calendar "
+                    f"(event {cal_event_id}): {exc}"
+                )
 
         # Create new calendar event
         new_meet_link = None
@@ -2924,6 +2986,10 @@ async def reschedule_booking(booking_id: str, req: RescheduleBookingRequest, aut
             new_meet_link = cal_result.get("meet_link")
         except Exception as exc:
             logger.error("[BOOKING] New calendar event creation failed: %s", exc)
+            calendar_drift.append(
+                f"no event was created for the new "
+                f"{new_slot_start.astimezone(_BOOKING_TZ).isoformat()} time: {exc}"
+            )
 
         # Update new booking with calendar info
         await conn.execute(
@@ -2958,6 +3024,24 @@ async def reschedule_booking(booking_id: str, req: RescheduleBookingRequest, aut
             )
     except Exception as exc:
         logger.error("[BOOKING] Reschedule email failed: %s", exc)
+
+    # Your calendar disagrees with the ledger. The client has already been told
+    # the right thing (their .ics moved the event), so this is yours to fix.
+    if calendar_drift:
+        try:
+            await send_admin_booking_alert(
+                name=row["client_name"], email=row["client_email"],
+                session_type=row["session_type"],
+                slot_start=new_slot_start.isoformat(),
+                notes=row["notes"], meet_link=new_meet_link,
+                failure_reason=(
+                    "RESCHEDULED in the database, but your Google Calendar is now out "
+                    "of step — " + "; ".join(calendar_drift)
+                    + ". The client's invitation is correct; fix your calendar by hand."
+                ),
+            )
+        except Exception as exc:
+            logger.error("[BOOKING] Calendar-drift alert failed: %s", exc)
 
     # Notification
     try:

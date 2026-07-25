@@ -250,8 +250,22 @@ reschedule chain) with a rising `SEQUENCE` to move the event, and `METHOD:CANCEL
 to withdraw it. If the send fails, the log names the address to contact by hand —
 the booking change itself has already happened.
 
-Known gap (`DEBT`, task #10): reschedule and cancel suppress *calendar* failures,
-so with a Google Calendar connected the database could be right while the calendar
-is stale. Those code paths are unreachable while no calendar is connected
-(`create_booking_event` no-ops and `delete_booking_event` returns False), so the
-upgrade trigger is **reconnecting Google Calendar**, not the first reschedule.
+### When the calendar and the ledger disagree
+
+Reschedule and cancel do not fail the request when a Google Calendar call fails.
+That is deliberate: the change is already committed to the `bookings` table, which
+is the record of truth, and the client's `.ics` has already moved or withdrawn
+their copy. Refusing at that point would tell them their change did not happen
+when it did.
+
+What it does mean is that **your** calendar can be left wrong — a ghost event at a
+cancelled or old time, or nothing at a new one. Each such failure now sends you an
+owner alert naming the event id and what to fix, in the same spirit as the
+`ACTION NEEDED — no Meet link` alert. It is not automatic repair; it is a
+guarantee that the drift is never silent. Automatic repair (a `calendar_pending`
+status and a reconciliation pass) stays unbuilt until these alerts prove frequent
+enough to be worth it.
+
+`calendar_failed` is a **confirmed** booking that merely failed to get a calendar
+event. It is cancellable and reschedulable, and the UI shows it as Confirmed,
+which is the truth: the person is booked. Only the calendar artifact is missing.
