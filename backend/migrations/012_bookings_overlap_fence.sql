@@ -16,17 +16,22 @@
 -- range_ops opclass. (btree_gist would only be needed to mix in scalar equality,
 -- e.g. `WITH =` on a column.)
 
-ALTER TABLE bookings DROP CONSTRAINT bookings_status_check;
+-- Every statement is drop-then-add so the file is safe to re-run: the container
+-- applies migrations on boot, and a non-idempotent one that has already been
+-- applied by hand takes the whole backend down on "already exists".
+
+ALTER TABLE bookings DROP CONSTRAINT IF EXISTS bookings_status_check;
 ALTER TABLE bookings ADD CONSTRAINT bookings_status_check CHECK (status IN (
     'hold', 'confirmed', 'calendar_failed', 'expired', 'cancelled',
     'refunded', 'rescheduled', 'blocked'
 ));
 
-ALTER TABLE bookings DROP CONSTRAINT bookings_session_type_check;
+ALTER TABLE bookings DROP CONSTRAINT IF EXISTS bookings_session_type_check;
 ALTER TABLE bookings ADD CONSTRAINT bookings_session_type_check CHECK (
     session_type IN ('30', '60', 'block')
 );
 
+ALTER TABLE bookings DROP CONSTRAINT IF EXISTS bookings_no_overlap;
 ALTER TABLE bookings ADD CONSTRAINT bookings_no_overlap
     EXCLUDE USING gist (tstzrange(slot_start, slot_end, '[)') WITH &&)
     WHERE (status IN ('hold', 'confirmed', 'calendar_failed', 'blocked'));
