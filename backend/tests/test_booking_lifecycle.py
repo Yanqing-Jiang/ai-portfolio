@@ -1,11 +1,15 @@
-"""Reschedule and cancel — the authenticated lifecycle endpoints.
+"""The booking lifecycle after payment: Stripe webhook, reschedule, cancel.
 
-These live behind a Supabase JWT and were never exercised: the table has 0 rows,
-so `RescheduleFlow` was live UI over a path that could not succeed. The fake
-connection below deliberately enforces ONE real schema rule — the UNIQUE index on
-`stripe_session_id` — because that constraint is what made every reschedule fail.
-A fake that ignores it would let the bug pass.
+These live behind a Supabase JWT (or a Stripe signature) and were never exercised:
+the table has 0 rows, so `RescheduleFlow` was live UI over a path that could not
+succeed. The fake connection below deliberately enforces the real schema rules the
+code depends on — the UNIQUE index on `stripe_session_id` and migration 013's
+partial unique index on `stripe_event_id` — because those constraints are what made
+reschedules fail. A fake that ignores them lets the bug pass, which is exactly what
+happened: the first version modelled only `stripe_session_id`, so a *paid*
+reschedule stayed broken behind a green test.
 """
+import contextlib
 import sys
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -27,10 +31,16 @@ class _UniqueViolation(Exception):
 
 
 class _FakeConn:
-    """In-memory `bookings` with the stripe_session_id UNIQUE index enforced.
+    """In-memory `bookings` with BOTH unique Stripe indexes enforced.
 
     Statements are matched by keyword rather than parsed — enough to model the
     reschedule transaction (one UPDATE of the old row, one INSERT of the new).
+
+    Enforcing the indexes is the point of this fake, not incidental detail: a
+    fake that let a duplicate through would make a rolled-back reschedule look
+    like a success. `stripe_session_id` is UNIQUE outright; `stripe_event_id` is
+    UNIQUE only where non-null (migration 013), so NULLs must stay unconstrained
+    or every free booking would collide with every other.
     """
 
     def __init__(self, rows: dict):
@@ -39,7 +49,19 @@ class _FakeConn:
     def _session_ids(self, exclude_id=None):
         return {r["stripe_session_id"] for rid, r in self.rows.items() if rid != exclude_id}
 
+    def _event_ids(self, exclude_id=None):
+        return {
+            r["stripe_event_id"]
+            for rid, r in self.rows.items()
+            if rid != exclude_id and r.get("stripe_event_id") is not None
+        }
+
     async def fetchrow(self, sql, *args):
+        if "WHERE stripe_session_id" in sql:
+            row = next(
+                (r for r in self.rows.values() if r["stripe_session_id"] == args[0]), None
+            )
+            return dict(row) if row is not None else None
         if "RECURSIVE chain" in sql:
             # Walk rescheduled_from to the root, like the real CTE.
             rid, depth = args[0], 0
@@ -60,11 +82,38 @@ class _FakeConn:
 
     async def execute(self, sql, *args):
         s = " ".join(sql.split())
+        # The webhook's atomic promotion. `AND status = 'hold'` is the whole point:
+        # it must report 0 rows for anything already promoted, which is what makes
+        # a duplicate delivery a no-op.
+        if s.startswith("UPDATE bookings SET stripe_event_id = $1"):
+            row = self.rows[args[2]]
+            if row["status"] != "hold":
+                return "UPDATE 0"
+            if args[0] in self._event_ids(exclude_id=args[2]):
+                raise _UniqueViolation(
+                    'duplicate key value violates unique constraint '
+                    '"idx_bookings_stripe_event_unique"'
+                )
+            row["stripe_event_id"] = args[0]
+            row["stripe_session_id"] = args[1] or row["stripe_session_id"]   # COALESCE
+            # Only if the statement actually says so. Hardcoding the promotion here
+            # would make a claim that leaves the row on 'hold' look correct — the
+            # precise way the first version of this fake hid a live bug.
+            if "status = 'confirmed'" in s:
+                row["status"] = "confirmed"
+            return "UPDATE 1"
+        # The webhook's calendar-outcome write, on the already-promoted row.
+        if s.startswith("UPDATE bookings SET status = $1"):
+            row = self.rows[args[3]]
+            row["status"], row["calendar_event_id"], row["meet_link"] = args[0], args[1], args[2]
+            return "UPDATE 1"
         if s.startswith("UPDATE bookings SET status = 'rescheduled'"):
             row = self.rows[args[0]]
             row["status"] = "rescheduled"
             if "stripe_session_id = 'superseded_'" in s:
                 row["stripe_session_id"] = f"superseded_{row['id']}"
+            if "stripe_event_id = NULL" in s:
+                row["stripe_event_id"] = None
             return "UPDATE 1"
         if s.startswith("INSERT INTO bookings"):
             new = {
@@ -78,6 +127,11 @@ class _FakeConn:
                 raise _UniqueViolation(
                     'duplicate key value violates unique constraint '
                     '"bookings_stripe_session_id_key"'
+                )
+            if new["stripe_event_id"] in self._event_ids(exclude_id=new["id"]):
+                raise _UniqueViolation(
+                    'duplicate key value violates unique constraint '
+                    '"idx_bookings_stripe_event_unique"'
                 )
             self.rows[new["id"]] = new
             return "INSERT 0 1"
@@ -207,6 +261,33 @@ def test_reschedule_succeeds_and_keeps_the_real_stripe_session_id(monkeypatch, c
     assert new["stripe_session_id"] == "cs_test_the_real_one"
     assert new["status"] == "confirmed"
     assert new["rescheduled_from"] == bid
+
+
+def test_reschedule_hands_the_stripe_event_id_to_the_new_row(monkeypatch, confirmed_booking):
+    """The sibling of the bug above, and it survived the first fix.
+
+    `stripe_event_id` is UNIQUE where non-null (migration 013). Releasing only
+    `stripe_session_id` left the event id on BOTH rows, so every *paid*
+    reschedule violated that index, rolled the transaction back, and told the
+    client a free slot was taken. Free bookings have a NULL event id, which is
+    exactly why the earlier test passed while paid reschedules were broken.
+    """
+    bid, booking = confirmed_booking
+    assert booking["stripe_event_id"] == "evt_1", "fixture must model a PAID booking"
+    rows = {bid: booking}
+    new_slot = (datetime.now(timezone.utc) + timedelta(days=6)).replace(microsecond=0)
+
+    res, conn = _reschedule(monkeypatch, rows, new_slot.isoformat())
+
+    assert res.status_code == 200, res.text
+
+    old = conn.rows[bid]
+    new = next(r for rid, r in conn.rows.items() if rid != bid)
+
+    # Released on the superseded row, held by the live one — a Stripe redelivery
+    # of evt_1 must resolve to the booking that is actually current.
+    assert old["stripe_event_id"] is None
+    assert new["stripe_event_id"] == "evt_1"
 
 
 def test_rescheduling_twice_does_not_collide(monkeypatch, confirmed_booking):
@@ -437,3 +518,239 @@ async def test_no_calendar_part_without_a_stable_uid(monkeypatch):
     )
     msg = _email.message_from_bytes(base64.urlsafe_b64decode(captured["raw"]))
     assert not [p for p in msg.walk() if p.get_content_type() == "text/calendar"]
+
+
+# --- Stripe webhook: the paid confirmation path ----------------------------
+# This endpoint had no test coverage at all, and it is the one path where a
+# mistake costs money that was already taken.
+
+class _FakeStripe:
+    """Just enough `stripe` to get past signature verification."""
+
+    def __init__(self, event):
+        outer = self
+
+        class Webhook:
+            @staticmethod
+            def construct_event(_payload, _sig, _secret):
+                return outer.event
+
+        self.event = event
+        self.Webhook = Webhook
+
+
+def _held_paid_booking():
+    """A paid HOLD awaiting its webhook — what checkout leaves behind."""
+    bid = uuid.uuid4()
+    start = datetime.now(timezone.utc) + timedelta(days=4)
+    return bid, {
+        "id": bid,
+        "stripe_session_id": "cs_test_paid",
+        "stripe_event_id": None,
+        "session_type": "30",
+        "slot_start": start.replace(microsecond=0),
+        "slot_end": (start + timedelta(minutes=30)).replace(microsecond=0),
+        "client_name": "Payer",
+        "client_email": "payer@example.com",
+        "notes": None,
+        "status": "hold",
+        "amount_cents": 5000,
+        "user_id": None,
+        "calendar_event_id": None,
+        "meet_link": None,
+        "rescheduled_from": None,
+    }
+
+
+def _deliver_webhook(monkeypatch, conn, *, session_id="cs_test_paid", event_id="evt_paid_1",
+                     booking_id="", calls=None):
+    """POST one checkout.session.completed, counting outside side effects."""
+    calls = calls if calls is not None else {}
+    calls.setdefault("calendar", 0)
+    calls.setdefault("emails", [])
+
+    event = {
+        "id": event_id,
+        "type": "checkout.session.completed",
+        "data": {"object": {"id": session_id, "metadata": {"booking_id": booking_id}}},
+    }
+
+    async def get_pool():
+        return _FakePool(conn)
+
+    async def calendar(**_kw):
+        calls["calendar"] += 1
+        return {"event_id": f"cal_{calls['calendar']}", "meet_link": "https://meet/x"}
+
+    async def confirmation(**kwargs):
+        calls["emails"].append(kwargs)
+        return True
+
+    async def noop(*_a, **_k):
+        return True
+
+    monkeypatch.setattr(main, "stripe", _FakeStripe(event))
+    monkeypatch.setattr(main, "STRIPE_BOOKING_WEBHOOK_SECRET", "whsec_test")
+    monkeypatch.setattr(main, "_get_booking_pool", get_pool)
+    monkeypatch.setattr(main, "create_booking_event", calendar)
+    monkeypatch.setattr(main, "send_booking_confirmation_email", confirmation)
+    monkeypatch.setattr(main, "send_admin_booking_alert", noop)
+    monkeypatch.setattr(main, "send_booking_notification", noop)
+    monkeypatch.setattr(main, "_link_brief_to_booking", noop)
+
+    with TestClient(main.app) as client:
+        res = client.post(
+            "/api/booking/webhook",
+            content=b"{}",
+            headers={"Stripe-Signature": "t=1,v1=deadbeef"},
+        )
+    return res, calls
+
+
+def test_webhook_confirms_a_paid_hold(monkeypatch):
+    bid, booking = _held_paid_booking()
+    conn = _FakeConn({bid: booking})
+
+    res, calls = _deliver_webhook(monkeypatch, conn)
+
+    assert res.status_code == 200, res.text
+    assert conn.rows[bid]["status"] == "confirmed"
+    assert conn.rows[bid]["stripe_event_id"] == "evt_paid_1"
+    assert calls["calendar"] == 1
+    assert len(calls["emails"]) == 1
+    # The paid path must carry the calendar identity a later reschedule moves.
+    assert calls["emails"][0]["booking_id"] == str(bid)
+    assert calls["emails"][0]["ics_sequence"] == 0
+
+
+def test_redelivery_of_the_same_event_does_no_outside_work_twice(monkeypatch):
+    """Stripe retries on any non-2xx, so redelivery is routine, not exotic.
+
+    The old guard claimed the event by writing stripe_event_id while leaving the
+    row on 'hold' — so a second delivery's predicate matched *because* the status
+    had not moved, and both deliveries created a calendar event and emailed the
+    client. The claim is now the status transition itself.
+    """
+    bid, booking = _held_paid_booking()
+    conn = _FakeConn({bid: booking})
+
+    first, calls = _deliver_webhook(monkeypatch, conn)
+    assert first.status_code == 200
+    assert calls["calendar"] == 1
+
+    second, calls2 = _deliver_webhook(monkeypatch, conn)
+
+    assert second.status_code == 200          # 200 or Stripe keeps retrying forever
+    assert calls2["calendar"] == 0, "duplicate delivery created a second calendar event"
+    assert calls2["emails"] == [], "duplicate delivery emailed the client again"
+    assert conn.rows[bid]["status"] == "confirmed"
+
+
+def test_a_different_event_cannot_reconfirm_the_same_booking(monkeypatch):
+    """Two distinct events for one booking: the second must not redo the work.
+
+    Migration 013 cannot catch this on its own — the second event id is unique —
+    so the 'hold' predicate is the only thing standing between the client and a
+    second calendar invite.
+    """
+    bid, booking = _held_paid_booking()
+    conn = _FakeConn({bid: booking})
+
+    _deliver_webhook(monkeypatch, conn, event_id="evt_paid_1")
+    _res, calls = _deliver_webhook(monkeypatch, conn, event_id="evt_paid_2")
+
+    assert calls["calendar"] == 0
+    assert calls["emails"] == []
+    assert conn.rows[bid]["stripe_event_id"] == "evt_paid_1"
+
+
+def test_webhook_replaces_the_pending_session_placeholder(monkeypatch):
+    """Checkout writes 'pending_<uuid>' first and overwrites it after Stripe
+    replies. If that overwrite failed, the row kept the placeholder — and then
+    confirmation polling by the real session id 404s and cancel cannot find the
+    payment to refund. The webhook is the second chance to write it."""
+    bid, booking = _held_paid_booking()
+    booking["stripe_session_id"] = f"pending_{bid}"
+    conn = _FakeConn({bid: booking})
+
+    # No row matches the real session id, so the handler falls back to the
+    # booking_id carried in the event metadata.
+    res, _calls = _deliver_webhook(
+        monkeypatch, conn, session_id="cs_live_real", booking_id=str(bid)
+    )
+
+    assert res.status_code == 200, res.text
+    assert conn.rows[bid]["stripe_session_id"] == "cs_live_real"
+    assert conn.rows[bid]["status"] == "confirmed"
+
+
+def test_webhook_asks_stripe_to_retry_when_there_is_no_database(monkeypatch):
+    """200 here told Stripe 'handled' and it never retried — a paid booking lost."""
+    async def no_pool():
+        return None
+
+    monkeypatch.setattr(main, "stripe", _FakeStripe(
+        {"id": "evt_x", "type": "checkout.session.completed",
+         "data": {"object": {"id": "cs_x", "metadata": {}}}}))
+    monkeypatch.setattr(main, "STRIPE_BOOKING_WEBHOOK_SECRET", "whsec_test")
+    monkeypatch.setattr(main, "_get_booking_pool", no_pool)
+
+    with TestClient(main.app) as client:
+        res = client.post("/api/booking/webhook", content=b"{}",
+                          headers={"Stripe-Signature": "t=1,v1=x"})
+
+    assert res.status_code >= 500, "Stripe only redelivers on a non-2xx"
+
+
+class _AbruptDeath(BaseException):
+    """Not an Exception, so the handler's `except Exception` cannot swallow it —
+    stands in for the process dying mid-flight (OOM, SIGKILL, deploy restart)."""
+
+
+def test_a_crash_after_payment_never_leaves_the_booking_on_hold(monkeypatch):
+    """The property that makes the promotion order matter.
+
+    The money is already taken. If the row is still 'hold' when the process dies,
+    the stale-hold sweep expires it 30 minutes later and the paid booking is gone
+    silently — the worst outcome in the system. Promoting the ledger *before* the
+    calendar call means a crash can cost the calendar event or the email, but
+    never the booking itself.
+
+    The old order (claim the event id, keep 'hold', promote after the calendar
+    call) fails this: the row dies on 'hold' and gets swept.
+    """
+    bid, booking = _held_paid_booking()
+    conn = _FakeConn({bid: booking})
+
+    async def die(**_kw):
+        raise _AbruptDeath("process died between promotion and outcome write")
+
+    async def get_pool():
+        return _FakePool(conn)
+
+    async def noop(*_a, **_k):
+        return True
+
+    monkeypatch.setattr(main, "stripe", _FakeStripe(
+        {"id": "evt_crash", "type": "checkout.session.completed",
+         "data": {"object": {"id": "cs_test_paid", "metadata": {}}}}))
+    monkeypatch.setattr(main, "STRIPE_BOOKING_WEBHOOK_SECRET", "whsec_test")
+    monkeypatch.setattr(main, "_get_booking_pool", get_pool)
+    monkeypatch.setattr(main, "create_booking_event", die)
+    monkeypatch.setattr(main, "send_booking_confirmation_email", noop)
+    monkeypatch.setattr(main, "send_admin_booking_alert", noop)
+    monkeypatch.setattr(main, "send_booking_notification", noop)
+    monkeypatch.setattr(main, "_link_brief_to_booking", noop)
+
+    # The request dies. TestClient's portal repackages a BaseException as
+    # CancelledError, so swallow whatever comes out — the row state is the assertion.
+    with contextlib.suppress(BaseException):
+        with TestClient(main.app) as client:
+            client.post("/api/booking/webhook", content=b"{}",
+                        headers={"Stripe-Signature": "t=1,v1=x"})
+
+    assert conn.rows[bid]["status"] != "hold", (
+        "a paid booking left on 'hold' is swept to 'expired' and lost"
+    )
+    assert conn.rows[bid]["status"] == "confirmed"
+    assert conn.rows[bid]["stripe_event_id"] == "evt_crash"

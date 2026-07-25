@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import json
 import logging
 import os
 from email.mime.multipart import MIMEMultipart
@@ -64,12 +63,6 @@ GMAIL_SCOPES = [
 # ---------------------------------------------------------------------------
 
 _gmail_service = None
-_gmail_configured = False
-
-
-def _load_credentials_path() -> Optional[Path]:
-    """Resolve the credentials path, expanding ~. Returns Path or None."""
-    return resolve_credentials_path(GMAIL_CREDENTIALS_PATH or "")
 
 
 def _get_gmail_service():
@@ -78,18 +71,17 @@ def _get_gmail_service():
     Token loading, scope checking and refresh live in google_oauth, so Gmail and
     Calendar share one token file without drifting apart on how they read it.
     """
-    global _gmail_service, _gmail_configured
+    global _gmail_service
 
     if _gmail_service is not None:
         return _gmail_service
 
-    creds_path = _load_credentials_path()
+    creds_path = resolve_credentials_path(GMAIL_CREDENTIALS_PATH or "")
     if not GMAIL_FROM_EMAIL or creds_path is None or not creds_path.exists():
         logger.warning(
             "[GMAIL] Gmail not configured — GMAIL_FROM_EMAIL or "
             "GMAIL_CREDENTIALS_PATH missing/invalid. Email sending disabled."
         )
-        _gmail_configured = False
         return None
 
     try:
@@ -99,17 +91,14 @@ def _get_gmail_service():
             creds_path, GMAIL_SCOPES, log_prefix="[GMAIL]"
         )
         if credentials is None:
-            _gmail_configured = False
             return None
 
         _gmail_service = build("gmail", "v1", credentials=credentials)
-        _gmail_configured = True
         logger.info("[GMAIL] Gmail API client initialized (from=%s)", GMAIL_FROM_EMAIL)
         return _gmail_service
 
     except Exception as exc:
         logger.error("[GMAIL] Failed to initialize Gmail client: %s", exc)
-        _gmail_configured = False
         return None
 
 

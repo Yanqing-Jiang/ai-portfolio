@@ -117,6 +117,16 @@ from rate_limiter import parse_user_id, ParsedToken
 # `blocked` is the owner's own busy time (see BOOKING_NOTIFICATIONS.md).
 BLOCKING_STATUSES = ("hold", "confirmed", "calendar_failed", "blocked")
 
+# One definition of the hold-expiry policy. Every path that reads or writes
+# availability sweeps first, so this ran verbatim in three places and any change
+# to the window had to be made three times to be true.
+EXPIRE_STALE_HOLDS_SQL = """
+    UPDATE bookings
+    SET status = 'expired', updated_at = NOW()
+    WHERE status = 'hold'
+      AND created_at < NOW() - INTERVAL '30 minutes'
+"""
+
 _booking_pool: Optional[Any] = None
 _booking_pool_lock = asyncio.Lock()
 
@@ -1431,47 +1441,12 @@ async def paypal_webhook(request: Request):
 # ---------------------------------------------------------------------------
 # Booking / Consulting Endpoints
 # ---------------------------------------------------------------------------
-# SQL for the bookings table, as it actually exists in Supabase. Kept in sync by
-# hand — if you change the table, change this. (Verified against the live schema.)
-# ----------------------------------------------------------------
-# CREATE TABLE bookings (
-#     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-#     stripe_session_id TEXT UNIQUE NOT NULL,  -- free bookings use 'free_<uuid>'
-#     stripe_event_id TEXT,
-#     session_type TEXT NOT NULL CHECK (session_type IN ('30', '60', 'block')),
-#     slot_start TIMESTAMPTZ NOT NULL,
-#     slot_end TIMESTAMPTZ NOT NULL,
-#     client_name TEXT NOT NULL,
-#     client_email TEXT NOT NULL,
-#     notes TEXT,
-#     status TEXT NOT NULL DEFAULT 'hold' CHECK (status IN (
-#         'hold', 'confirmed', 'calendar_failed', 'expired', 'cancelled',
-#         'refunded', 'rescheduled', 'blocked'
-#     )),
-#     calendar_event_id TEXT,   -- empty when no calendar is connected
-#     meet_link TEXT,           -- likewise; the owner sends a link by hand
-#     amount_cents INTEGER NOT NULL,
-#     user_id UUID,             -- Supabase auth user; backfilled by email on read
-#     cancelled_at TIMESTAMPTZ,
-#     cancellation_reason TEXT,
-#     refund_id TEXT,
-#     refund_amount_cents INTEGER,
-#     rescheduled_from UUID REFERENCES bookings (id),
-#     created_at TIMESTAMPTZ DEFAULT NOW(),
-#     updated_at TIMESTAMPTZ DEFAULT NOW()
-# );
-# -- THE fence (migration 012). Enforced on INSERT and UPDATE, so it holds even
-# -- for a writer that forgets its app-level guard. It replaced a partial unique
-# -- index on slot_start alone, which only caught identical starts and so let a
-# -- 60-min booking at 13:00 coexist with a 30-min one at 13:30.
-# ALTER TABLE bookings ADD CONSTRAINT bookings_no_overlap
-#     EXCLUDE USING gist (tstzrange(slot_start, slot_end, '[)') WITH &&)
-#     WHERE (status IN ('hold', 'confirmed', 'calendar_failed', 'blocked'));
-# CREATE INDEX idx_bookings_slot ON bookings (slot_start, status);
-# CREATE INDEX idx_bookings_stripe ON bookings (stripe_session_id);
-# CREATE INDEX idx_bookings_client_email ON bookings (client_email);
-# CREATE INDEX idx_bookings_user_id ON bookings (user_id) WHERE (user_id IS NOT NULL);
-# ----------------------------------------------------------------
+# The `bookings` table is defined by its migrations, which are immutable once
+# applied: 001 creates it, 012 adds the tstzrange GiST exclusion constraint that
+# is THE overlap fence (enforced on INSERT and UPDATE, so it holds even for a
+# writer that forgets its app-level guard), 013 adds the partial unique index on
+# stripe_event_id. See backend/migrations/. A copy of the DDL used to live here
+# and had already drifted from the live schema within hours of being written.
 
 
 @app.get("/api/booking/slots")
@@ -1525,14 +1500,7 @@ async def get_booking_slots(date: str, request: Request, session_type: str = "30
         try:
             # Expire stale holds first (lazy cleanup)
             async with pool.acquire() as conn:
-                await conn.execute(
-                    """
-                    UPDATE bookings
-                    SET status = 'expired', updated_at = NOW()
-                    WHERE status = 'hold'
-                      AND created_at < NOW() - INTERVAL '30 minutes'
-                    """
-                )
+                await conn.execute(EXPIRE_STALE_HOLDS_SQL)
 
                 # Get all held/confirmed slot_starts for this date
                 tz = ZoneInfo(BOOKING_TIMEZONE)
@@ -1656,14 +1624,7 @@ async def create_booking_checkout(req: BookingCheckoutRequest, request: Request)
         try:
             async with pool.acquire() as conn:
                 # Expire stale holds first
-                await conn.execute(
-                    """
-                    UPDATE bookings
-                    SET status = 'expired', updated_at = NOW()
-                    WHERE status = 'hold'
-                      AND created_at < NOW() - INTERVAL '30 minutes'
-                    """
-                )
+                await conn.execute(EXPIRE_STALE_HOLDS_SQL)
 
                 # Same overlap-safe insert the free path uses. Previously this was a
                 # plain INSERT relying on a unique index over identical slot_start,
@@ -1916,14 +1877,7 @@ async def create_free_consult(req: FreeConsultRequest, request: Request):
     if pool is not None:
         try:
             async with pool.acquire() as conn:
-                await conn.execute(
-                    """
-                    UPDATE bookings
-                    SET status = 'expired', updated_at = NOW()
-                    WHERE status = 'hold'
-                      AND created_at < NOW() - INTERVAL '30 minutes'
-                    """
-                )
+                await conn.execute(EXPIRE_STALE_HOLDS_SQL)
 
                 # Atomic overlap-safe insert: the overlap check and the insert are
                 # ONE statement, so there is no app-level read-then-write gap
@@ -2410,15 +2364,6 @@ async def booking_webhook(request: Request):
         raise HTTPException(status_code=503, detail="Database unavailable; retry this event.")
 
     async with pool.acquire() as conn:
-        # Idempotency check: if this event was already processed, return 200
-        existing = await conn.fetchrow(
-            "SELECT id, status FROM bookings WHERE stripe_event_id = $1",
-            event_id,
-        )
-        if existing is not None:
-            logger.info("[BOOKING] Duplicate webhook event %s — already processed", event_id)
-            return JSONResponse(content={"received": True})
-
         # Find the booking by stripe_session_id
         booking = await conn.fetchrow(
             "SELECT id, status, client_name, client_email, session_type, slot_start, notes FROM bookings WHERE stripe_session_id = $1",
@@ -2455,26 +2400,43 @@ async def booking_webhook(request: Request):
                 logger.error("[BOOKING] Orphan-payment alert failed: %s", alert_exc)
             raise HTTPException(status_code=500, detail="No booking row for this session.")
 
-        # Claim this event BEFORE doing any outside work. The idempotency SELECT
-        # above is a read-then-act with no lock, so two concurrent deliveries of
-        # the same event can both get past it; claiming first means the loser stops
-        # here instead of creating a second calendar event and sending a second
-        # confirmation email. Re-claiming our own event is allowed while the row is
-        # still 'hold', so a retry after a partial failure can finish the job.
+        # Promote the ledger BEFORE any outside work, in one atomic statement.
+        #
+        # `status = 'hold'` is the claim: exactly one delivery can move a row off
+        # 'hold', so the loser of a concurrent redelivery stops here instead of
+        # creating a second calendar event and sending a second confirmation
+        # email. An earlier version claimed by writing stripe_event_id while
+        # leaving the row on 'hold' — which is not exclusive at all, because the
+        # second delivery's predicate matched precisely *because* the status had
+        # not moved yet. Both then did the outside work.
+        #
+        # Promoting to 'confirmed' here (rather than after the calendar call) is
+        # also what makes a crash survivable: the money is taken, so the booking
+        # must not be left on 'hold' where the stale-hold sweep would expire it.
+        # The trade is deliberate — a crash after this point can cost the calendar
+        # event or the email, but never the booking. Repairing those is the
+        # calendar_pending work, deferred until a calendar is connected.
+        #
+        # stripe_session_id is refreshed at the same time: checkout writes a
+        # 'pending_<uuid>' placeholder first, and if its post-Stripe update failed
+        # the row would keep the placeholder, which makes confirmation polling
+        # 404 and cancellation skip the refund lookup. COALESCE leaves it alone if
+        # this event carries no session id.
         claim = await conn.execute(
             """
             UPDATE bookings
-            SET stripe_event_id = $1, updated_at = NOW()
-            WHERE id = $2
-              AND (stripe_event_id IS NULL
-                   OR (stripe_event_id = $1 AND status = 'hold'))
+            SET stripe_event_id = $1,
+                stripe_session_id = COALESCE($2, stripe_session_id),
+                status = 'confirmed',
+                updated_at = NOW()
+            WHERE id = $3 AND status = 'hold'
             """,
-            event_id, booking["id"],
+            event_id, stripe_session_id or None, booking["id"],
         )
         if claim.strip().endswith(" 0"):
             logger.info(
-                "[BOOKING] Event %s already claimed for booking %s — no-op",
-                event_id, booking["id"],
+                "[BOOKING] Booking %s is no longer an unclaimed hold — event %s is a "
+                "duplicate or late delivery, no-op", booking["id"], event_id,
             )
             return JSONResponse(content={"received": True})
 
@@ -2503,9 +2465,8 @@ async def booking_webhook(request: Request):
             logger.error("[BOOKING] Calendar event creation failed: %s", exc)
             new_status = "calendar_failed"
 
-        # Record the outcome. The event id was already claimed above; migration
-        # 013's unique index on stripe_event_id is the backstop that makes that
-        # claim safe under concurrent delivery.
+        # Record the calendar outcome on the already-promoted row. Migration 013's
+        # unique index on stripe_event_id is the backstop under concurrent delivery.
         await conn.execute(
             """
             UPDATE bookings
@@ -2731,13 +2692,20 @@ async def cancel_booking(booking_id: str, req: CancelBookingRequest, auth: Parse
         # read-then-act, so two clicks (or two tabs) could both reach the refund
         # and issue it twice. Whoever flips 'confirmed' away owns the refund;
         # everyone else is told it is already done.
+        #
+        # The claim lands directly on the terminal 'cancelled' rather than a
+        # transient 'cancelling' marker. Both free the slot, but a crash between
+        # here and the final write leaves 'cancelled' — already true, and nothing
+        # to sweep — where 'cancelling' would strand the row in a state no code
+        # recovers from. The write below still upgrades it to 'refunded' and adds
+        # the reason and refund details.
         claim = await conn.execute(
-            "UPDATE bookings SET status = 'cancelling', updated_at = NOW() "
-            "WHERE id = $1 AND status = 'confirmed'",
+            "UPDATE bookings SET status = 'cancelled', cancelled_at = NOW(), "
+            "updated_at = NOW() WHERE id = $1 AND status = 'confirmed'",
             uuid.UUID(booking_id),
         )
         if claim.strip().endswith(" 0"):
-            raise HTTPException(status_code=409, detail="This booking is already being cancelled.")
+            raise HTTPException(status_code=409, detail="This booking is already cancelled.")
 
         # Attempt Stripe refund if eligible
         if refund_eligible and stripe and row["stripe_session_id"] and not row["stripe_session_id"].startswith("pending_"):
@@ -2883,17 +2851,24 @@ async def reschedule_booking(booking_id: str, req: RescheduleBookingRequest, aut
         # Transaction: mark old as rescheduled, create new booking, handle calendar
         try:
             async with conn.transaction():
-                # Mark old booking as rescheduled, and free up its stripe_session_id.
-                # That column is UNIQUE, and the new row below has to carry the real
-                # id (cancel/refund reads it from there). Leaving it on both rows
-                # made EVERY reschedule violate the constraint and get reported as
-                # "that time is no longer available". Keyed on the row's own PK, so
-                # rescheduling the same chain twice cannot collide either.
+                # Mark old booking as rescheduled and hand BOTH unique Stripe columns
+                # to the new row, which has to carry them (cancel/refund reads the
+                # session id from there, and the webhook resolves a redelivery by
+                # event id). Leaving either on both rows makes the insert below
+                # violate its unique index, roll the transaction back, and report a
+                # free slot as "no longer available":
+                #   - stripe_session_id is UNIQUE outright, so it gets a superseded
+                #     placeholder keyed on the row's own PK — rescheduling the same
+                #     chain twice therefore cannot collide either;
+                #   - stripe_event_id is UNIQUE where non-null (migration 013), so
+                #     it is released to NULL. Only paid rows have one, which is why
+                #     free reschedules never hit this.
                 await conn.execute(
                     """
                     UPDATE bookings
                     SET status = 'rescheduled',
                         stripe_session_id = 'superseded_' || id::text,
+                        stripe_event_id = NULL,
                         updated_at = NOW()
                     WHERE id = $1
                     """,

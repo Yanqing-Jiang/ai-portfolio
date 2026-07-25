@@ -369,8 +369,9 @@ export const InChatCalendar: React.FC<{
                     ) : error ? (
                         <p className="py-2 text-[13px] text-[#F04A32]">Couldn't load availability.</p>
                     ) : !bookable ? (
-                        /* The times that came back are mock data and booking would
-                           fail at the last click — ask for an email instead. */
+                        /* The backend cannot honour a pick (bookings table down or
+                           unreadable), so booking would fail at the last click —
+                           ask for an email instead. */
                         <UnbookableNotice />
                     ) : slots.length === 0 ? (
                         <p className="py-2 text-[13px] text-[#A8A096]">No times for this date.</p>

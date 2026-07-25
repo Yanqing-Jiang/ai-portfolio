@@ -217,7 +217,7 @@ def _get_calendar_service():
 def is_calendar_configured() -> bool:
     """True when bookings can additionally be written to a real calendar.
 
-    Not a precondition for booking — see _ruleset_available_slots. This reports
+    Not a precondition for booking — see get_available_slots. This reports
     whether a booking will also produce a calendar event and Meet link, which
     decides whether the owner has to send a link by hand.
     """
@@ -333,47 +333,41 @@ def _overlaps(busy_start: datetime, busy_end: datetime, slot_start: datetime, sl
 
 
 # ---------------------------------------------------------------------------
-# Rule-set availability (no Google Calendar)
+# Session projection (shared by both availability modes)
 # ---------------------------------------------------------------------------
 
-def _ruleset_available_slots(target_date: date, session_type: str = "30") -> list[dict]:
-    """Offer the published hours, with no calendar to check against.
+def _project_sessions(
+    all_slots: list[tuple[datetime, datetime]],
+    free_slot_indices: list[int],
+    duration: int,
+) -> list[dict]:
+    """Project free 30-minute boundaries onto bookable sessions.
 
-    This is a supported production mode, not a stub: availability is defined by
-    the business-hours rule set above (Mon-Fri 9am-4pm staggered, Sat-Sun 1pm-4pm)
-    and narrowed by the bookings table in main.py, which rejects any slot already
-    held or confirmed. That combination is enough to stop double-booking through
-    the site.
-
-    Its limit, stated plainly: without a calendar we cannot see commitments made
-    anywhere else, so a slot the owner is personally busy for will still be
-    offered. Connecting a calendar (GOOGLE_OAUTH_CREDENTIALS_PATH) upgrades this
-    path to a real freebusy check without any other change.
+    The ONE implementation of this rule. It is shared by both availability modes
+    because `get_available_slots` is simultaneously the public offer (GET
+    /api/booking/slots) and the revalidation source at booking time — if the two
+    ever disagreed, the site would offer times its own writes then reject.
     """
-    tz = ZoneInfo(BOOKING_TIMEZONE)
-    all_slots = _generate_slot_boundaries(target_date, tz)
-    duration = SESSION_DURATIONS.get(session_type, 30)
-
-    if not all_slots:
-        return []
-
+    free_set = set(free_slot_indices)
     available = []
     if duration == 60:
-        # 60-min: need two ADJACENT slots. Index adjacency is not enough — the
-        # weekday grid is staggered, so slots[i+1] may be hours after slots[i].
-        for i, (start, end) in enumerate(all_slots):
-            if i + 1 < len(all_slots) and all_slots[i + 1][0] == end:
+        # 60-min: need two ADJACENT free slots. The staggered weekday grid has
+        # gaps, so index i+1 being free does not mean it starts at i's end.
+        for i in free_slot_indices:
+            start, end = all_slots[i]
+            if (i + 1) in free_set and all_slots[i + 1][0] == end:
                 available.append({
                     "start": start.isoformat(),
                     "end": (start + timedelta(minutes=60)).isoformat(),
                 })
     else:
-        for start, end in all_slots:
+        # 30-min: each free slot is available
+        for i in free_slot_indices:
+            start, end = all_slots[i]
             available.append({
                 "start": start.isoformat(),
                 "end": end.isoformat(),
             })
-
     return available
 
 
@@ -388,23 +382,36 @@ async def get_available_slots(target_date: date, session_type: str = "30") -> li
     Sat-Sun 1pm-4pm. For 60-min sessions only slots whose neighbour is also free
     are returned.
 
-    With no calendar connected the rule set alone defines availability (see
-    _ruleset_available_slots). With one connected, busy periods are additionally
-    excluded via freebusy, plus a 15-min buffer between sessions.
+    Two modes, one projection. With a calendar connected, busy periods are
+    excluded via freebusy plus a 15-min buffer between sessions. With none
+    connected the rule set alone defines availability — a supported production
+    mode, not a stub: the published hours are narrowed by the bookings table in
+    main.py, which refuses any slot already held or confirmed, and that is enough
+    to stop double-booking through the site.
+
+    The limit of the calendar-free mode, stated plainly: we cannot see
+    commitments made anywhere else, so a slot the owner is personally busy for is
+    still offered. Blocking that time means inserting a 'blocked' row (see
+    BOOKING_NOTIFICATIONS.md); connecting a calendar upgrades this path to a real
+    freebusy check with no other change.
 
     Returns: [{"start": "ISO8601 with offset", "end": "ISO8601 with offset"}]
     """
     tz = ZoneInfo(BOOKING_TIMEZONE)
     duration = SESSION_DURATIONS.get(session_type, 30)
 
-    service = _get_calendar_service()
-    if service is None:
-        logger.info("[CALENDAR] No calendar connected — offering the published hours")
-        return _ruleset_available_slots(target_date, session_type)
-
     all_slots = _generate_slot_boundaries(target_date, tz)
     if not all_slots:
         return []
+
+    service = _get_calendar_service()
+    if service is None:
+        # Nothing to exclude: every published slot is on offer. This used to be a
+        # second function with its own copy of the 30/60-minute projection below —
+        # two implementations of the rule that has to stay byte-identical between
+        # the public offer and the booking-time revalidation.
+        logger.info("[CALENDAR] No calendar connected — offering the published hours")
+        return _project_sessions(all_slots, list(range(len(all_slots))), duration)
 
     # Query freebusy for the entire business day
     cal_id = _calendar_id()
@@ -479,29 +486,7 @@ async def get_available_slots(target_date: date, session_type: str = "30") -> li
         if is_free:
             free_slot_indices.append(i)
 
-    free_set = set(free_slot_indices)
-
-    available = []
-    if duration == 60:
-        # 60-min: need two ADJACENT free slots. The staggered weekday grid has
-        # gaps, so index i+1 being free does not mean it starts at i's end.
-        for i in free_slot_indices:
-            start, end = all_slots[i]
-            if (i + 1) in free_set and all_slots[i + 1][0] == end:
-                available.append({
-                    "start": start.isoformat(),
-                    "end": (start + timedelta(minutes=60)).isoformat(),
-                })
-    else:
-        # 30-min: each free slot is available
-        for i in free_slot_indices:
-            start, end = all_slots[i]
-            available.append({
-                "start": start.isoformat(),
-                "end": end.isoformat(),
-            })
-
-    return available
+    return _project_sessions(all_slots, free_slot_indices, duration)
 
 
 async def create_booking_event(

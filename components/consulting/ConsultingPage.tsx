@@ -607,7 +607,7 @@ export const ConsultingPage: React.FC = () => {
                             <div className="space-y-6">
                                 <div>
                                     <h2 className="text-[22px] font-bold text-[#F1EADF]">Pick a time</h2>
-                                    <p className="mt-2 text-[13px] text-[#A8A096]">Mon–Fri 8am–4pm PT (selected windows) · Sat–Sun 1–4pm PT</p>
+                                    <p className="mt-2 text-[13px] text-[#A8A096]">Mon–Fri 9am–4pm PT (selected windows) · Sat–Sun 1–4pm PT</p>
                                 </div>
                                 {/* The calendar is not rendered at all until the
                                     required fields are in — a dimmed-but-visible
@@ -638,8 +638,8 @@ export const ConsultingPage: React.FC = () => {
                                             ) : slotsError ? (
                                                 <p className="py-3 text-[#F04A32]">Couldn't load availability. Please try again in a moment.</p>
                                             ) : !bookable ? (
-                                                /* No calendar connected server-side: these times are mock
-                                                   data and booking would fail. Ask for an email instead. */
+                                                /* Not a missing calendar — the bookings table is down or
+                                                   unreadable, so no pick can be honoured. Ask for an email. */
                                                 <p className="py-3 text-[14px] leading-relaxed text-[#A8A096]">
                                                     Online scheduling is temporarily unavailable. Email{' '}
                                                     <a
@@ -710,7 +710,7 @@ export const ConsultingPage: React.FC = () => {
                     <p className="mt-4 text-[16px] text-[#A8A096]">
                         Your free 30-minute call is confirmed for {formatSlotDateTime(freeConfirmed.slot)}.
                         {freeConfirmed.emailSent === false
-                            ? ' The calendar invite is on your calendar, but we could not send the confirmation email — save the link below.'
+                            ? ' We could not send the confirmation email, so save these details — Yanqing will follow up to confirm.'
                             : ` A confirmation email with the calendar invite${freeConfirmed.meetLink ? ' and Google Meet link' : ''} is on its way.`}
                     </p>
                     {freeConfirmed.meetLink ? (

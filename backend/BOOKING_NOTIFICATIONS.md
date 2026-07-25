@@ -228,6 +228,22 @@ out, and deletes the calendar event when there is one. Reschedule needs more tha
 2 hours' notice and revalidates the new time against the published hours. Neither
 needs a calendar.
 
+Both operations claim the row before doing anything outside the database, so a
+double click cannot refund twice or produce two calendar events. Cancel claims by
+flipping `confirmed` → `cancelled` directly: a crash mid-cancellation therefore
+leaves a booking that is genuinely cancelled, with only the reason and refund
+details missing. Migration 013 still lists a `cancelling` status and carries a
+`DEBT` note about rows stranded in it — both are obsolete, kept only because an
+applied migration is immutable. Nothing writes `cancelling`, and there is nothing
+to sweep.
+
+Reschedule supersedes the old row rather than editing it, and has to hand over
+*both* unique Stripe columns: `stripe_session_id` (UNIQUE) gets a `superseded_`
+placeholder and `stripe_event_id` (UNIQUE where non-null, migration 013) is
+released to NULL, so the live row owns them. Leaving either behind makes the
+insert violate its index and reports a free slot as taken — that bug shipped
+twice, once per column.
+
 Both now email the client. The message carries a calendar file that updates the
 one they already have rather than adding another: same `UID` (the root of the
 reschedule chain) with a rising `SEQUENCE` to move the event, and `METHOD:CANCEL`

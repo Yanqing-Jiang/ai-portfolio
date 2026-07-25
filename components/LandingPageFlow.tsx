@@ -288,7 +288,7 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                             {[
                                 { n: '4,000+', l: 'hours automated' },
                                 { n: '$150M', l: 'in decisions influenced' },
-                                { n: '4', l: 'full-time AI engineers' },
+                                { n: '3', l: 'cloud AI stacks — Azure, GCP, AWS' },
                             ].map((m, i) => (
                                 <AnimatedStat key={m.l} n={m.n} l={m.l} index={i} />
                             ))}
@@ -468,18 +468,31 @@ const ProjectCard: React.FC<{
     const isPre = variant === 'pre';
     const to = project.link ?? `/project/${project.id}`;
     const techs = project.technologies.slice(0, isPre ? 2 : 3);
+    // Same cursorless problem as WorkRow (see the note there on why these are
+    // conditional classes): these sit in a swipeable track, so a card lights as
+    // it is swiped into view rather than on hover.
+    const [litRef, lit] = useInViewOnce<HTMLElement>(0.4);
+    const litMedia = lit
+        ? 'max-lg:-translate-y-1 max-lg:border-[#F04A32]/60 max-lg:shadow-[0_16px_40px_rgba(0,0,0,0.35)]'
+        : '';
+    const litCover = lit ? 'max-lg:grayscale-0' : '';
+    const litText = lit ? 'max-lg:text-[#F1EADF]' : '';
     return (
-        <article className={`group flex w-full max-w-[600px] shrink-0 flex-col md:max-w-none md:snap-start ${isPre ? 'md:w-[320px]' : 'md:w-[420px]'}`}>
+        <article
+            ref={litRef}
+            data-lit={lit}
+            className={`group flex w-full max-w-[600px] shrink-0 flex-col md:max-w-none md:snap-start ${isPre ? 'md:w-[320px]' : 'md:w-[420px]'}`}
+        >
             <Link
                 to={to}
                 onClick={() => onSelect(project)}
                 aria-label={`View ${project.title}`}
-                className="block overflow-hidden rounded-[6px] border border-[#37332E] transition-[transform,border-color,box-shadow] duration-300 ease-out group-hover:-translate-y-1 group-hover:border-[#F04A32]/60 group-hover:shadow-[0_16px_40px_rgba(0,0,0,0.35)]"
+                className={`block overflow-hidden rounded-[6px] border border-[#37332E] transition-[transform,border-color,box-shadow] duration-300 ease-out group-hover:-translate-y-1 group-hover:border-[#F04A32]/60 group-hover:shadow-[0_16px_40px_rgba(0,0,0,0.35)] ${litMedia}`}
             >
                 <CoverMedia
                     src={project.coverUrl ?? project.imageUrl}
                     alt={project.title}
-                    className="aspect-[16/10] w-full object-cover grayscale transition-[filter] duration-500 group-hover:grayscale-0"
+                    className={`aspect-[16/10] w-full object-cover grayscale transition-[filter] duration-500 group-hover:grayscale-0 ${litCover}`}
                 />
             </Link>
             <div className="mt-4">
@@ -493,7 +506,7 @@ const ProjectCard: React.FC<{
                 <Link
                     to={to}
                     onClick={() => onSelect(project)}
-                    className="mt-3 inline-flex items-center gap-2 text-[13px] font-semibold text-[#A8A096] transition-colors group-hover:text-[#F1EADF]"
+                    className={`mt-3 inline-flex items-center gap-2 text-[13px] font-semibold text-[#A8A096] transition-colors group-hover:text-[#F1EADF] ${litText}`}
                 >
                     {project.linkText ?? 'View project'}
                     <span className="text-[#F04A32] transition-transform duration-200 group-hover:translate-x-1">→</span>
@@ -541,9 +554,26 @@ const WorkRow: React.FC<{
     const to = project.link ?? `/project/${project.id}`;
     const techs = project.technologies.slice(0, 3);
     const right = align === 'right';
+    // Below lg there is no cursor, so group-hover never fires and every row would
+    // stay grey and flat for the whole scroll. Scroll position stands in for the
+    // pointer: each row lights the first time it comes into view, and every lit
+    // utility is `max-lg:` so pointer devices keep hover as the only trigger.
+    //
+    // Applied as a conditional class string rather than `max-lg:group-data-[…]:`
+    // because Tailwind 3.4 silently drops the @media wrapper when a `max-*`
+    // variant is stacked with an arbitrary `group-data-*` one (verified in both
+    // orders) — the styles would then leak to desktop at every width.
+    const [litRef, lit] = useInViewOnce<HTMLDivElement>(0.4);
+    const litMedia = lit
+        ? 'max-lg:-translate-y-1 max-lg:border-[#F04A32]/60 max-lg:shadow-[0_16px_40px_rgba(0,0,0,0.35)]'
+        : '';
+    const litCover = lit ? 'max-lg:grayscale-0' : '';
+    const litText = lit ? 'max-lg:text-[#F1EADF]' : '';
     return (
         <Reveal>
             <div
+                ref={litRef}
+                data-lit={lit}
                 className={`group flex flex-col gap-4 lg:flex-row lg:items-center lg:gap-10 ${
                     right ? 'lg:flex-row-reverse' : ''
                 }`}
@@ -555,12 +585,12 @@ const WorkRow: React.FC<{
                     to={to}
                     onClick={() => onSelect(project)}
                     aria-label={`View ${project.title}`}
-                    className="block w-full max-w-[600px] shrink-0 overflow-hidden rounded-[6px] border border-[#37332E] transition-[transform,border-color,box-shadow] duration-300 ease-out group-hover:-translate-y-1 group-hover:border-[#F04A32]/60 group-hover:shadow-[0_16px_40px_rgba(0,0,0,0.35)] lg:w-[44%] lg:max-w-none"
+                    className={`block w-full max-w-[600px] shrink-0 overflow-hidden rounded-[6px] border border-[#37332E] transition-[transform,border-color,box-shadow] duration-300 ease-out group-hover:-translate-y-1 group-hover:border-[#F04A32]/60 group-hover:shadow-[0_16px_40px_rgba(0,0,0,0.35)] lg:w-[44%] lg:max-w-none ${litMedia}`}
                 >
                     <CoverMedia
                         src={project.coverUrl ?? project.imageUrl}
                         alt={project.title}
-                        className="aspect-[2/1] w-full object-cover grayscale transition-[filter] duration-500 group-hover:grayscale-0"
+                        className={`aspect-[2/1] w-full object-cover grayscale transition-[filter] duration-500 group-hover:grayscale-0 ${litCover}`}
                     />
                 </Link>
                 {/* Content */}
@@ -575,7 +605,7 @@ const WorkRow: React.FC<{
                     <Link
                         to={to}
                         onClick={() => onSelect(project)}
-                        className={`mt-3 inline-flex items-center gap-2 text-[13px] font-semibold text-[#A8A096] transition-colors group-hover:text-[#F1EADF] ${
+                        className={`mt-3 inline-flex items-center gap-2 text-[13px] font-semibold text-[#A8A096] transition-colors group-hover:text-[#F1EADF] ${litText} ${
                             right ? 'lg:flex-row-reverse' : ''
                         }`}
                     >
