@@ -165,7 +165,7 @@ export const buildStatsSchema = (metrics: MetricDefinition[] = LANDING_METRICS) 
     name: sanitizeText(LANDING_SEO.author),
   },
   includedInDataCatalog: sanitizeText(SITE_NAME),
-  measurementTechnique: ['Automation Hours', 'Incremental Revenue', 'Agentic Trading Gains'],
+  measurementTechnique: ['Automation Hours', 'Decisions Influenced', 'Analyst Hours Saved', 'Late Payment Reduction'],
   variableMeasured: metrics.map(toQuantitativeValue),
 });
 
@@ -210,9 +210,9 @@ export const buildPersonSchema = () => ({
   '@type': 'Person',
   '@id': `${SITE_BASE_URL}/#person`,
   name: sanitizeText(LANDING_SEO.author),
-  jobTitle: 'AI Systems Engineer',
+  jobTitle: 'AI Agent System Builder',
   description:
-    'AI Systems Engineer / Director-of-Agents candidate. Currently Senior Advanced Analytics Manager at P&G (Amazon team), building enterprise agent systems, agentic analytics, generative UI, and workflow automation.',
+    'AI Agent System Builder. Designs and ships enterprise agentic pipelines, personal AI systems with durable memory, and zero-maintenance personal websites, backed by a five-person delivery team. Enterprise perspective from Advanced Analytics at P&G.',
   url: SITE_BASE_URL,
   image: DEFAULT_OG_IMAGE,
   sameAs: LANDING_SEO.sameAs ?? DEFAULT_SAME_AS,
@@ -227,8 +227,8 @@ export const buildPersonSchema = () => ({
     },
   ],
   knowsAbout: [
-    'AI Systems Engineering',
-    'Director of Agents',
+    'AI Agent System Design',
+    'Enterprise Agentic Pipelines',
     'LangGraph Agent Orchestration',
     'Claude Agent SDK',
     'A2UI Protocol',
