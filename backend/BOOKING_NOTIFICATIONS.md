@@ -1,15 +1,34 @@
-# Booking setup — calendar invite + both emails
-
-What has to be true for one click on **Book the free 30-min call** to produce
-(a) a Google Calendar event with a Meet link, (b) an email to Yanqing, and
-(c) an email + calendar invitation to the person booking.
+# Booking setup — availability, emails, and the optional calendar
 
 The code path is `POST /api/booking/free` in `main.py`:
 `create_booking_event` (calendar_service) → `send_admin_booking_alert` →
 `send_booking_confirmation_email` (email_service) → `send_booking_notification`
 (telegram_service, optional).
 
-## Authorizing Google is one command
+## Google Calendar is optional
+
+**This deployment currently runs without a calendar, and that is a supported
+mode.** Availability comes from the published hours in `calendar_service.py` —
+Mon-Fri 9am-4pm (a few windows per day, staggered deterministically by date),
+Sat-Sun 1pm-4pm, all `America/Los_Angeles` — narrowed by the `bookings` table,
+which refuses any slot already held or confirmed. A booking taken this way is
+real: it has a row, a hold, and an email to both parties, and it can be
+rescheduled or cancelled.
+
+What it does *not* have is a calendar event or a Meet link. The requestor's email
+says Yanqing will send the link before the call, and the owner alert is subject
+`ACTION NEEDED — no Meet link`. **That alert is the mechanism** — ignore it and
+the client joins nothing.
+
+The limit worth knowing: with no calendar, the site cannot see commitments made
+anywhere else, so a slot Yanqing is personally busy for is still offered. The
+`bookings` table only knows what was booked through the site.
+
+Connecting a calendar upgrades this path in place — freebusy filtering, a real
+event, an attendee invitation and a Meet link — with no other change. That is
+what the rest of this document is for.
+
+## Authorizing Google is one command (optional)
 
 ```bash
 python3 backend/scripts/authorize_google.py --account yanqing.app@gmail.com
@@ -35,7 +54,8 @@ In the project that owns the OAuth client — `gcp-oauth.keys.json` →
 `installed.project_id`, currently `gen-lang-client-0190176797`:
 
 1. **Enable the Gmail API and the Google Calendar API.** Without Calendar
-   enabled the script still reports success and the first booking fails.
+   enabled the script still reports success, and bookings keep working in the
+   calendar-free mode above — you just never get events or Meet links.
 2. **Set the OAuth consent screen to "In production."** While it is *Testing*,
    Google expires every refresh token after 7 days — booking would break a week
    after each authorization. That is the most likely reason the previous token
@@ -92,27 +112,42 @@ default SSL context rejects it with `CERTIFICATE_VERIFY_FAILED` — which is how
 booking persistence was silently down. `certs/supabase-prod-ca-2021.pem` pins
 that root (see `db_ssl.py`), keeping verification fully on.
 
-## What happens when it is not configured
+## What makes a day unbookable
 
-Availability falls back to `_mock_available_slots`, so the calendar would happily
-show times that the booking endpoint then rejects. To stop that,
-`GET /api/booking/slots` reports `"bookable": false` whenever the calendar has no
-credential *or* the bookings table is unreachable, and the consult UI replaces the
-picker with an email fallback. The flag is trusted only from a current, successful
-response — loading, an error, or an older backend that omits it all read as not
-bookable.
+`GET /api/booking/slots` reports `"bookable": false` when the booking endpoint
+could not honour a pick, and the consult UI then replaces the picker with an
+email fallback rather than offering a dead button. That means:
 
-So an unconfigured deploy degrades to "email me" instead of a dead button — but
-nobody can self-serve a call until the command above has been run.
+- **the bookings table is unreachable in production** — no hold is possible, so
+  two visitors could take the same slot and neither would get a row to
+  reschedule from; or
+- **the table could not be read** — it is the only thing that knows which slots
+  are taken (more so with no calendar), so we offer nothing rather than offer a
+  slot the insert would reject with a 409 at the last click.
 
-## Smoke test after authorizing
+A missing Google Calendar does **not** make a day unbookable.
+
+The flag is trusted only from a current, successful response — loading, an error,
+or an older backend that omits the field all read as not bookable.
+
+One filtering detail that bit us: asyncpg returns `slot_start` as UTC while
+offered slots are Pacific, so comparing ISO *strings* never matched and booked
+slots stayed on offer. The comparison is on instants, and excludes any
+*overlapping* slot rather than only an identical start — a 60-minute booking
+consumes two 30-minute slots.
+
+## Smoke test
+
+Works in either mode; with no calendar connected, expect `meet_link` to be empty
+and an `ACTION NEEDED` alert instead of an event.
 
 ```bash
-# 1. Availability should now be live, and bookable true.
+# 1. Availability should be live, and bookable true.
 curl -s "http://localhost:8101/api/booking/slots?date=$(date -v+3d +%F)&session_type=30"
 
-# 2. Book a slot to an address you control. This sends real email and creates a
-#    real calendar event — use a throwaway slot and delete it afterwards.
+# 2. Book a slot to an address you control. This sends real email (and, with a
+#    calendar connected, creates a real event) — use a throwaway slot and delete
+#    the booking row afterwards.
 curl -s -X POST http://localhost:8101/api/booking/free \
   -H 'Content-Type: application/json' \
   -d '{"slot_start":"<an offered ISO start>","name":"Smoke Test","email":"you+test@gmail.com","notes":"smoke test"}'
@@ -136,3 +171,27 @@ told *you* will email the link. That promise is only kept by hand.
 
 Check, in order: both inboxes have the confirmation, the requestor's invitation
 shows up on their calendar, and the Meet link in the email opens.
+
+## Reschedule and cancel (signed-in visitors)
+
+`GET /api/booking/my-bookings`, `POST /api/booking/{id}/cancel` and
+`POST /api/booking/{id}/reschedule` all require a Supabase JWT (`require_auth`,
+verified HS256 against `SUPABASE_JWT_SECRET` with `aud=authenticated`). The UI is
+`MyBookingsSection`, rendered on `/consult` only when `authService` reports a
+user.
+
+Bookings are claimed **by email**: the free-booking form does not know who is
+signed in, so `my-bookings` backfills `user_id` onto rows whose `client_email`
+matches the token's verified email. Book while signed out, sign in with the same
+address, and the call is there to manage.
+
+Cancel refunds via Stripe when the session was paid and is more than 24 hours
+out, and deletes the calendar event when there is one. Reschedule needs more than
+2 hours' notice. Neither needs a calendar.
+
+Known gap (`DEBT`, task #10): reschedule inserts the new row before doing the
+calendar work and suppresses a calendar failure, and cancel suppresses a deletion
+failure — so a booking can end up correct in the database and stale on the
+calendar, with no email either way. Fixing it properly needs a `calendar_pending`
+status and a repair path; the trigger is the first real reschedule or
+cancellation.
