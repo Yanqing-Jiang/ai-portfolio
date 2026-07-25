@@ -1716,6 +1716,16 @@ async def create_booking_checkout(req: BookingCheckoutRequest, request: Request)
         except Exception as exc:
             logger.error("[BOOKING] DB insert failed: %s", exc)
             raise HTTPException(status_code=500, detail="Booking system error. Please try again.")
+    elif os.getenv("ENVIRONMENT") == "production":
+        # The free path already refuses here; this one used to fall through and
+        # take a PAYMENT for a slot nothing was holding — worse, because money
+        # changes hands and the webhook then has no row to confirm.
+        logger.error("[BOOKING] Refusing paid checkout: database unavailable in production")
+        raise HTTPException(
+            status_code=503,
+            detail="Booking is temporarily unavailable. Please email "
+                   "jiangyanqing91@gmail.com and Yanqing will set up the call directly.",
+        )
     else:
         logger.warning("[BOOKING] No database — proceeding without hold (dev mode)")
 
@@ -2024,21 +2034,53 @@ async def create_free_consult(req: FreeConsultRequest, request: Request):
             detail="We couldn't confirm that time on the calendar. Please pick another slot — you have not been booked.",
         )
 
+    # Promote the hold to a real booking. This is the step that makes the booking
+    # exist, so its failure must NOT be swallowed: the row would stay 'hold', get
+    # swept 30 minutes later, and quietly free the slot — while the visitor holds a
+    # "confirmed" response and a confirmation email for a call with no record.
+    # `AND status = 'hold'` makes it a compare-and-set: 0 rows means someone else
+    # already expired or took this row, which is equally not a confirmation.
     if pool is not None:
+        promoted = False
         try:
             async with pool.acquire() as conn:
-                await conn.execute(
+                tag = await conn.execute(
                     """
                     UPDATE bookings
                     SET status = 'confirmed', calendar_event_id = $1, meet_link = $2, updated_at = NOW()
-                    WHERE id = $3
+                    WHERE id = $3 AND status = 'hold'
                     """,
                     calendar_event_id,
                     meet_link,
                     uuid.UUID(booking_id),
                 )
+            promoted = not tag.strip().endswith(" 0")
         except Exception as exc:
             logger.error("[BOOKING] Free-consult status update failed: %s", exc)
+
+        if not promoted:
+            # Undo the calendar side so we don't leave a ghost event, tell the
+            # owner, and refuse — the visitor is explicitly told they are NOT booked.
+            if calendar_event_id:
+                try:
+                    await delete_booking_event(calendar_event_id)
+                except Exception as exc:
+                    logger.error("[BOOKING] Could not remove ghost calendar event %s: %s",
+                                 calendar_event_id, exc)
+            try:
+                await send_admin_booking_alert(
+                    name=req.name, email=req.email,
+                    session_type="fit", slot_start=req.slot_start,
+                    notes=req.notes, meet_link=None,
+                    failure_reason="Hold could not be promoted to confirmed — booking refused",
+                )
+            except Exception as alert_exc:
+                logger.error("[BOOKING] Failed-attempt alert also failed: %s", alert_exc)
+            raise HTTPException(
+                status_code=503,
+                detail="We couldn't finish confirming that time — you have not been "
+                       "booked. Please try again, or email jiangyanqing91@gmail.com.",
+            )
 
     # Link the intake brief (if any) to this booking.
     await _link_brief_to_booking(req.intake_brief_id, booking_id, req.email)
@@ -2361,8 +2403,11 @@ async def booking_webhook(request: Request):
 
     pool = await _get_booking_pool()
     if pool is None:
-        logger.error("[BOOKING] No database — cannot process webhook")
-        return JSONResponse(content={"received": True})
+        # 200 here told Stripe "handled" and it never retried, so a PAID booking
+        # was lost for good. A 5xx makes Stripe redeliver, and this failure mode
+        # (database briefly unreachable) is exactly what redelivery is for.
+        logger.error("[BOOKING] No database — cannot process webhook, asking Stripe to retry")
+        raise HTTPException(status_code=503, detail="Database unavailable; retry this event.")
 
     async with pool.acquire() as conn:
         # Idempotency check: if this event was already processed, return 200
@@ -2392,7 +2437,45 @@ async def booking_webhook(request: Request):
                     pass
 
         if booking is None:
-            logger.error("[BOOKING] No booking found for session %s / booking %s", stripe_session_id, booking_id)
+            # Money has been taken and there is no row to confirm. Alert, and let
+            # Stripe retry rather than swallow it with a 200.
+            logger.error("[BOOKING] PAID but no booking row for session %s / booking %s",
+                         stripe_session_id, booking_id)
+            try:
+                await send_admin_booking_alert(
+                    name=client_name or "unknown", email=client_email or "unknown",
+                    session_type=session_type or "30", slot_start=slot_start_str,
+                    notes=None, meet_link=None,
+                    failure_reason=(
+                        f"PAYMENT RECEIVED with no booking row (stripe_session={stripe_session_id}). "
+                        "Check Stripe and book this person manually."
+                    ),
+                )
+            except Exception as alert_exc:
+                logger.error("[BOOKING] Orphan-payment alert failed: %s", alert_exc)
+            raise HTTPException(status_code=500, detail="No booking row for this session.")
+
+        # Claim this event BEFORE doing any outside work. The idempotency SELECT
+        # above is a read-then-act with no lock, so two concurrent deliveries of
+        # the same event can both get past it; claiming first means the loser stops
+        # here instead of creating a second calendar event and sending a second
+        # confirmation email. Re-claiming our own event is allowed while the row is
+        # still 'hold', so a retry after a partial failure can finish the job.
+        claim = await conn.execute(
+            """
+            UPDATE bookings
+            SET stripe_event_id = $1, updated_at = NOW()
+            WHERE id = $2
+              AND (stripe_event_id IS NULL
+                   OR (stripe_event_id = $1 AND status = 'hold'))
+            """,
+            event_id, booking["id"],
+        )
+        if claim.strip().endswith(" 0"):
+            logger.info(
+                "[BOOKING] Event %s already claimed for booking %s — no-op",
+                event_id, booking["id"],
+            )
             return JSONResponse(content={"received": True})
 
         # Transition hold -> confirmed
@@ -2420,19 +2503,19 @@ async def booking_webhook(request: Request):
             logger.error("[BOOKING] Calendar event creation failed: %s", exc)
             new_status = "calendar_failed"
 
-        # Update booking status
+        # Record the outcome. The event id was already claimed above; migration
+        # 013's unique index on stripe_event_id is the backstop that makes that
+        # claim safe under concurrent delivery.
         await conn.execute(
             """
             UPDATE bookings
             SET status = $1,
-                stripe_event_id = $2,
-                calendar_event_id = $3,
-                meet_link = $4,
+                calendar_event_id = $2,
+                meet_link = $3,
                 updated_at = NOW()
-            WHERE id = $5
+            WHERE id = $4
             """,
             new_status,
-            event_id,
             calendar_event_id,
             meet_link,
             booking["id"],
@@ -2479,6 +2562,12 @@ async def booking_webhook(request: Request):
             slot_start=slot_start_str or str(booking["slot_start"]),
             meet_link=meet_link,
             notes=booking.get("notes"),
+            # Paid confirmations were the one path shipping no calendar file, while
+            # the body said one was attached. They also need the stable UID, or a
+            # later reschedule cannot move the client's event.
+            kind="confirmed",
+            booking_id=str(booking["id"]),
+            ics_sequence=0,
         )
     except Exception as exc:
         logger.error("[BOOKING] Confirmation email failed (non-blocking): %s", exc)
@@ -2637,6 +2726,18 @@ async def cancel_booking(booking_id: str, req: CancelBookingRequest, auth: Parse
         )
         refund_id = None
         refund_amount = 0
+
+        # Claim the cancellation BEFORE refunding. The status check above is a
+        # read-then-act, so two clicks (or two tabs) could both reach the refund
+        # and issue it twice. Whoever flips 'confirmed' away owns the refund;
+        # everyone else is told it is already done.
+        claim = await conn.execute(
+            "UPDATE bookings SET status = 'cancelling', updated_at = NOW() "
+            "WHERE id = $1 AND status = 'confirmed'",
+            uuid.UUID(booking_id),
+        )
+        if claim.strip().endswith(" 0"):
+            raise HTTPException(status_code=409, detail="This booking is already being cancelled.")
 
         # Attempt Stripe refund if eligible
         if refund_eligible and stripe and row["stripe_session_id"] and not row["stripe_session_id"].startswith("pending_"):

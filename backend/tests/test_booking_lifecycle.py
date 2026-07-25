@@ -356,7 +356,8 @@ def test_a_cancellation_withdraws_the_same_event():
     assert "VALARM" not in gone, "no reminder for a cancelled call"
 
 
-def test_a_booking_email_carries_the_calendar_part(monkeypatch):
+@pytest.mark.asyncio
+async def test_a_booking_email_carries_the_calendar_part(monkeypatch):
     """End to end through the MIME builder: the message must actually contain a
     text/calendar part with the right METHOD, or nothing lands in any calendar."""
     import base64
@@ -384,14 +385,11 @@ def test_a_booking_email_carries_the_calendar_part(monkeypatch):
     monkeypatch.setattr(es, "_get_gmail_service", lambda: _Svc())
     monkeypatch.setattr(es, "GMAIL_FROM_EMAIL", "owner@example.com")
 
-    import asyncio
-    ok = asyncio.get_event_loop().run_until_complete(
-        es.send_booking_confirmation_email(
+    ok = await es.send_booking_confirmation_email(
             name="Test Person", email="c@example.com", session_type="30",
             slot_start="2026-08-05T13:00:00-07:00",
             meet_link="https://meet.google.com/x", kind="confirmed",
             booking_id="11111111-2222-3333-4444-555555555555", ics_sequence=0,
-        )
     )
     assert ok is True
 
@@ -406,7 +404,8 @@ def test_a_booking_email_carries_the_calendar_part(monkeypatch):
     assert any(p.get_content_type() == "text/plain" for p in msg.walk())
 
 
-def test_no_calendar_part_without_a_stable_uid(monkeypatch):
+@pytest.mark.asyncio
+async def test_no_calendar_part_without_a_stable_uid(monkeypatch):
     """A file we could never correct later is worse than no file."""
     import base64
     import email as _email
@@ -432,12 +431,9 @@ def test_no_calendar_part_without_a_stable_uid(monkeypatch):
 
     monkeypatch.setattr(es, "_get_gmail_service", lambda: _Svc())
 
-    import asyncio
-    asyncio.get_event_loop().run_until_complete(
-        es.send_booking_confirmation_email(
-            name="T", email="c@example.com", session_type="30",
-            slot_start="2026-08-05T13:00:00-07:00", booking_id=None,
-        )
+    await es.send_booking_confirmation_email(
+        name="T", email="c@example.com", session_type="30",
+        slot_start="2026-08-05T13:00:00-07:00", booking_id=None,
     )
     msg = _email.message_from_bytes(base64.urlsafe_b64decode(captured["raw"]))
     assert not [p for p in msg.walk() if p.get_content_type() == "text/calendar"]

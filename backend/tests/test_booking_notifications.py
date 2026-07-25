@@ -377,3 +377,101 @@ async def test_cancellation_notification_actually_sends(monkeypatch):
 
     assert ok is True
     assert "CANCELLED" in sent["payload"]["text"]
+
+
+# --- never report a booking we did not persist ---------------------------------
+
+def test_a_failed_hold_promotion_is_not_reported_as_confirmed(monkeypatch, slot):
+    """The hold -> confirmed UPDATE is what makes the booking exist. Swallowing
+    its failure meant the row stayed 'hold', got swept 30 minutes later, and freed
+    the slot — while the visitor held a "confirmed" response and an email."""
+    removed: list = []
+
+    class _Conn:
+        async def execute(self, sql, *args):
+            s = " ".join(sql.split())
+            if s.startswith("INSERT INTO bookings"):
+                return "INSERT 0 1"
+            if "SET status = 'confirmed'" in s:
+                return "UPDATE 0"        # lost the row: swept, or already taken
+            return "UPDATE 0"
+
+    class _Pool:
+        def acquire(self):
+            class _Ctx:
+                async def __aenter__(_s):
+                    return _Conn()
+
+                async def __aexit__(_s, *_e):
+                    return False
+            return _Ctx()
+
+    async def get_pool():
+        return _Pool()
+
+    async def no_slot_check(_slot_start, _session_type="30"):
+        return None
+
+    async def fake_event(**_kw):
+        return {"event_id": "evt_ghost", "meet_link": ""}
+
+    async def remove(event_id):
+        removed.append(event_id)
+        return True
+
+    async def noop(**_kw):
+        return True
+
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setattr(main, "_get_booking_pool", get_pool)
+    monkeypatch.setattr(main, "_assert_slot_offered", no_slot_check)
+    monkeypatch.setattr(main, "create_booking_event", fake_event)
+    monkeypatch.setattr(main, "delete_booking_event", remove)
+    monkeypatch.setattr(main, "send_admin_booking_alert", noop)
+    monkeypatch.setattr(main, "send_booking_confirmation_email", noop)
+    monkeypatch.setattr(main, "send_booking_notification", noop)
+
+    with TestClient(main.app) as client:
+        res = client.post("/api/booking/free", json={
+            "slot_start": slot, "name": "Test Person", "email": "test@example.com",
+        })
+
+    assert res.status_code == 503
+    assert "not been booked" in res.json()["detail"]
+    # The calendar event we created must not be left behind as a ghost.
+    assert removed == ["evt_ghost"]
+
+
+def test_paid_checkout_refuses_without_a_database_in_production(monkeypatch):
+    """It used to fall through and take a PAYMENT for a slot nothing was holding."""
+    async def no_pool():
+        return None
+
+    async def no_slot_check(_slot_start, _session_type="30"):
+        return None
+
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setattr(main, "_get_booking_pool", no_pool)
+    monkeypatch.setattr(main, "_assert_slot_offered", no_slot_check)
+    monkeypatch.setattr(main, "STRIPE_SECRET_KEY", "sk_test_x")
+    monkeypatch.setattr(main, "BOOKING_PRICE_MAP", {"30": "price_x", "60": "price_y"})
+
+    class _Boom:
+        class checkout:
+            class Session:
+                @staticmethod
+                def create(**_kw):
+                    raise AssertionError("Stripe must not be called without a hold")
+
+    monkeypatch.setattr(main, "stripe", _Boom)
+
+    future = (datetime.now(timezone.utc) + timedelta(days=3)).replace(microsecond=0)
+    with TestClient(main.app) as client:
+        res = client.post("/api/booking/checkout", json={
+            "session_type": "30", "slot_start": future.isoformat(),
+            "name": "T", "email": "t@example.com",
+            "success_url": "https://x/s", "cancel_url": "https://x/c",
+        })
+
+    assert res.status_code == 503
+    assert "unavailable" in res.json()["detail"].lower()

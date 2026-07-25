@@ -436,7 +436,9 @@ async def send_booking_confirmation_email(
         )
         if meet_link and not cancelled:
             plain_text += f"Google Meet: {meet_link}\n"
-        if not cancelled:
+        # Only claim the attachment when one is actually going to be attached
+        # (booking_id is what makes a correctable calendar entry possible).
+        if booking_id and not cancelled:
             plain_text += "\nA calendar file is attached — add it and your calendar will remind you.\n"
         plain_text += (
             "\nTo reschedule or cancel, just reply to this email.\n\n"
