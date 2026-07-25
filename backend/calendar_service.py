@@ -48,9 +48,9 @@ CALENDAR_SCOPES = [
 ]
 
 # Business hours (in BOOKING_TIMEZONE)
-# Weekday (Mon-Fri): 8am-4pm PT, but only a few staggered windows are offered
+# Weekday (Mon-Fri): 9am-4pm PT, but only a few staggered windows are offered
 # (see _weekday_stagger) | Weekend (Sat-Sun): 1pm-4pm PT, fully open.
-WEEKDAY_HOUR_START = 8    # 8 AM
+WEEKDAY_HOUR_START = 9    # 9 AM
 WEEKDAY_HOUR_END = 16     # 4 PM
 WEEKEND_HOUR_START = 13   # 1 PM
 WEEKEND_HOUR_END_H = 16   # 4 PM (hour component)
@@ -58,7 +58,7 @@ WEEKEND_HOUR_END_M = 0    # 4 PM (minute component)
 BUFFER_MINUTES = 15       # buffer between sessions
 SLOT_DURATION_MINUTES = 30  # base slot size
 
-# Weekday stagger: how much of the 8am-4pm grid to actually publish.
+# Weekday stagger: how much of the 9am-4pm grid to actually publish.
 WEEKDAY_OPEN_WINDOWS = 3    # contiguous windows offered per weekday
 WEEKDAY_WINDOW_SLOTS = 2    # 30-min slots per window (2 => a bookable 60-min pair)
 # Changing the salt reshuffles every future weekday. Keep it stable in prod.
@@ -75,7 +75,7 @@ MEET_POLL_DELAY_S = 1.0
 GOOGLE_CALENDAR_IMPERSONATE_USER = os.getenv("GOOGLE_CALENDAR_IMPERSONATE_USER", "")
 
 # Don't publish a slot that starts within this many minutes — weekday hours now
-# open at 8am, so without a lead time the afternoon visitor is shown morning
+# open at 9am, so without a lead time the afternoon visitor is shown morning
 # slots that the booking endpoint would reject as being in the past.
 MIN_LEAD_MINUTES = 30
 
@@ -178,11 +178,12 @@ def _get_calendar_service():
             mode = "service_account"
 
         if credentials is None:
-            logger.warning(
-                "[CALENDAR] Google Calendar not configured — no OAuth token with "
-                "calendar scope at %s, and no usable service account. Run "
-                "`python3 backend/scripts/authorize_google.py`, then restart. "
-                "Using mock mode; bookings will fail.",
+            logger.info(
+                "[CALENDAR] No calendar connected — no OAuth token with calendar "
+                "scope at %s, and no usable service account. Bookings still work "
+                "from the published hours + the bookings table, but get no "
+                "calendar event and no Meet link. To connect one, run "
+                "`python3 backend/scripts/authorize_google.py`, then restart.",
                 GOOGLE_OAUTH_CREDENTIALS_PATH,
             )
             _calendar_configured = False
@@ -208,11 +209,11 @@ def _get_calendar_service():
 
 
 def is_calendar_configured() -> bool:
-    """True when a booking can actually be written to a real calendar.
+    """True when bookings can additionally be written to a real calendar.
 
-    Callers use this to avoid offering slots the booking endpoint would reject —
-    mock availability plus a 502 at the last click is the worst outcome for a
-    visitor who was ready to book.
+    Not a precondition for booking — see _ruleset_available_slots. This reports
+    whether a booking will also produce a calendar event and Meet link, which
+    decides whether the owner has to send a link by hand.
     """
     return _get_calendar_service() is not None
 
@@ -237,7 +238,7 @@ def _weekday_stagger(
 ) -> list[tuple[datetime, datetime]]:
     """Publish only a few windows of the weekday grid, in date-dependent positions.
 
-    Mon-Fri spans a whole workday (8am-4pm = 16 slots); offering all of it reads
+    Mon-Fri spans a whole workday (9am-4pm = 14 slots); offering all of it reads
     as a calendar with nothing in it. Instead open WEEKDAY_OPEN_WINDOWS contiguous
     windows, each WEEKDAY_WINDOW_SLOTS long, placed by _stagger_rng — so the day
     looks partly taken and the open times move from day to day. Windows stay
@@ -273,7 +274,7 @@ def _generate_slot_boundaries(target_date: date, tz: ZoneInfo) -> list[tuple[dat
     """Generate the offered 30-minute slot boundaries for a given date.
 
     Returns a list of (start, end) tuples in the configured timezone.
-    Mon-Fri: staggered windows inside 8am-4pm PT | Sat-Sun: 1pm-4pm PT, all open.
+    Mon-Fri: staggered windows inside 9am-4pm PT | Sat-Sun: 1pm-4pm PT, all open.
     Slots starting within MIN_LEAD_MINUTES are dropped.
     """
     is_weekend = target_date.weekday() >= 5  # 5=Sat, 6=Sun
@@ -326,13 +327,22 @@ def _overlaps(busy_start: datetime, busy_end: datetime, slot_start: datetime, sl
 
 
 # ---------------------------------------------------------------------------
-# Mock data for development without Google credentials
+# Rule-set availability (no Google Calendar)
 # ---------------------------------------------------------------------------
 
-def _mock_available_slots(target_date: date, session_type: str = "30") -> list[dict]:
-    """Return all slots as available (no Google Calendar to check against).
+def _ruleset_available_slots(target_date: date, session_type: str = "30") -> list[dict]:
+    """Offer the published hours, with no calendar to check against.
 
-    The DB layer in main.py still filters out held/confirmed bookings.
+    This is a supported production mode, not a stub: availability is defined by
+    the business-hours rule set above (Mon-Fri 9am-4pm staggered, Sat-Sun 1pm-4pm)
+    and narrowed by the bookings table in main.py, which rejects any slot already
+    held or confirmed. That combination is enough to stop double-booking through
+    the site.
+
+    Its limit, stated plainly: without a calendar we cannot see commitments made
+    anywhere else, so a slot the owner is personally busy for will still be
+    offered. Connecting a calendar (GOOGLE_OAUTH_CREDENTIALS_PATH) upgrades this
+    path to a real freebusy check without any other change.
     """
     tz = ZoneInfo(BOOKING_TIMEZONE)
     all_slots = _generate_slot_boundaries(target_date, tz)
@@ -366,11 +376,15 @@ def _mock_available_slots(target_date: date, session_type: str = "30") -> list[d
 # ---------------------------------------------------------------------------
 
 async def get_available_slots(target_date: date, session_type: str = "30") -> list[dict]:
-    """Query Google Calendar freebusy API, return available slot boundaries.
+    """Return the available slot boundaries for a date.
 
-    Offered hours (BOOKING_TIMEZONE): Mon-Fri staggered windows inside 8am-4pm,
-    Sat-Sun 1pm-4pm. Excludes busy slots. Adds 15-min buffer between sessions.
-    For 60-min sessions: only return slots where the adjacent slot is also free.
+    Offered hours (BOOKING_TIMEZONE): Mon-Fri staggered windows inside 9am-4pm,
+    Sat-Sun 1pm-4pm. For 60-min sessions only slots whose neighbour is also free
+    are returned.
+
+    With no calendar connected the rule set alone defines availability (see
+    _ruleset_available_slots). With one connected, busy periods are additionally
+    excluded via freebusy, plus a 15-min buffer between sessions.
 
     Returns: [{"start": "ISO8601 with offset", "end": "ISO8601 with offset"}]
     """
@@ -379,8 +393,8 @@ async def get_available_slots(target_date: date, session_type: str = "30") -> li
 
     service = _get_calendar_service()
     if service is None:
-        logger.info("[CALENDAR] Using mock slots (Google Calendar not configured)")
-        return _mock_available_slots(target_date, session_type)
+        logger.info("[CALENDAR] No calendar connected — offering the published hours")
+        return _ruleset_available_slots(target_date, session_type)
 
     all_slots = _generate_slot_boundaries(target_date, tz)
     if not all_slots:
@@ -496,8 +510,11 @@ async def create_booking_event(
     Uses conferenceDataVersion=1 and conferenceData.createRequest for Meet link.
     Adds client email as attendee (Google auto-sends invite).
 
-    Returns: {"event_id": str, "meet_link": str}
-    Raises: RuntimeError if calendar is not configured or creation fails.
+    Returns: {"event_id": str, "meet_link": str} — both empty when no calendar is
+    connected, which is a supported mode: the booking is real (it lives in the
+    bookings table) and the owner is alerted to send a video link by hand.
+    Raises: RuntimeError only when a calendar IS connected and the write fails —
+    that is a genuine failure and must not be reported as a confirmed booking.
     """
     tz = ZoneInfo(BOOKING_TIMEZONE)
     duration = SESSION_DURATIONS.get(session_type, 30)
@@ -505,8 +522,14 @@ async def create_booking_event(
 
     service = _get_calendar_service()
     if service is None:
-        logger.warning("[CALENDAR] Cannot create event — Google Calendar not configured")
-        raise RuntimeError("Google Calendar not configured")
+        # No calendar to write to. Don't fail the booking over it — the DB row is
+        # what makes the slot held, and send_admin_booking_alert raises an
+        # "ACTION NEEDED — no Meet link" flag so the call still gets a link.
+        logger.info(
+            "[CALENDAR] No calendar connected — booking %s recorded without an "
+            "event or Meet link", email,
+        )
+        return {"event_id": "", "meet_link": ""}
 
     description_parts = [
         f"Consulting session with {name} ({email})",
@@ -616,12 +639,18 @@ async def delete_booking_event(calendar_event_id: str) -> bool:
     """Delete a Google Calendar event (used for cancel/reschedule).
 
     Sends cancellation notifications to all attendees.
-    Returns True on success.
-    Raises RuntimeError if calendar is not configured or deletion fails.
+    Returns True on success, False when there is no calendar to delete from.
+    Raises RuntimeError if deletion fails against a connected calendar.
     """
     service = _get_calendar_service()
     if service is None:
-        raise RuntimeError("Google Calendar not configured")
+        # Nothing to delete. Callers only reach this with a non-empty event id, so
+        # this means the calendar was disconnected after the event was written —
+        # worth a warning, but it must not block the cancellation itself.
+        logger.warning(
+            "[CALENDAR] Cannot delete event %s — no calendar connected", calendar_event_id,
+        )
+        return False
 
     try:
         import asyncio

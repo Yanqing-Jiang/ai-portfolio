@@ -41,21 +41,35 @@ def test_weekend_offers_every_slot_from_1pm_to_4pm(day):
     assert slots[-1][1] == datetime(day.year, day.month, day.day, 16, 0, tzinfo=TZ)
 
 
-# --- Weekdays: staggered inside 8am-4pm -------------------------------------
+# --- Weekdays: staggered inside 9am-4pm -------------------------------------
 
 @pytest.mark.parametrize("day", WEEKDAYS)
-def test_weekday_slots_stay_inside_8am_to_4pm(day):
+def test_weekday_slots_stay_inside_9am_to_4pm(day):
     for start, end in cs._generate_slot_boundaries(day, TZ):
-        assert start >= datetime(day.year, day.month, day.day, 8, 0, tzinfo=TZ)
+        assert start >= datetime(day.year, day.month, day.day, 9, 0, tzinfo=TZ)
         assert end <= datetime(day.year, day.month, day.day, 16, 0, tzinfo=TZ)
+
+
+@pytest.mark.parametrize("day", WEEKDAYS)
+def test_weekday_never_offers_a_9am_shoulder_hour(day):
+    """The published day starts at 9, so 8-something must never appear.
+
+    test_weekday_slots_stay_inside_9am_to_4pm would still pass if the floor crept
+    back to 8am on only some days; this pins the boundary itself.
+    """
+    assert cs.WEEKDAY_HOUR_START == 9
+    starts = [s.hour for s, _ in cs._generate_slot_boundaries(day, TZ)]
+    assert all(h >= 9 for h in starts), starts
 
 
 @pytest.mark.parametrize("day", WEEKDAYS)
 def test_weekday_does_not_offer_the_whole_grid(day):
     slots = cs._generate_slot_boundaries(day, TZ)
     expected = cs.WEEKDAY_OPEN_WINDOWS * cs.WEEKDAY_WINDOW_SLOTS
-    assert len(slots) == expected  # 16 possible, only a few published
-    assert len(slots) < 16
+    # 9am-4pm is 14 possible 30-min slots; only a few are published.
+    total_grid = (cs.WEEKDAY_HOUR_END - cs.WEEKDAY_HOUR_START) * 2
+    assert len(slots) == expected
+    assert len(slots) < total_grid
 
 
 @pytest.mark.parametrize("day", WEEKDAYS)

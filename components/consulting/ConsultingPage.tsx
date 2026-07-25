@@ -9,6 +9,8 @@ import { CalendarPicker } from './CalendarPicker';
 import { BookingConfirmation } from './BookingConfirmation';
 import { useAvailableSlots } from './useAvailableSlots';
 import { IntakeChat, type Brief } from './IntakeChat';
+import { MyBookingsSection } from './MyBookingsSection';
+import { authService, type AuthState } from '@/services/auth';
 import { configService } from '@/services/config';
 import { DEFAULT_OG_IMAGE } from '@/constants/seo';
 
@@ -158,6 +160,12 @@ export const ConsultingPage: React.FC = () => {
         slot: string; meetLink?: string | null; emailSent?: boolean;
     } | null>(null);
     const [confirmationSessionId, setConfirmationSessionId] = useState<string | null>(null);
+
+    // Signed-in visitors manage their own bookings (reschedule/cancel) — the
+    // endpoints behind that require a Supabase JWT, so the section only renders
+    // once we have a user.
+    const [authState, setAuthState] = useState<AuthState>({ user: null, loading: true, error: null });
+    useEffect(() => authService.subscribe(setAuthState), []);
 
     // Stripe redirect confirmation (post-mount is fine — it swaps the whole view).
     useEffect(() => {
@@ -445,6 +453,12 @@ export const ConsultingPage: React.FC = () => {
                     Answer 2 quick questions to book time with me — my intake agent handles the booking.
                 </p>
             </section>
+
+            {/* Existing bookings, for signed-in visitors only. Placed above the
+                booking flow so "Book your first consulting session below" reads
+                correctly, and so a returning client lands on reschedule/cancel
+                rather than hunting for it. */}
+            {authState.user && <MyBookingsSection user={authState.user} />}
 
             {/* AI Brief Agent — chat-first intake (Phase 2). The path fork lives
                 INSIDE the chat now: with no ?path= intent it opens by asking

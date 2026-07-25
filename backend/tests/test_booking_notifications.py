@@ -254,6 +254,92 @@ def test_development_still_books_without_a_database(monkeypatch, slot):
     assert res.status_code == 200
 
 
+# --- No Google Calendar is a supported mode -----------------------------------
+
+def _book_against_real_calendar_layer(monkeypatch, slot):
+    """POST a free booking using the REAL create_booking_event.
+
+    The other tests stub it out, so they cannot tell whether an absent calendar
+    fails the booking. This drives calendar_service itself.
+    """
+    calls: dict[str, list] = {"admin": [], "client": []}
+
+    async def fake_admin(**kwargs):
+        calls["admin"].append(kwargs)
+        return True
+
+    async def fake_client(**kwargs):
+        calls["client"].append(kwargs)
+        return True
+
+    async def fake_telegram(**kwargs):
+        return True
+
+    async def no_slot_check(_slot_start):
+        return None
+
+    async def no_pool():
+        return None
+
+    async def no_brief_link(*a, **k):
+        return None
+
+    monkeypatch.setattr(main, "send_admin_booking_alert", fake_admin)
+    monkeypatch.setattr(main, "send_booking_confirmation_email", fake_client)
+    monkeypatch.setattr(main, "send_booking_notification", fake_telegram)
+    monkeypatch.setattr(main, "_assert_slot_offered", no_slot_check)
+    monkeypatch.setattr(main, "_get_booking_pool", no_pool)
+    monkeypatch.setattr(main, "_link_brief_to_booking", no_brief_link)
+
+    with TestClient(main.app) as client:
+        res = client.post("/api/booking/free", json={
+            "slot_start": slot, "name": "Test Person", "email": "test@example.com",
+        })
+    return res, calls
+
+
+def test_a_booking_is_confirmed_with_no_calendar_connected(monkeypatch, slot):
+    """Booking must not depend on Google Calendar.
+
+    Availability is the published hours narrowed by the bookings table. With no
+    calendar the call is still real — it just has no calendar event and no Meet
+    link, so the owner is told to send one by hand.
+    """
+    monkeypatch.setattr(cs, "_get_calendar_service", lambda: None)
+    monkeypatch.setenv("ENVIRONMENT", "development")
+
+    res, calls = _book_against_real_calendar_layer(monkeypatch, slot)
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["status"] == "confirmed"
+    assert not body.get("meet_link")
+    # The owner has to know a link is owed, or the client joins nothing.
+    assert calls["admin"][0]["meet_link"] in (None, "")
+    assert calls["client"], "the requestor is still told the call is booked"
+
+
+def test_a_connected_calendar_that_fails_still_blocks_the_booking(monkeypatch, slot):
+    """The fail-closed rule survives: 'no calendar' is fine, 'broken' is not."""
+    class _Boom:
+        def events(self):
+            raise RuntimeError("calendar exploded")
+
+    monkeypatch.setattr(cs, "_get_calendar_service", lambda: _Boom())
+    monkeypatch.setenv("ENVIRONMENT", "development")
+
+    res, _ = _book_against_real_calendar_layer(monkeypatch, slot)
+
+    assert res.status_code >= 400, "a broken calendar must not read as confirmed"
+
+
+@pytest.mark.asyncio
+async def test_deleting_an_event_without_a_calendar_does_not_raise(monkeypatch):
+    """Cancelling a calendar-free booking must not blow up on the delete step."""
+    monkeypatch.setattr(cs, "_get_calendar_service", lambda: None)
+    assert await cs.delete_booking_event("evt_that_never_existed") is False
+
+
 # --- Telegram -----------------------------------------------------------------
 
 @pytest.mark.asyncio

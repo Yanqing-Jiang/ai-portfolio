@@ -29,7 +29,7 @@ export const RescheduleFlow: React.FC<RescheduleFlowProps> = ({ booking, onConfi
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const { slots, loading: slotsLoading } = useAvailableSlots(selectedDate, booking.session_type);
+  const { slots, loading: slotsLoading, bookable } = useAvailableSlots(selectedDate, booking.session_type);
 
   const handleConfirm = async () => {
     if (!selectedTime) return;
@@ -95,6 +95,16 @@ export const RescheduleFlow: React.FC<RescheduleFlowProps> = ({ booking, onConfi
                 <div className="flex items-center gap-2 text-slate-400 py-2 text-sm">
                   <Loader2 className="w-4 h-4 animate-spin" /> Loading...
                 </div>
+              ) : !bookable ? (
+                // Same rule as the booking flow: if the backend cannot honour a
+                // pick, don't show times that the reschedule call would reject.
+                <p className="text-slate-400 text-sm py-2">
+                  Rescheduling is temporarily unavailable. Email{' '}
+                  <a href="mailto:jiangyanqing91@gmail.com" className="text-blue-400 underline">
+                    jiangyanqing91@gmail.com
+                  </a>{' '}
+                  and Yanqing will move the call for you.
+                </p>
               ) : slots.length === 0 ? (
                 <p className="text-slate-400 text-sm py-2">No available times for this date.</p>
               ) : (

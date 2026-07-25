@@ -603,9 +603,10 @@ class BookingSlot(BaseModel):
 class BookingSlotsResponse(BaseModel):
     slots: list[BookingSlot]
     timezone: str
-    # False when no real calendar is connected: the slots above are mock data and
-    # POST /api/booking/free would 502 at the last click. The consult UI offers an
-    # email fallback instead of letting someone pick a time that cannot be booked.
+    # False when POST /api/booking/free could not honour a pick — i.e. the
+    # bookings table is unreachable, so nothing can hold the slot. The consult UI
+    # offers an email fallback rather than let someone pick a time that cannot be
+    # booked. A missing Google Calendar does NOT make a day unbookable.
     bookable: bool = True
 
 
@@ -1425,11 +1426,12 @@ async def paypal_webhook(request: Request):
 # /api/booking/checkout (5 req/min). Add when rate_limiter supports
 # endpoint-specific limits without auth.
 
-# SQL for bookings table (run once in Supabase SQL editor):
+# SQL for the bookings table, as it actually exists in Supabase. Kept in sync by
+# hand — if you change the table, change this. (Verified against the live schema.)
 # ----------------------------------------------------------------
 # CREATE TABLE bookings (
 #     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-#     stripe_session_id TEXT UNIQUE NOT NULL,
+#     stripe_session_id TEXT UNIQUE NOT NULL,  -- free bookings use 'free_<uuid>'
 #     stripe_event_id TEXT,
 #     session_type TEXT NOT NULL CHECK (session_type IN ('30', '60')),
 #     slot_start TIMESTAMPTZ NOT NULL,
@@ -1438,17 +1440,29 @@ async def paypal_webhook(request: Request):
 #     client_email TEXT NOT NULL,
 #     notes TEXT,
 #     status TEXT NOT NULL DEFAULT 'hold' CHECK (status IN (
-#         'hold', 'confirmed', 'calendar_failed', 'expired', 'cancelled', 'refunded'
+#         'hold', 'confirmed', 'calendar_failed', 'expired', 'cancelled',
+#         'refunded', 'rescheduled'
 #     )),
-#     calendar_event_id TEXT,
-#     meet_link TEXT,
+#     calendar_event_id TEXT,   -- empty when no calendar is connected
+#     meet_link TEXT,           -- likewise; the owner sends a link by hand
 #     amount_cents INTEGER NOT NULL,
+#     user_id UUID,             -- Supabase auth user; backfilled by email on read
+#     cancelled_at TIMESTAMPTZ,
+#     cancellation_reason TEXT,
+#     refund_id TEXT,
+#     refund_amount_cents INTEGER,
+#     rescheduled_from UUID REFERENCES bookings (id),
 #     created_at TIMESTAMPTZ DEFAULT NOW(),
-#     updated_at TIMESTAMPTZ DEFAULT NOW(),
-#     UNIQUE(slot_start) WHERE (status IN ('hold', 'confirmed'))
+#     updated_at TIMESTAMPTZ DEFAULT NOW()
 # );
+# -- A partial UNIQUE INDEX, not a table constraint: "UNIQUE(col) WHERE ..." is
+# -- not valid Postgres. This is what stops two people holding the same start.
+# CREATE UNIQUE INDEX idx_bookings_slot_unique ON bookings (slot_start)
+#     WHERE (status IN ('hold', 'confirmed'));
 # CREATE INDEX idx_bookings_slot ON bookings (slot_start, status);
 # CREATE INDEX idx_bookings_stripe ON bookings (stripe_session_id);
+# CREATE INDEX idx_bookings_client_email ON bookings (client_email);
+# CREATE INDEX idx_bookings_user_id ON bookings (user_id) WHERE (user_id IS NOT NULL);
 # ----------------------------------------------------------------
 
 
@@ -1464,7 +1478,7 @@ async def get_booking_slots(date: str, session_type: str = "30"):
     Query param `session_type`: '30' or '60' (default '30').
     """
     from datetime import date as date_type
-    from calendar_service import BOOKING_TIMEZONE, is_calendar_configured
+    from calendar_service import BOOKING_TIMEZONE
 
     if session_type not in ("30", "60"):
         raise HTTPException(status_code=400, detail="session_type must be '30' or '60'.")
@@ -1491,6 +1505,7 @@ async def get_booking_slots(date: str, session_type: str = "30"):
 
     # Filter out slots that have holds or confirmed bookings in Supabase
     pool = await _get_booking_pool()
+    db_filter_ok = True
     if pool is not None:
         try:
             # Expire stale holds first (lazy cleanup)
@@ -1526,27 +1541,46 @@ async def get_booking_slots(date: str, session_type: str = "30"):
                     day_start, day_end,
                 )
 
-                booked_starts = set()
-                for row in rows:
-                    booked_starts.add(row["slot_start"].isoformat())
-
-                # Remove slots whose start time matches a booked slot
-                slots = [
-                    s for s in slots
-                    if s["start"] not in booked_starts
+                # Compare instants, never ISO strings: asyncpg hands back
+                # timestamptz as UTC ("T20:00:00+00:00") while the offered slots
+                # are in BOOKING_TIMEZONE ("T13:00:00-07:00"). Those are the same
+                # moment and different text, so string matching silently kept
+                # every booked slot on offer. Aware datetimes compare (and hash)
+                # by instant, so this matches across offsets.
+                booked: list[tuple[_DateTime, _DateTime]] = [
+                    (row["slot_start"], row["slot_end"]) for row in rows
                 ]
-        except Exception as exc:
-            logger.error("[BOOKING] DB slot check failed (returning calendar-only slots): %s", exc)
 
-    # In production a booking also needs the hold/overlap store, or two visitors
-    # can take the same slot and neither gets a record they can reschedule from.
-    # POST refuses in that state, so the offer must not promise otherwise.
+                # Exclude any offered slot that OVERLAPS a booked one, not just
+                # one that starts at the same time: a 60-minute booking at 13:00
+                # also consumes the 13:30 slot.
+                def _is_free(slot: dict) -> bool:
+                    start = _DateTime.fromisoformat(slot["start"])
+                    end = _DateTime.fromisoformat(slot["end"])
+                    return not any(b_start < end and b_end > start for b_start, b_end in booked)
+
+                slots = [s for s in slots if _is_free(s)]
+        except Exception as exc:
+            # The bookings table is the only thing that knows a slot is taken
+            # (more so with no calendar connected). If we cannot read it, we do
+            # not know what is free — so offer nothing rather than offer a slot
+            # the insert would reject with a 409 at the last click.
+            logger.error("[BOOKING] DB slot check failed — offering nothing: %s", exc)
+            slots = []
+            db_filter_ok = False
+
+    # A booking needs the hold/overlap store, or two visitors can take the same
+    # slot and neither gets a record they can reschedule from. POST refuses in
+    # that state, so the offer must not promise otherwise. A connected Google
+    # Calendar is NOT required — availability is defined by the published hours
+    # and narrowed by this table (see calendar_service._ruleset_available_slots);
+    # without one the booking simply gets no event and no Meet link.
     persistence_ok = pool is not None or os.getenv("ENVIRONMENT") != "production"
 
     return BookingSlotsResponse(
         slots=[BookingSlot(**s) for s in slots],
         timezone=BOOKING_TIMEZONE,
-        bookable=is_calendar_configured() and persistence_ok,
+        bookable=persistence_ok and db_filter_ok,
     )
 
 
@@ -1873,8 +1907,10 @@ async def create_free_consult(req: FreeConsultRequest, request: Request):
     else:
         logger.warning("[BOOKING] No database — proceeding without hold (dev mode)")
 
-    # Create the calendar event. Only a successful event confirms the booking;
-    # a failure frees the slot and returns an error (B3 — never a false success).
+    # Create the calendar event, if a calendar is connected at all. With none,
+    # this returns empty ids and the DB row alone confirms the booking (the owner
+    # gets an "ACTION NEEDED — no Meet link" alert). With one connected, a failure
+    # frees the slot and returns an error (B3 — never a false success).
     calendar_event_id = None
     meet_link = None
     try:

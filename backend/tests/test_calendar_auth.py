@@ -10,6 +10,7 @@ and the readiness flag the UI relies on.
 """
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -381,16 +382,66 @@ def _reset_rate_buckets():
     main._RATE_BUCKETS.clear()
 
 
-def _slots_response(monkeypatch, *, configured: bool):
-    async def fake_slots(_target_date, _session_type="30"):
-        return [{"start": "2099-01-01T13:00:00-08:00", "end": "2099-01-01T13:30:00-08:00"}]
+class _FakeConn:
+    """Minimal asyncpg connection: `fetch` returns rows, `db_down` makes both raise."""
 
-    async def no_pool():
-        return None
+    def __init__(self, rows=None, db_down=False):
+        self._rows = rows or []
+        self._db_down = db_down
+
+    async def execute(self, *_a, **_k):
+        if self._db_down:
+            raise RuntimeError("connection reset")
+        return "UPDATE 0"
+
+    async def fetch(self, *_a, **_k):
+        if self._db_down:
+            raise RuntimeError("connection reset")
+        return self._rows
+
+
+class _FakePool:
+    def __init__(self, conn):
+        self._conn = conn
+
+    def acquire(self):
+        conn = self._conn
+
+        class _Ctx:
+            async def __aenter__(self):
+                return conn
+
+            async def __aexit__(self, *_exc):
+                return False
+
+        return _Ctx()
+
+
+# The offered slot, and the same instant as Postgres hands it back: asyncpg
+# decodes timestamptz to UTC, so the text never matches the Pacific offset.
+OFFERED_START = "2099-01-01T13:00:00-08:00"
+OFFERED_END = "2099-01-01T13:30:00-08:00"
+
+
+_UNSET = object()
+
+
+def _slots_response(monkeypatch, *, configured: bool, conn=_UNSET, environment=None):
+    async def fake_slots(_target_date, _session_type="30"):
+        return [{"start": OFFERED_START, "end": OFFERED_END}]
+
+    pool = None if conn is _UNSET or conn is None else _FakePool(conn)
+
+    async def get_pool():
+        return pool
 
     monkeypatch.setattr(main, "get_available_slots", fake_slots)
-    monkeypatch.setattr(main, "_get_booking_pool", no_pool)
+    monkeypatch.setattr(main, "_get_booking_pool", get_pool)
     monkeypatch.setattr(cs, "is_calendar_configured", lambda: configured)
+    if environment is None:
+        monkeypatch.delenv("ENVIRONMENT", raising=False)
+    else:
+        monkeypatch.setenv("ENVIRONMENT", environment)
 
     from datetime import date, timedelta
     target = (date.today() + timedelta(days=3)).isoformat()
@@ -399,15 +450,66 @@ def _slots_response(monkeypatch, *, configured: bool):
 
 
 def test_slots_report_bookable_when_a_calendar_is_connected(monkeypatch):
-    res = _slots_response(monkeypatch, configured=True)
+    res = _slots_response(monkeypatch, configured=True, conn=_FakeConn())
     assert res.status_code == 200
     assert res.json()["bookable"] is True
 
 
-def test_slots_report_not_bookable_when_no_calendar_is_connected(monkeypatch):
-    """The times are mock data in this state — the UI must not offer them."""
-    res = _slots_response(monkeypatch, configured=False)
+def test_slots_are_bookable_with_no_calendar_at_all(monkeypatch):
+    """Booking does not require Google Calendar.
+
+    Availability is the published hours narrowed by the bookings table; without a
+    calendar the booking simply gets no event and no Meet link. Gating on the
+    calendar here is what used to leave the consult page showing "email me" while
+    the booking endpoint was perfectly able to take the call.
+    """
+    res = _slots_response(monkeypatch, configured=False, conn=_FakeConn(), environment="production")
     assert res.status_code == 200
     body = res.json()
+    assert body["bookable"] is True
+    assert [s["start"] for s in body["slots"]] == [OFFERED_START]
+
+
+def test_slots_are_not_bookable_without_the_bookings_table_in_production(monkeypatch):
+    """No table means no hold — two visitors could take the same slot."""
+    res = _slots_response(monkeypatch, configured=True, conn=None, environment="production")
+    assert res.status_code == 200
+    assert res.json()["bookable"] is False
+
+
+def test_a_booked_slot_is_dropped_despite_the_utc_offset_mismatch(monkeypatch):
+    """The regression that calendar-free mode would have exposed.
+
+    asyncpg returns slot_start as UTC (21:00+00:00); the offered slot is Pacific
+    (13:00-08:00). Comparing ISO *strings* never matched, so an already-booked
+    slot stayed on offer and the visitor hit a 409 on the last click. With no
+    calendar, this table is the only thing that knows the slot is gone.
+    """
+    booked = _FakeConn(rows=[{
+        "slot_start": datetime(2099, 1, 1, 21, 0, tzinfo=timezone.utc),
+        "slot_end": datetime(2099, 1, 1, 21, 30, tzinfo=timezone.utc),
+    }])
+    res = _slots_response(monkeypatch, configured=False, conn=booked)
+    assert res.status_code == 200
+    body = res.json()
+    assert body["slots"] == []
+    assert body["bookable"] is True  # the day is readable, just fully taken
+
+
+def test_a_60_minute_booking_also_hides_the_slot_it_overlaps(monkeypatch):
+    """A 13:00-14:00 booking consumes 13:30 too, which start-equality missed."""
+    booked = _FakeConn(rows=[{
+        "slot_start": datetime(2099, 1, 1, 20, 0, tzinfo=timezone.utc),  # 12:00 PT
+        "slot_end": datetime(2099, 1, 1, 21, 30, tzinfo=timezone.utc),   # 13:30 PT
+    }])
+    res = _slots_response(monkeypatch, configured=False, conn=booked)
+    assert res.json()["slots"] == []
+
+
+def test_an_unreadable_bookings_table_offers_nothing(monkeypatch):
+    """Fail closed: if we cannot tell what is taken, we do not know what is free."""
+    res = _slots_response(monkeypatch, configured=False, conn=_FakeConn(db_down=True))
+    assert res.status_code == 200
+    body = res.json()
+    assert body["slots"] == []
     assert body["bookable"] is False
-    assert body["slots"], "slots are still returned; only the flag tells the truth"
