@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, Clock, Loader2, Send, X } from 'lucide-react';
 import { configService } from '@/services/config';
 import { CalendarPicker } from './CalendarPicker';
@@ -310,21 +310,55 @@ const fmtSlotFull = (iso: string): string => {
     }
 };
 
+// Shown instead of the picker when the backend reports it cannot book. Offering
+// times we know would 502 is worse than asking for an email.
+const UnbookableNotice: React.FC = () => (
+    <div className="rounded-[4px] border border-[#37332E] bg-[#191816]/50 p-4">
+        <p className="text-[13px] leading-relaxed text-[#F1EADF]">
+            Online scheduling is temporarily unavailable. Email{' '}
+            <a
+                href="mailto:jiangyanqing91@gmail.com?subject=Free%2030-minute%20intro%20call"
+                className="font-semibold text-[#F04A32] underline decoration-[#F04A32]/40 hover:decoration-[#F04A32]"
+            >
+                jiangyanqing91@gmail.com
+            </a>{' '}
+            with a couple of times that work and Yanqing will send an invite directly.
+        </p>
+    </div>
+);
+
 // In-chat calendar: mounts the shared CalendarPicker + the SAME slots fetch the
 // booking page uses, then hands the picked date+time back for the existing flow.
-const InChatCalendar: React.FC<{
+// Exported for tests: the retraction rule below decides whether the booking step
+// is live, and driving it through a full chat run needs live LLM turns.
+export const InChatCalendar: React.FC<{
     sessionType: SessionType;
     disabled?: boolean;
     onPick: (date: string, time: string) => void;
-}> = ({ sessionType, disabled, onPick }) => {
+    onClearPick: () => void;
+}> = ({ sessionType, disabled, onPick, onClearPick }) => {
     const [date, setDate] = useState<string | null>(null);
     const [picked, setPicked] = useState<string | null>(null);
     const slotType: '30' | '60' = sessionType === '60' ? '60' : '30';
-    const { slots, loading, error } = useAvailableSlots(date, slotType);
+    const { slots, loading, error, bookable } = useAvailableSlots(date, slotType);
+
+    // A pick only stands while the latest response still offers it. Otherwise
+    // changing the date left the parent holding the old slot: no time appeared
+    // selected, yet the contact step was live and would book the abandoned one.
+    useEffect(() => {
+        if (!picked || loading) return;
+        if (!bookable || !slots.some((s) => s.start === picked)) {
+            setPicked(null);
+            onClearPick();
+        }
+    }, [picked, loading, bookable, slots, onClearPick]);
 
     return (
         <div className={disabled ? 'pointer-events-none opacity-60' : ''}>
-            <CalendarPicker selectedDate={date} onSelectDate={(d) => { setDate(d); setPicked(null); }} />
+            <CalendarPicker
+                selectedDate={date}
+                onSelectDate={(d) => { setDate(d); setPicked(null); onClearPick(); }}
+            />
             {date && (
                 <div className="mt-4 space-y-2">
                     <h4 className="flex items-center gap-2 text-[13px] font-semibold text-[#F1EADF]">
@@ -334,6 +368,10 @@ const InChatCalendar: React.FC<{
                         <div className="flex items-center gap-2 py-2 text-[13px] text-[#A8A096]"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</div>
                     ) : error ? (
                         <p className="py-2 text-[13px] text-[#F04A32]">Couldn't load availability.</p>
+                    ) : !bookable ? (
+                        /* The times that came back are mock data and booking would
+                           fail at the last click — ask for an email instead. */
+                        <UnbookableNotice />
                     ) : slots.length === 0 ? (
                         <p className="py-2 text-[13px] text-[#A8A096]">No times for this date.</p>
                     ) : (
@@ -636,6 +674,9 @@ export const IntakeChat: React.FC<IntakeChatProps> = ({
         time: string,
     ) => setPendingCalendarPick({ turnKey, date, time, sessionType });
 
+    // Stable identity: InChatCalendar depends on this inside an effect.
+    const clearCalendarPick = useCallback(() => setPendingCalendarPick(null), []);
+
     const count = briefCount(brief);
     // The completing turn carries the calendar, so booking finishes inside the
     // chat; the full booking page becomes the secondary route, not the next step.
@@ -720,6 +761,7 @@ export const IntakeChat: React.FC<IntakeChatProps> = ({
                                     sessionType={c.session_type}
                                     disabled={answered}
                                     onPick={(date, time) => handleCalendarPick(tk, c.session_type, date, time)}
+                                    onClearPick={clearCalendarPick}
                                 />
                             </div>
                         );

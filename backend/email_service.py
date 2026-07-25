@@ -22,6 +22,8 @@ from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Optional
 
+from google_oauth import load_user_credentials, resolve_credentials_path
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -50,10 +52,11 @@ def _admin_alert_recipients() -> list[str]:
             seen.append(addr)
     return seen
 
-# Scopes must match the ones the stored token was granted for.
+# What this module actually needs: it only calls messages.send. Requiring more
+# (the stored token also carries gmail.settings.basic for gmail-mcp) would reject
+# a token that can send perfectly well.
 GMAIL_SCOPES = [
-    "https://www.googleapis.com/auth/gmail.modify",
-    "https://www.googleapis.com/auth/gmail.settings.basic",
+    "https://www.googleapis.com/auth/gmail.send",
 ]
 
 # ---------------------------------------------------------------------------
@@ -66,22 +69,14 @@ _gmail_configured = False
 
 def _load_credentials_path() -> Optional[Path]:
     """Resolve the credentials path, expanding ~. Returns Path or None."""
-    raw = GMAIL_CREDENTIALS_PATH or ""
-    if not raw:
-        return None
-    p = Path(raw).expanduser()
-    return p
+    return resolve_credentials_path(GMAIL_CREDENTIALS_PATH or "")
 
 
 def _get_gmail_service():
     """Lazy-initialize the Gmail API client using OAuth user credentials.
 
-    The credentials file (~/.gmail-mcp/credentials.json) is in Google's
-    "authorized user info" format (access_token, refresh_token, scope,
-    token_type, expiry_date). We load it with
-    `Credentials.from_authorized_user_info()` and auto-refresh expired
-    access tokens via google.auth.transport.requests.Request before building
-    the service.
+    Token loading, scope checking and refresh live in google_oauth, so Gmail and
+    Calendar share one token file without drifting apart on how they read it.
     """
     global _gmail_service, _gmail_configured
 
@@ -98,49 +93,14 @@ def _get_gmail_service():
         return None
 
     try:
-        from google.oauth2.credentials import Credentials
-        from google.auth.transport.requests import Request
         from googleapiclient.discovery import build
 
-        with open(creds_path, "r", encoding="utf-8") as fh:
-            creds_info = json.load(fh)
-
-        # OAuth user-token files from the gmail-mcp setup store only the
-        # tokens (access/refresh); from_authorized_user_info() also needs
-        # client_id + client_secret to refresh. Pull those from the sibling
-        # gcp-oauth.keys.json when missing.
-        if "client_id" not in creds_info or "client_secret" not in creds_info:
-            keys_path = creds_path.parent / "gcp-oauth.keys.json"
-            if keys_path.exists():
-                with open(keys_path, "r", encoding="utf-8") as fh:
-                    keys_info = json.load(fh)
-                section = keys_info.get("installed") or keys_info.get("web") or {}
-                creds_info.setdefault("client_id", section.get("client_id", ""))
-                creds_info.setdefault(
-                    "client_secret", section.get("client_secret", "")
-                )
-                creds_info.setdefault(
-                    "token_uri",
-                    section.get(
-                        "token_uri", "https://oauth2.googleapis.com/token"
-                    ),
-                )
-
-        credentials = Credentials.from_authorized_user_info(
-            creds_info, scopes=GMAIL_SCOPES
+        credentials = load_user_credentials(
+            creds_path, GMAIL_SCOPES, log_prefix="[GMAIL]"
         )
-
-        # Auto-refresh if the access token is expired or missing.
-        if credentials.expired or not credentials.token:
-            credentials.refresh(Request())
-            # Persist the refreshed token so the next process start has it.
-            try:
-                with open(creds_path, "w", encoding="utf-8") as fh:
-                    json.dump(json.loads(credentials.to_json()), fh, indent=2)
-            except Exception as write_exc:
-                logger.warning(
-                    "[GMAIL] Could not persist refreshed token: %s", write_exc
-                )
+        if credentials is None:
+            _gmail_configured = False
+            return None
 
         _gmail_service = build("gmail", "v1", credentials=credentials)
         _gmail_configured = True
@@ -201,7 +161,7 @@ def _build_email_html(
         <tr>
           <td style="padding:8px 0;color:#5f6368;font-family:Arial,sans-serif;font-size:14px;">Google&nbsp;Meet</td>
           <td style="padding:8px 0;font-family:Arial,sans-serif;font-size:14px;color:#5f6368;">
-            Will be added shortly — you'll get a calendar invite with the link.
+            Yanqing will email you the link before the call.
           </td>
         </tr>"""
 
@@ -390,11 +350,12 @@ async def send_admin_booking_alert(
         is_free = session_type == "fit"
         duration = "30" if is_free else ("60" if session_type == "60" else "30")
         kind = "Enterprise fit call (FREE)" if is_free else f"{duration}-min session"
-        subject = (
-            f"ACTION NEEDED — booking FAILED for {name or 'unknown'} ({kind})"
-            if failure_reason
-            else f"New consult booking — {name or 'unknown'} ({kind})"
-        )
+        if failure_reason:
+            subject = f"ACTION NEEDED — booking FAILED for {name or 'unknown'} ({kind})"
+        elif not meet_link:
+            subject = f"ACTION NEEDED — no Meet link for {name or 'unknown'} ({kind})"
+        else:
+            subject = f"New consult booking — {name or 'unknown'} ({kind})"
 
         lines = [
             "A booking attempt on yanqing.app/consult could NOT be confirmed."
@@ -411,6 +372,16 @@ async def send_admin_booking_alert(
             lines.append(f"Notes:    {notes}")
         if meet_link:
             lines.append(f"Meet:     {meet_link}")
+        elif not failure_reason:
+            # The booking stands but the Meet room never provisioned, and nothing
+            # retries it. The confirmation email tells them YOU will send the
+            # link, so this is the only thing that makes that true.
+            lines += [
+                "Meet:     NONE — the room failed to provision.",
+                "",
+                "ACTION: add a Meet link to the event and email it to them. Their",
+                "confirmation says you will send it before the call.",
+            ]
         if failure_reason:
             lines += [
                 "",

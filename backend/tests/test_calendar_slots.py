@@ -4,6 +4,7 @@ The stagger has to be deterministic per date, because get_available_slots is
 both the offer source (GET /api/booking/slots) and the revalidation source
 (main._assert_slot_offered). A slot that was advertised must still validate.
 """
+import os
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -91,10 +92,28 @@ def test_weekday_stagger_differs_across_dates():
 
 
 def test_weekday_stagger_survives_a_new_process_seed():
-    """sha256, not hash() — a per-process string salt would desync workers."""
+    """sha256, not hash() — Python salts string hashing per process, so hash()
+    would give each gunicorn worker a different grid and the endpoint would
+    reject slots it had just advertised. Genuinely fork a process to prove it."""
+    import subprocess
+    import sys as _sys
+
     day = WEEKDAYS[0]
     expected = cs._stagger_rng(day).random()
-    assert cs._stagger_rng(day).random() == expected
+
+    code = (
+        "import sys; sys.path.insert(0, %r);"
+        "import calendar_service as cs; from datetime import date;"
+        "print(cs._stagger_rng(date.fromisoformat(%r)).random())"
+        % (str(Path(__file__).resolve().parent.parent), day.isoformat())
+    )
+    # PYTHONHASHSEED=0 vs the parent's random seed: identical output is only
+    # possible if the seed never touches hash().
+    out = subprocess.run(
+        [_sys.executable, "-c", code], capture_output=True, text=True,
+        env={**os.environ, "PYTHONHASHSEED": "0"}, check=True,
+    )
+    assert float(out.stdout.strip()) == expected
 
 
 # --- Lead time ---------------------------------------------------------------

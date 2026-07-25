@@ -125,8 +125,8 @@ async def _get_booking_pool():
             return _booking_pool
         try:
             import asyncpg
-            import ssl as _ssl
-            ssl_ctx = _ssl.create_default_context()
+            from db_ssl import supabase_ssl_context
+            ssl_ctx = supabase_ssl_context()
             _booking_pool = await asyncpg.create_pool(
                 SUPABASE_DB_URL,
                 min_size=1,
@@ -603,6 +603,10 @@ class BookingSlot(BaseModel):
 class BookingSlotsResponse(BaseModel):
     slots: list[BookingSlot]
     timezone: str
+    # False when no real calendar is connected: the slots above are mock data and
+    # POST /api/booking/free would 502 at the last click. The consult UI offers an
+    # email fallback instead of letting someone pick a time that cannot be booked.
+    bookable: bool = True
 
 
 class CancelBookingRequest(BaseModel):
@@ -1460,7 +1464,7 @@ async def get_booking_slots(date: str, session_type: str = "30"):
     Query param `session_type`: '30' or '60' (default '30').
     """
     from datetime import date as date_type
-    from calendar_service import BOOKING_TIMEZONE
+    from calendar_service import BOOKING_TIMEZONE, is_calendar_configured
 
     if session_type not in ("30", "60"):
         raise HTTPException(status_code=400, detail="session_type must be '30' or '60'.")
@@ -1534,9 +1538,15 @@ async def get_booking_slots(date: str, session_type: str = "30"):
         except Exception as exc:
             logger.error("[BOOKING] DB slot check failed (returning calendar-only slots): %s", exc)
 
+    # In production a booking also needs the hold/overlap store, or two visitors
+    # can take the same slot and neither gets a record they can reschedule from.
+    # POST refuses in that state, so the offer must not promise otherwise.
+    persistence_ok = pool is not None or os.getenv("ENVIRONMENT") != "production"
+
     return BookingSlotsResponse(
         slots=[BookingSlot(**s) for s in slots],
         timezone=BOOKING_TIMEZONE,
+        bookable=is_calendar_configured() and persistence_ok,
     )
 
 
@@ -1850,6 +1860,16 @@ async def create_free_consult(req: FreeConsultRequest, request: Request):
         except Exception as exc:
             logger.error("[BOOKING] Free-consult DB insert failed: %s", exc)
             raise HTTPException(status_code=500, detail="Booking system error. Please try again.")
+    elif os.getenv("ENVIRONMENT") == "production":
+        # Without the bookings table there is no hold, so nothing stops two
+        # visitors taking the same slot, and a confirmed call leaves no record to
+        # reschedule or cancel from. Refuse rather than "confirm" that.
+        logger.error("[BOOKING] Refusing free booking: database unavailable in production")
+        raise HTTPException(
+            status_code=503,
+            detail="Booking is temporarily unavailable. Please email "
+                   "jiangyanqing91@gmail.com and Yanqing will set up the call directly.",
+        )
     else:
         logger.warning("[BOOKING] No database — proceeding without hold (dev mode)")
 

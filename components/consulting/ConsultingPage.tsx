@@ -170,7 +170,7 @@ export const ConsultingPage: React.FC = () => {
 
     const activeOffering = OFFERINGS.find((o) => o.id === selected) ?? null;
     const offerLabel = offerIntent ? OFFER_LABELS[offerIntent] ?? null : null;
-    const { slots, loading: slotsLoading, error: slotsError } = useAvailableSlots(
+    const { slots, loading: slotsLoading, error: slotsError, bookable } = useAvailableSlots(
         selectedDate,
         selected ? slotSessionType(selected) : '30'
     );
@@ -182,7 +182,15 @@ export const ConsultingPage: React.FC = () => {
     const contextValid = briefNotes
         ? !!(name.trim() && emailValid)
         : !!(improve.trim() && today.trim() && name.trim() && emailValid);
-    const canSubmit = !!(selected && contextValid && selectedTime);
+    // The chosen time must still be in the *current* successful response. A time
+    // carried in from the chat handoff, or left over from another date, would
+    // otherwise submit against availability nobody has verified. This also gates
+    // the auto-book effect, which fires without a click.
+    const timeStillOffered = !!selectedTime && slots.some((s) => s.start === selectedTime);
+    const canSubmit = !!(
+        selected && contextValid && timeStillOffered &&
+        bookable && !slotsLoading && !slotsError
+    );
 
     // Map landing aliases to the three intake paths.
     const chatPath: 'business' | 'individual' | 'training' | null =
@@ -615,6 +623,19 @@ export const ConsultingPage: React.FC = () => {
                                                 </div>
                                             ) : slotsError ? (
                                                 <p className="py-3 text-[#F04A32]">Couldn't load availability. Please try again in a moment.</p>
+                                            ) : !bookable ? (
+                                                /* No calendar connected server-side: these times are mock
+                                                   data and booking would fail. Ask for an email instead. */
+                                                <p className="py-3 text-[14px] leading-relaxed text-[#A8A096]">
+                                                    Online scheduling is temporarily unavailable. Email{' '}
+                                                    <a
+                                                        href="mailto:jiangyanqing91@gmail.com?subject=Free%2030-minute%20intro%20call"
+                                                        className="font-semibold text-[#F04A32] underline decoration-[#F04A32]/40 hover:decoration-[#F04A32]"
+                                                    >
+                                                        jiangyanqing91@gmail.com
+                                                    </a>{' '}
+                                                    with a couple of times that work and Yanqing will send an invite directly.
+                                                </p>
                                             ) : slots.length === 0 ? (
                                                 <p className="py-3 text-[#A8A096]">No available times for this date.</p>
                                             ) : (
@@ -684,10 +705,11 @@ export const ConsultingPage: React.FC = () => {
                             {freeConfirmed.meetLink}
                         </a>
                     ) : (
-                        /* No Meet link means the room never provisioned; don't let the
-                           prospect leave thinking they have a joining link. */
+                        /* No Meet link means the room never provisioned. Nothing
+                           retries it, so promise a person, not a mechanism —
+                           Yanqing is alerted and sends the link by hand. */
                         <p className="mt-6 text-[14px] text-[#A8A096]">
-                            The video link is still being created — it will appear on the calendar invite.
+                            The video link didn't generate — Yanqing will email it to you before the call.
                         </p>
                     )}
                     <div className="mt-8">

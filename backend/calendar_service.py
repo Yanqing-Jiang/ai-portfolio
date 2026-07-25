@@ -4,7 +4,8 @@ Google Calendar API integration for booking system.
 Function: get_available_slots — queries Google Calendar freebusy API for available slots.
 Function: create_booking_event — creates a calendar event with Google Meet link.
 Called from: backend.main (booking endpoints)
-Invokes: Google Calendar API via service account credentials.
+Invokes: Google Calendar API as the calendar owner (OAuth user token; see
+google_oauth), falling back to a service account when one is configured.
 Purpose: Manage consulting session availability and booking confirmation.
 """
 from __future__ import annotations
@@ -20,6 +21,8 @@ from datetime import date, datetime, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
 
+from google_oauth import load_user_credentials, resolve_credentials_path
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -27,8 +30,22 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 BOOKING_TIMEZONE = os.getenv("BOOKING_TIMEZONE", "America/Los_Angeles")
+# Unset means the authenticated user's own calendar, which is what we want when
+# authenticating as the owner. Only the service-account path needs an explicit ID.
 GOOGLE_CALENDAR_ID = os.getenv("GOOGLE_CALENDAR_ID", "")
 GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "")
+
+# Preferred auth: the owner's own OAuth token — the same file Gmail uses, so one
+# `authorize_google.py` run configures both. See google_oauth for why a service
+# account cannot invite external attendees on a consumer Gmail calendar.
+GOOGLE_OAUTH_CREDENTIALS_PATH = os.getenv(
+    "GOOGLE_OAUTH_CREDENTIALS_PATH",
+    os.getenv("GMAIL_CREDENTIALS_PATH", "~/.gmail-mcp/credentials.json"),
+)
+CALENDAR_SCOPES = [
+    "https://www.googleapis.com/auth/calendar.readonly",  # freebusy
+    "https://www.googleapis.com/auth/calendar.events",    # insert/get/delete
+]
 
 # Business hours (in BOOKING_TIMEZONE)
 # Weekday (Mon-Fri): 8am-4pm PT, but only a few staggered windows are offered
@@ -74,61 +91,130 @@ SESSION_DURATIONS = {
 
 _calendar_service = None
 _calendar_configured = False
+_calendar_auth_mode = "none"  # "oauth_user" | "service_account" | "none"
+# Set only when we have established there is genuinely no credential to use (no
+# token file, or one missing the required scopes). /api/booking/slots asks on
+# every request, and re-deciding costs a file read plus a token refresh. The cost
+# of caching is that authorizing needs a backend restart, which the setup doc
+# says to do anyway. Transient failures are never cached here.
+_calendar_unconfigured = False
+
+
+def _calendar_id() -> str:
+    """Which calendar to read and write.
+
+    `primary` is the authenticated principal's own calendar — correct for the
+    OAuth-user path and the reason that path needs no configuration at all. A
+    service account's own primary calendar is useless, so that path is only
+    reachable with an explicit GOOGLE_CALENDAR_ID (enforced below).
+    """
+    return GOOGLE_CALENDAR_ID or "primary"
+
+
+def _oauth_user_credentials():
+    """The owner's OAuth token, if it exists and carries the calendar scopes."""
+    creds_path = resolve_credentials_path(GOOGLE_OAUTH_CREDENTIALS_PATH)
+    if creds_path is None or not creds_path.exists():
+        return None
+    return load_user_credentials(creds_path, CALENDAR_SCOPES, log_prefix="[CALENDAR]")
+
+
+def _service_account_credentials():
+    """Fallback for a Workspace setup: a service account, optionally delegated."""
+    if not GOOGLE_SERVICE_ACCOUNT_JSON or not GOOGLE_CALENDAR_ID:
+        return None
+
+    if not GOOGLE_CALENDAR_IMPERSONATE_USER:
+        # Fail closed rather than report ready: an undelegated service account
+        # books as itself, and Google will not email the invitation to the
+        # attendee — the visitor would be "booked" with no invite and no Meet.
+        logger.error(
+            "[CALENDAR] Service account is configured without "
+            "GOOGLE_CALENDAR_IMPERSONATE_USER, so it cannot invite attendees. "
+            "Refusing to use it. Set the impersonated user (needs Workspace "
+            "domain-wide delegation) or use the OAuth-user path "
+            "(authorize_google.py)."
+        )
+        return None
+
+    from google.oauth2 import service_account
+
+    creds_info = json.loads(base64.b64decode(GOOGLE_SERVICE_ACCOUNT_JSON))
+    credentials = service_account.Credentials.from_service_account_info(
+        creds_info, scopes=CALENDAR_SCOPES,
+    ).with_subject(GOOGLE_CALENDAR_IMPERSONATE_USER)
+    logger.info(
+        "[CALENDAR] Impersonating %s (domain-wide delegation)",
+        GOOGLE_CALENDAR_IMPERSONATE_USER,
+    )
+    return credentials
 
 
 def _get_calendar_service():
-    """Lazy-initialize the Google Calendar API client using service account credentials."""
-    global _calendar_service, _calendar_configured
+    """Lazy-initialize the Google Calendar API client.
+
+    Prefers the owner's OAuth user token over a service account: only a real
+    user can have Google deliver the invitation and Meet link to an external
+    attendee without Workspace domain-wide delegation.
+    """
+    global _calendar_service, _calendar_configured, _calendar_auth_mode
+    global _calendar_unconfigured
 
     if _calendar_service is not None:
         return _calendar_service
-
-    if not GOOGLE_SERVICE_ACCOUNT_JSON or not GOOGLE_CALENDAR_ID:
-        logger.warning(
-            "[CALENDAR] Google Calendar not configured — "
-            "GOOGLE_SERVICE_ACCOUNT_JSON or GOOGLE_CALENDAR_ID missing. "
-            "Using mock mode."
-        )
-        _calendar_configured = False
+    # Only a settled "there is no credential here" verdict is cached. A timeout,
+    # a half-written token file or a discovery error is transient, and caching it
+    # would take booking offline until someone noticed and restarted.
+    if _calendar_unconfigured:
         return None
 
     try:
-        from google.oauth2 import service_account
         from googleapiclient.discovery import build
 
-        creds_json = base64.b64decode(GOOGLE_SERVICE_ACCOUNT_JSON)
-        creds_info = json.loads(creds_json)
+        credentials = _oauth_user_credentials()
+        mode = "oauth_user"
+        if credentials is None:
+            credentials = _service_account_credentials()
+            mode = "service_account"
 
-        credentials = service_account.Credentials.from_service_account_info(
-            creds_info,
-            scopes=[
-                "https://www.googleapis.com/auth/calendar.readonly",
-                "https://www.googleapis.com/auth/calendar.events",
-            ],
-        )
-
-        if GOOGLE_CALENDAR_IMPERSONATE_USER:
-            credentials = credentials.with_subject(GOOGLE_CALENDAR_IMPERSONATE_USER)
-            logger.info(
-                "[CALENDAR] Impersonating %s (domain-wide delegation)",
-                GOOGLE_CALENDAR_IMPERSONATE_USER,
-            )
-        else:
+        if credentials is None:
             logger.warning(
-                "[CALENDAR] GOOGLE_CALENDAR_IMPERSONATE_USER not set — the service "
-                "account books as itself; Google may not email the invitation to "
-                "the attendee. Set it to the calendar owner for reliable invites."
+                "[CALENDAR] Google Calendar not configured — no OAuth token with "
+                "calendar scope at %s, and no usable service account. Run "
+                "`python3 backend/scripts/authorize_google.py`, then restart. "
+                "Using mock mode; bookings will fail.",
+                GOOGLE_OAUTH_CREDENTIALS_PATH,
             )
+            _calendar_configured = False
+            _calendar_auth_mode = "none"
+            _calendar_unconfigured = True
+            return None
 
         _calendar_service = build("calendar", "v3", credentials=credentials)
         _calendar_configured = True
-        logger.info("[CALENDAR] Google Calendar API client initialized")
+        _calendar_auth_mode = mode
+        logger.info(
+            "[CALENDAR] Google Calendar API client initialized (auth=%s calendar=%s)",
+            mode, _calendar_id(),
+        )
         return _calendar_service
 
     except Exception as exc:
+        # Deliberately NOT cached — see above.
         logger.error("[CALENDAR] Failed to initialize Google Calendar client: %s", exc)
         _calendar_configured = False
+        _calendar_auth_mode = "none"
         return None
+
+
+def is_calendar_configured() -> bool:
+    """True when a booking can actually be written to a real calendar.
+
+    Callers use this to avoid offering slots the booking endpoint would reject —
+    mock availability plus a 502 at the last click is the worst outcome for a
+    visitor who was ready to book.
+    """
+    return _get_calendar_service() is not None
 
 
 # ---------------------------------------------------------------------------
@@ -301,6 +387,7 @@ async def get_available_slots(target_date: date, session_type: str = "30") -> li
         return []
 
     # Query freebusy for the entire business day
+    cal_id = _calendar_id()
     time_min = all_slots[0][0].isoformat()
     time_max = (all_slots[-1][1] + timedelta(minutes=BUFFER_MINUTES)).isoformat()
 
@@ -309,7 +396,7 @@ async def get_available_slots(target_date: date, session_type: str = "30") -> li
             "timeMin": time_min,
             "timeMax": time_max,
             "timeZone": BOOKING_TIMEZONE,
-            "items": [{"id": GOOGLE_CALENDAR_ID}],
+            "items": [{"id": cal_id}],
         }
 
         # Google API client is synchronous — call in thread
@@ -320,7 +407,30 @@ async def get_available_slots(target_date: date, session_type: str = "30") -> li
             lambda: service.freebusy().query(body=body).execute(),
         )
 
-        busy_periods = result.get("calendars", {}).get(GOOGLE_CALENDAR_ID, {}).get("busy", [])
+        calendars = result.get("calendars", {})
+        # Keyed by the id we asked for; fall back to the sole entry so an alias
+        # ("primary" resolving to the address) cannot silently read as all-free.
+        entry = calendars.get(cal_id)
+        if entry is None and len(calendars) == 1:
+            entry = next(iter(calendars.values()))
+        if entry is None:
+            raise RuntimeError(f"freebusy returned no data for calendar {cal_id!r}")
+
+        # Google answers HTTP 200 with a per-calendar `errors` array for
+        # notFound/internalError. Reading `busy` off that would report an empty
+        # busy list — i.e. the whole day free — and let a booking land on top of
+        # a real event. Treat it as unknown, not as free.
+        if entry.get("errors"):
+            raise RuntimeError(
+                f"freebusy errors for calendar {cal_id!r}: {entry['errors']}"
+            )
+        # Same reasoning for a malformed response: absent `busy` is unknown, not
+        # empty. An explicit empty list is legitimate and means genuinely free.
+        busy_periods = entry.get("busy")
+        if not isinstance(busy_periods, list):
+            raise RuntimeError(
+                f"freebusy returned no busy list for calendar {cal_id!r}"
+            )
 
         # Parse busy periods into timezone-aware datetimes
         busy_ranges = []
@@ -442,7 +552,7 @@ async def create_booking_event(
         created_event = await loop.run_in_executor(
             None,
             lambda: service.events().insert(
-                calendarId=GOOGLE_CALENDAR_ID,
+                calendarId=_calendar_id(),
                 body=event_body,
                 conferenceDataVersion=1,
                 sendUpdates="all",  # sends invite to attendees
@@ -473,7 +583,7 @@ async def create_booking_event(
                 created_event = await loop.run_in_executor(
                     None,
                     lambda: service.events().get(
-                        calendarId=GOOGLE_CALENDAR_ID,
+                        calendarId=_calendar_id(),
                         eventId=event_id,
                         conferenceDataVersion=1,
                     ).execute(),
@@ -519,7 +629,7 @@ async def delete_booking_event(calendar_event_id: str) -> bool:
         await loop.run_in_executor(
             None,
             lambda: service.events().delete(
-                calendarId=GOOGLE_CALENDAR_ID,
+                calendarId=_calendar_id(),
                 eventId=calendar_event_id,
                 sendUpdates="all",
             ).execute(),

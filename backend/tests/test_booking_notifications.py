@@ -219,13 +219,75 @@ async def test_meet_creation_failure_stops_polling(monkeypatch):
     assert events.gets == 0  # a declared failure is not retried
 
 
-# --- Telegram signature ------------------------------------------------------
+# --- Production must not confirm what it cannot record -----------------------
 
-def test_booking_notification_accepts_the_status_kwarg():
+def test_production_refuses_to_book_without_the_bookings_table(monkeypatch, slot):
+    """No hold means nothing stops two visitors taking the same slot, and a
+    confirmed call leaves no row to reschedule or cancel from."""
+    async def no_pool():
+        return None
+
+    async def no_slot_check(_slot_start):
+        return None
+
+    async def must_not_run(**_kwargs):
+        raise AssertionError("the calendar must not be touched without a hold")
+
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setattr(main, "_get_booking_pool", no_pool)
+    monkeypatch.setattr(main, "_assert_slot_offered", no_slot_check)
+    monkeypatch.setattr(main, "create_booking_event", must_not_run)
+
+    with TestClient(main.app) as client:
+        res = client.post("/api/booking/free", json={
+            "slot_start": slot, "name": "Test Person", "email": "test@example.com",
+        })
+
+    assert res.status_code == 503
+    assert "email" in res.json()["detail"].lower()
+
+
+def test_development_still_books_without_a_database(monkeypatch, slot):
+    """Local work must not require Supabase."""
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    res, _ = _book(monkeypatch, slot)
+    assert res.status_code == 200
+
+
+# --- Telegram -----------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_cancellation_notification_actually_sends(monkeypatch):
     """cancel/reschedule pass status=; before the fix this raised TypeError into
-    a bare except, so those notifications never sent."""
-    import inspect
-
+    a bare except, so those notifications had never been delivered."""
     import telegram_service as ts
 
-    assert "status" in inspect.signature(ts.send_booking_notification).parameters
+    sent: dict = {}
+
+    class _FakeResponse:
+        def raise_for_status(self):
+            return None
+
+    class _FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return False
+
+        async def post(self, url, json=None):
+            sent["url"] = url
+            sent["payload"] = json
+            return _FakeResponse()
+
+    monkeypatch.setattr(ts, "TELEGRAM_BOT_TOKEN", "tok")
+    monkeypatch.setattr(ts, "TELEGRAM_CHAT_ID", "chat")
+    monkeypatch.setattr(ts.httpx, "AsyncClient", lambda **_kw: _FakeClient())
+
+    ok = await ts.send_booking_notification(
+        name="Test Person", email="test@example.com", session_type="fit",
+        slot_start="2099-01-01T13:00:00-08:00", status="CANCELLED",
+    )
+
+    assert ok is True
+    assert "CANCELLED" in sent["payload"]["text"]
