@@ -219,7 +219,7 @@ export const buildPersonSchema = () => ({
   name: sanitizeText(LANDING_SEO.author),
   jobTitle: 'AI Agent System Builder',
   description:
-    'AI Agent System Builder. Builds enterprise agent workflows that cut up to 90% of the work time from database to delivered dashboard or deck, personal agent systems with durable memory, and hands-on training on the agentic stack (Claude Code, Codex, Copilot). Works with four full-time AI engineers. Enterprise perspective from Advanced Analytics at P&G.',
+    'AI Agent System Builder. Builds enterprise agent workflows that cut up to 90% of the work time from database to delivered dashboard or deck, personal agent systems with durable memory, and hands-on training on the agentic stack (Claude Code, Codex, Copilot). Covers the full AI service stack on Azure, GCP and AWS. Enterprise perspective from Advanced Analytics at P&G.',
   url: SITE_BASE_URL,
   image: DEFAULT_OG_IMAGE,
   sameAs: LANDING_SEO.sameAs ?? DEFAULT_SAME_AS,

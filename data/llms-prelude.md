@@ -23,8 +23,8 @@ Three offers, all starting from the same free 30-minute call at https://yanqing.
 2. **Personal Agent OS.** A personal agent that remembers how you work — short-term context, long-term memory, scheduled work, controlled tool access, on infrastructure you own. Includes agent-managed personal websites.
 3. **Hands on training.** Learn the agentic stack on your own toolset — GitHub Copilot, Claude Code, Codex, Pi, OpenClaw, Hermes — solo, as a team, or across an org.
 
-Delivery capacity: Yanqing plus four full-time AI engineers. Availability for the
-free intro call: Mon–Fri 8am–4pm PT (selected windows) and Sat–Sun 1–4pm PT.
+Cloud coverage: the full AI service stack on Azure, GCP and AWS. Availability for
+the free intro call: Mon–Fri 9am–4pm PT (selected windows) and Sat–Sun 1–4pm PT.
 
 ## What Yanqing Builds
 
