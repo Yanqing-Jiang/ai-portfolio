@@ -87,8 +87,15 @@ class FortuneSession(BaseModel):
             self.status = new_status
 
 
-class RedisUnavailable(RuntimeError):
-    pass
+# Deliberately the SAME exception type as the events Redis client, not a second
+# one. state.py used to define its own, and routes.py only ever caught
+# `fortune_events.RedisUnavailable` — so a state-Redis failure escaped the
+# handler as an unhandled 500 instead of the intended 503. Re-exported here so
+# `from .state import RedisUnavailable` keeps working.
+try:                                          # package context
+    from .events import RedisUnavailable
+except ImportError:                           # flat context (gunicorn main:app)
+    from events import RedisUnavailable       # type: ignore[no-redef]
 
 
 # ---------------------------------------------------------------------------

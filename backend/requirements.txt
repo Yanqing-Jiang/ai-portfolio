@@ -6,6 +6,10 @@ python-dotenv
 requests
 pyyaml
 pydantic==2.12.4
+# Imported by fortune/config.py and generative_ui/config.py. It was only ever
+# present transitively, so a rebuild that resolved deps differently would have
+# failed at import time.
+pydantic-settings==2.14.2
 openai>=1.107.3
 openai-agents==0.18.2
 cnlunar>=0.2.4

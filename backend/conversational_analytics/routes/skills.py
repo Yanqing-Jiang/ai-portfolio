@@ -1,10 +1,9 @@
 """Skill routes for Conversational Analytics."""
 from __future__ import annotations
 
-from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Depends
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import Response
 
 from ..skills import SKILL_INDEX, load_skill_content
 from rate_limiter import conversational_analytics_rate_limit
@@ -51,16 +50,3 @@ async def download_skill(skill_id: str, _: None = Depends(conversational_analyti
         )
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"Skill file not found: {str(e)}")
-
-
-@router.get("/showcase")
-async def serve_showcase(_: None = Depends(conversational_analytics_rate_limit)):
-    """Function: serve_showcase — called from the showcase tool and frontend to deliver the static project showcase HTML.
-    Called from: open_showcase_page tool and any direct browser hits to /api/conv-analytics/showcase.
-    Invokes: FileResponse to stream the static HTML artifact.
-    Purpose: Provide a safe, non-data endpoint for demos and architecture explanations."""
-    static_path = Path(__file__).parent.parent / "static" / "showcase.html"
-    if not static_path.exists():
-        raise HTTPException(status_code=404, detail="Showcase not found")
-    return FileResponse(path=static_path, media_type="text/html")
-
