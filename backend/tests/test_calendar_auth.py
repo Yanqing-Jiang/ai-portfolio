@@ -506,6 +506,39 @@ def test_a_60_minute_booking_also_hides_the_slot_it_overlaps(monkeypatch):
     assert res.json()["slots"] == []
 
 
+def test_an_owner_block_hides_the_slot(monkeypatch):
+    """Owner busy-time is a 'blocked' row in the same table — that is the whole
+    built-in calendar. If blocked rows were not in the blocking-status list, the
+    owner could block time and the site would keep selling it."""
+    blocked = _FakeConn(rows=[{
+        "slot_start": datetime(2099, 1, 1, 21, 0, tzinfo=timezone.utc),
+        "slot_end": datetime(2099, 1, 1, 21, 30, tzinfo=timezone.utc),
+    }])
+    res = _slots_response(monkeypatch, configured=False, conn=blocked)
+    assert res.json()["slots"] == []
+
+
+def test_a_whole_day_block_that_starts_before_midnight_still_hides_the_day(monkeypatch):
+    """The query filtered `slot_start` INSIDE the requested day, so a block that
+    began the previous evening — the natural way to black out a day — matched
+    nothing and the day stayed on sale. It has to be a range-overlap test."""
+    spanning = _FakeConn(rows=[{
+        "slot_start": datetime(2098, 12, 31, 12, 0, tzinfo=timezone.utc),
+        "slot_end": datetime(2099, 1, 3, 12, 0, tzinfo=timezone.utc),
+    }])
+    res = _slots_response(monkeypatch, configured=False, conn=spanning)
+    assert res.json()["slots"] == []
+
+
+def test_a_released_booking_frees_its_slot_again(monkeypatch):
+    """Cancelled/expired/rescheduled rows must NOT hold time. The DB-side proof is
+    migration 012's constraint predicate; this pins the read side."""
+    # The fake returns whatever the query selected, so an empty result models
+    # "no occupied row overlaps" — i.e. the status filter excluded the released row.
+    res = _slots_response(monkeypatch, configured=False, conn=_FakeConn(rows=[]))
+    assert [s["start"] for s in res.json()["slots"]] == [OFFERED_START]
+
+
 def test_an_unreadable_bookings_table_offers_nothing(monkeypatch):
     """Fail closed: if we cannot tell what is taken, we do not know what is free."""
     res = _slots_response(monkeypatch, configured=False, conn=_FakeConn(db_down=True))

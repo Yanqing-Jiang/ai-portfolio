@@ -74,6 +74,12 @@ MEET_POLL_DELAY_S = 1.0
 # the service account books as itself and attendee invites are unreliable.
 GOOGLE_CALENDAR_IMPERSONATE_USER = os.getenv("GOOGLE_CALENDAR_IMPERSONATE_USER", "")
 
+# A standing meeting room (personal Google Meet / Zoom / Jitsi URL) used when no
+# calendar is connected to mint a per-booking Meet link. Set it and every booking
+# carries a real joinable link at confirmation time; leave it empty and the owner
+# must send one by hand, prompted by an "ACTION NEEDED" alert.
+BOOKING_FALLBACK_MEET_URL = os.getenv("BOOKING_FALLBACK_MEET_URL", "").strip()
+
 # Don't publish a slot that starts within this many minutes — weekday hours now
 # open at 9am, so without a lead time the afternoon visitor is shown morning
 # slots that the booking endpoint would reject as being in the past.
@@ -523,13 +529,14 @@ async def create_booking_event(
     service = _get_calendar_service()
     if service is None:
         # No calendar to write to. Don't fail the booking over it — the DB row is
-        # what makes the slot held, and send_admin_booking_alert raises an
-        # "ACTION NEEDED — no Meet link" flag so the call still gets a link.
+        # what makes the slot held. If a standing room is configured the client
+        # still gets a joinable link; otherwise send_admin_booking_alert raises an
+        # "ACTION NEEDED — no Meet link" flag so the call still gets one.
         logger.info(
             "[CALENDAR] No calendar connected — booking %s recorded without an "
-            "event or Meet link", email,
+            "event (standing room link: %s)", email, bool(BOOKING_FALLBACK_MEET_URL),
         )
-        return {"event_id": "", "meet_link": ""}
+        return {"event_id": "", "meet_link": BOOKING_FALLBACK_MEET_URL}
 
     description_parts = [
         f"Consulting session with {name} ({email})",

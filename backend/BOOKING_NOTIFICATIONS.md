@@ -172,6 +172,44 @@ told *you* will email the link. That promise is only kept by hand.
 Check, in order: both inboxes have the confirmation, the requestor's invitation
 shows up on their calendar, and the Meet link in the email opens.
 
+## Blocking your own time (the built-in calendar)
+
+The `bookings` table is the single availability ledger: client bookings and your
+own busy time are both rows in it, so availability is one query with no second
+source to keep in sync. To take time off the market, insert a `blocked` row — one
+row can cover an hour or a fortnight, because the filters are range-overlap:
+
+```sql
+INSERT INTO bookings (stripe_session_id, session_type, slot_start, slot_end,
+                      client_name, client_email, status, amount_cents)
+VALUES ('block_' || gen_random_uuid(), 'block',
+        '2026-08-11 09:00-07', '2026-08-11 17:00-07',   -- Pacific offsets
+        'BLOCKED', 'yanqing.app@gmail.com', 'blocked', 0);
+```
+
+Migration 012 enforces that no two occupying rows overlap, so this fails loudly if
+you try to block time that is already booked — which is the answer you want.
+Supabase Studio's table view is the owner dashboard; there is deliberately no
+owner UI at this volume.
+
+To hand a day back, `UPDATE ... SET status = 'cancelled'` — only
+`hold`/`confirmed`/`calendar_failed`/`blocked` occupy time.
+
+## A meeting link without Google Calendar
+
+Set `BOOKING_FALLBACK_MEET_URL` to a standing room (a personal Google Meet room,
+Zoom PMI, or Jitsi URL) and every booking carries a joinable link the moment it is
+confirmed — in the client's email, their calendar file, and the Join button.
+
+Leave it unset and there is no link: the client is told you'll email one and you
+get an `ACTION NEEDED — no Meet link` alert. That alert is the only mechanism
+keeping that promise, so setting this variable is the difference between a
+guarantee and a reminder.
+
+Note the email and the Join button both say **Google Meet**. A personal Meet room
+keeps that wording true for free; a Jitsi or Zoom URL would make it a lie, so
+change the copy in `email_service.py` and `BookingCard.tsx` if you go that way.
+
 ## Reschedule and cancel (signed-in visitors)
 
 `GET /api/booking/my-bookings`, `POST /api/booking/{id}/cancel` and
@@ -185,13 +223,19 @@ signed in, so `my-bookings` backfills `user_id` onto rows whose `client_email`
 matches the token's verified email. Book while signed out, sign in with the same
 address, and the call is there to manage.
 
-Cancel refunds via Stripe when the session was paid and is more than 24 hours
+Cancel refunds via Stripe when the session was **paid** and is more than 24 hours
 out, and deletes the calendar event when there is one. Reschedule needs more than
-2 hours' notice. Neither needs a calendar.
+2 hours' notice and revalidates the new time against the published hours. Neither
+needs a calendar.
 
-Known gap (`DEBT`, task #10): reschedule inserts the new row before doing the
-calendar work and suppresses a calendar failure, and cancel suppresses a deletion
-failure — so a booking can end up correct in the database and stale on the
-calendar, with no email either way. Fixing it properly needs a `calendar_pending`
-status and a repair path; the trigger is the first real reschedule or
-cancellation.
+Both now email the client. The message carries a calendar file that updates the
+one they already have rather than adding another: same `UID` (the root of the
+reschedule chain) with a rising `SEQUENCE` to move the event, and `METHOD:CANCEL`
+to withdraw it. If the send fails, the log names the address to contact by hand —
+the booking change itself has already happened.
+
+Known gap (`DEBT`, task #10): reschedule and cancel suppress *calendar* failures,
+so with a Google Calendar connected the database could be right while the calendar
+is stale. Those code paths are unreachable while no calendar is connected
+(`create_booking_event` no-ops and `delete_booking_event` returns False), so the
+upgrade trigger is **reconnecting Google Calendar**, not the first reschedule.

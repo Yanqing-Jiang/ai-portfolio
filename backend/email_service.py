@@ -117,16 +117,152 @@ def _get_gmail_service():
 # Email body builder
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# iCalendar (RFC 5545)
+# ---------------------------------------------------------------------------
+
+# The client's own calendar is the calendar: we don't own one, so we hand them a
+# standards-compliant event they can add, and later move or withdraw. The UID is
+# what makes that work — same UID + higher SEQUENCE moves the event, same UID with
+# METHOD:CANCEL removes it. Keyed on the booking id, which is stable across a
+# reschedule chain only if we pass the ORIGINAL id; see main.py's reschedule.
+ICS_UID_DOMAIN = os.getenv("ICS_UID_DOMAIN", "yanqing.app")
+
+
+def _ics_escape(value: str) -> str:
+    """Escape per RFC 5545 §3.3.11 (order matters: backslash first)."""
+    return (
+        value.replace("\\", "\\\\")
+        .replace(";", "\\;")
+        .replace(",", "\\,")
+        .replace("\n", "\\n")
+    )
+
+
+def _ics_fold(line: str) -> str:
+    """Fold to 75 octets with a leading space on continuations (RFC 5545 §3.1).
+
+    Folds on OCTETS, not characters, and never splits a UTF-8 sequence — a naive
+    75-character split corrupts multi-byte names.
+    """
+    raw = line.encode("utf-8")
+    if len(raw) <= 75:
+        return line
+    chunks, start = [], 0
+    while start < len(raw):
+        end = min(start + (75 if not chunks else 74), len(raw))
+        # Back off until we're on a UTF-8 boundary.
+        while end > start and end < len(raw) and (raw[end] & 0xC0) == 0x80:
+            end -= 1
+        chunks.append(raw[start:end].decode("utf-8"))
+        start = end
+    return "\r\n ".join(chunks)
+
+
+def build_booking_ics(
+    *,
+    booking_id: str,
+    slot_start_iso: str,
+    session_type: str,
+    client_name: str,
+    client_email: str,
+    meet_link: Optional[str] = None,
+    cancelled: bool = False,
+    sequence: int = 0,
+) -> str:
+    """Return an iCalendar VEVENT for a booking.
+
+    `cancelled=True` emits METHOD:CANCEL, which withdraws the event the client
+    already has. `sequence` must increase on every revision or clients ignore the
+    update as stale.
+    """
+    from datetime import datetime, timedelta, timezone as _tz
+    from zoneinfo import ZoneInfo
+
+    dt = datetime.fromisoformat(slot_start_iso)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=ZoneInfo(BOOKING_TIMEZONE))
+    start_utc = dt.astimezone(_tz.utc)
+    minutes = 60 if session_type == "60" else 30
+    end_utc = start_utc + timedelta(minutes=minutes)
+
+    def stamp(value: datetime) -> str:
+        return value.strftime("%Y%m%dT%H%M%SZ")
+
+    organizer = GMAIL_FROM_EMAIL or "yanqing.app@gmail.com"
+    summary = f"Consulting session with Yanqing Jiang ({minutes} min)"
+    description = (
+        "Cancelled." if cancelled
+        else (f"Join: {meet_link}" if meet_link
+              else "Yanqing will email the video link before the call.")
+    )
+
+    lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//yanqing.app//booking//EN",
+        "CALSCALE:GREGORIAN",
+        f"METHOD:{'CANCEL' if cancelled else 'REQUEST'}",
+        "BEGIN:VEVENT",
+        f"UID:{booking_id}@{ICS_UID_DOMAIN}",
+        f"SEQUENCE:{sequence}",
+        f"DTSTAMP:{stamp(datetime.now(_tz.utc))}",
+        f"DTSTART:{stamp(start_utc)}",
+        f"DTEND:{stamp(end_utc)}",
+        f"SUMMARY:{_ics_escape(summary)}",
+        f"DESCRIPTION:{_ics_escape(description)}",
+        f"ORGANIZER;CN={_ics_escape('Yanqing Jiang')}:mailto:{organizer}",
+        f"ATTENDEE;CN={_ics_escape(client_name or client_email)};ROLE=REQ-PARTICIPANT;"
+        f"PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:{client_email}",
+        f"STATUS:{'CANCELLED' if cancelled else 'CONFIRMED'}",
+    ]
+    if meet_link and not cancelled:
+        lines.append(f"LOCATION:{_ics_escape(meet_link)}")
+        lines.append(f"URL:{meet_link}")
+    if not cancelled:
+        lines += [
+            "BEGIN:VALARM",
+            "TRIGGER:-PT60M",
+            "ACTION:DISPLAY",
+            "DESCRIPTION:Consulting session in 1 hour",
+            "END:VALARM",
+        ]
+    lines += ["END:VEVENT", "END:VCALENDAR"]
+
+    # CRLF is mandatory, and a trailing CRLF keeps strict parsers happy.
+    return "\r\n".join(_ics_fold(line) for line in lines) + "\r\n"
+
+
+_EMAIL_COPY = {
+    "confirmed": (
+        "Booking confirmed",
+        "Your consulting session is booked. Here are the details:",
+    ),
+    "rescheduled": (
+        "Booking moved",
+        "Your session has been moved. Here are the new details:",
+    ),
+    "cancelled": (
+        "Booking cancelled",
+        "Your session has been cancelled. Nothing further is needed:",
+    ),
+}
+
+
 def _build_email_html(
     name: str,
     session_type: str,
     slot_start_iso: str,
     meet_link: Optional[str],
     notes: Optional[str] = None,
+    kind: str = "confirmed",
 ) -> str:
     """Return an HTML email body with booking details, Meet link, the context
     the client shared, and reschedule/cancel instructions."""
     duration = "60 minutes" if session_type == "60" else "30 minutes"
+    heading, lead = _EMAIL_COPY.get(kind, _EMAIL_COPY["confirmed"])
+    if kind == "cancelled":
+        meet_link = None  # nothing to join
 
     context_block = ""
     if notes and notes.strip():
@@ -148,7 +284,9 @@ def _build_email_html(
         pretty_time = slot_start_iso
 
     meet_block = ""
-    if meet_link:
+    if kind == "cancelled":
+        meet_block = ""
+    elif meet_link:
         meet_block = f"""
         <tr>
           <td style="padding:8px 0;color:#5f6368;font-family:Arial,sans-serif;font-size:14px;">Google&nbsp;Meet</td>
@@ -174,12 +312,12 @@ def _build_email_html(
     <tr><td align="center">
       <table role="presentation" width="560" cellpadding="0" cellspacing="0" style="background-color:#ffffff;border-radius:8px;max-width:560px;">
         <tr><td style="padding:32px 40px 0 40px;">
-          <h1 style="margin:0 0 8px 0;font-family:Arial,sans-serif;font-size:22px;color:#202124;">Booking confirmed</h1>
+          <h1 style="margin:0 0 8px 0;font-family:Arial,sans-serif;font-size:22px;color:#202124;">{heading}</h1>
           <p style="margin:0 0 24px 0;font-family:Arial,sans-serif;font-size:15px;color:#5f6368;">
             Hi {name},
           </p>
           <p style="margin:0 0 20px 0;font-family:Arial,sans-serif;font-size:15px;color:#202124;line-height:1.5;">
-            Your consulting session is booked. Here are the details:
+            {lead}
           </p>
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
             <tr>
@@ -228,8 +366,11 @@ async def send_booking_confirmation_email(
     slot_start: str,
     meet_link: Optional[str] = None,
     notes: Optional[str] = None,
+    kind: str = "confirmed",
+    booking_id: Optional[str] = None,
+    ics_sequence: int = 0,
 ) -> bool:
-    """Send a booking confirmation email via Gmail API.
+    """Send a booking confirmation / move / cancellation email via Gmail API.
 
     Fire-and-forget design — returns True on success, False on failure or when
     Gmail is not configured. Never raises; errors are logged so the webhook is
@@ -254,7 +395,12 @@ async def send_booking_confirmation_email(
     try:
         display_name = name or "there"
         duration = "60" if session_type == "60" else "30"
-        subject = f"Booking confirmed — your {duration}-min session with Yanqing"
+        subject_lead = {
+            "confirmed": "Booking confirmed",
+            "rescheduled": "Booking moved",
+            "cancelled": "Booking cancelled",
+        }.get(kind, "Booking confirmed")
+        subject = f"{subject_lead} — your {duration}-min session with Yanqing"
 
         html_body = _build_email_html(
             name=display_name,
@@ -262,10 +408,13 @@ async def send_booking_confirmation_email(
             slot_start_iso=slot_start,
             meet_link=meet_link,
             notes=notes,
+            kind=kind,
         )
 
-        # Build the RFC822 message — MIMEMultipart("alternative") for HTML + plain
-        mime_msg = MIMEMultipart("alternative")
+        # multipart/mixed so the calendar file rides alongside the alternative
+        # plain/HTML pair. A bare "alternative" cannot carry an attachment.
+        mime_msg = MIMEMultipart("mixed")
+        body_part = MIMEMultipart("alternative")
         mime_msg["To"] = email
         mime_msg["From"] = (
             f"Yanqing Jiang <{GMAIL_FROM_EMAIL}>"
@@ -276,22 +425,50 @@ async def send_booking_confirmation_email(
         mime_msg["Reply-To"] = GMAIL_FROM_EMAIL
 
         # Plain-text fallback for clients that don't render HTML
+        cancelled = kind == "cancelled"
+        _, lead = _EMAIL_COPY.get(kind, _EMAIL_COPY["confirmed"])
         plain_text = (
-            f"Booking confirmed\n\n"
+            f"{subject_lead}\n\n"
             f"Hi {name or 'there'},\n\n"
-            f"Your consulting session is booked.\n\n"
+            f"{lead}\n\n"
             f"When: {slot_start}\n"
             f"Duration: {duration} minutes\n"
         )
-        if meet_link:
+        if meet_link and not cancelled:
             plain_text += f"Google Meet: {meet_link}\n"
+        if not cancelled:
+            plain_text += "\nA calendar file is attached — add it and your calendar will remind you.\n"
         plain_text += (
             "\nTo reschedule or cancel, just reply to this email.\n\n"
             "Talk soon,\nYanqing Jiang\n"
         )
 
-        mime_msg.attach(MIMEText(plain_text, "plain", "utf-8"))
-        mime_msg.attach(MIMEText(html_body, "html", "utf-8"))
+        body_part.attach(MIMEText(plain_text, "plain", "utf-8"))
+        body_part.attach(MIMEText(html_body, "html", "utf-8"))
+        mime_msg.attach(body_part)
+
+        # The calendar part. Without a booking_id there is no stable UID, so a
+        # later move/cancel could not refer to this event — send no file rather
+        # than one we cannot correct.
+        if booking_id:
+            ics = build_booking_ics(
+                booking_id=booking_id,
+                slot_start_iso=slot_start,
+                session_type=session_type,
+                client_name=name or email,
+                client_email=email,
+                meet_link=meet_link,
+                cancelled=cancelled,
+                sequence=ics_sequence,
+            )
+            method = "CANCEL" if cancelled else "REQUEST"
+            cal_part = MIMEText(ics, "calendar", "utf-8")
+            cal_part.set_param("method", method)
+            cal_part.set_param("name", "invite.ics")
+            cal_part.add_header(
+                "Content-Disposition", "attachment", filename="invite.ics"
+            )
+            mime_msg.attach(cal_part)
 
         # Gmail API expects the raw message as urlsafe base64
         raw_message = base64.urlsafe_b64encode(
@@ -308,7 +485,10 @@ async def send_booking_confirmation_email(
             ).execute(),
         )
 
-        logger.info("[GMAIL] Confirmation email sent to %s (session=%s)", email, session_type)
+        logger.info(
+            "[GMAIL] %s email sent to %s (session=%s ics=%s seq=%s)",
+            kind, email, session_type, bool(booking_id), ics_sequence,
+        )
         return True
 
     except Exception as exc:

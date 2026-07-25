@@ -10,6 +10,7 @@ import os
 from dotenv import load_dotenv
 import json
 from datetime import datetime as _DateTime, timezone, timedelta
+from zoneinfo import ZoneInfo
 import uuid
 import time
 import threading
@@ -108,6 +109,14 @@ from intake_agent import (
 from rate_limiter import parse_user_id, ParsedToken
 
 # Booking DB pool (shares SUPABASE_DB_URL with token_store)
+# Statuses whose rows OCCUPY their slot. Anything here must be excluded from
+# availability and must block a competing insert; anything not here has released
+# its time. `calendar_failed` belongs here and was missing: it is set after a
+# successful payment when the calendar write fails, and the UI shows it as
+# confirmed — so leaving it out re-offered a slot somebody had already paid for.
+# `blocked` is the owner's own busy time (see BOOKING_NOTIFICATIONS.md).
+BLOCKING_STATUSES = ("hold", "confirmed", "calendar_failed", "blocked")
+
 _booking_pool: Optional[Any] = None
 _booking_pool_lock = asyncio.Lock()
 
@@ -1422,10 +1431,6 @@ async def paypal_webhook(request: Request):
 # ---------------------------------------------------------------------------
 # Booking / Consulting Endpoints
 # ---------------------------------------------------------------------------
-# NOTE: Rate limiting needed on /api/booking/slots (30 req/min) and
-# /api/booking/checkout (5 req/min). Add when rate_limiter supports
-# endpoint-specific limits without auth.
-
 # SQL for the bookings table, as it actually exists in Supabase. Kept in sync by
 # hand — if you change the table, change this. (Verified against the live schema.)
 # ----------------------------------------------------------------
@@ -1433,7 +1438,7 @@ async def paypal_webhook(request: Request):
 #     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 #     stripe_session_id TEXT UNIQUE NOT NULL,  -- free bookings use 'free_<uuid>'
 #     stripe_event_id TEXT,
-#     session_type TEXT NOT NULL CHECK (session_type IN ('30', '60')),
+#     session_type TEXT NOT NULL CHECK (session_type IN ('30', '60', 'block')),
 #     slot_start TIMESTAMPTZ NOT NULL,
 #     slot_end TIMESTAMPTZ NOT NULL,
 #     client_name TEXT NOT NULL,
@@ -1441,7 +1446,7 @@ async def paypal_webhook(request: Request):
 #     notes TEXT,
 #     status TEXT NOT NULL DEFAULT 'hold' CHECK (status IN (
 #         'hold', 'confirmed', 'calendar_failed', 'expired', 'cancelled',
-#         'refunded', 'rescheduled'
+#         'refunded', 'rescheduled', 'blocked'
 #     )),
 #     calendar_event_id TEXT,   -- empty when no calendar is connected
 #     meet_link TEXT,           -- likewise; the owner sends a link by hand
@@ -1455,10 +1460,13 @@ async def paypal_webhook(request: Request):
 #     created_at TIMESTAMPTZ DEFAULT NOW(),
 #     updated_at TIMESTAMPTZ DEFAULT NOW()
 # );
-# -- A partial UNIQUE INDEX, not a table constraint: "UNIQUE(col) WHERE ..." is
-# -- not valid Postgres. This is what stops two people holding the same start.
-# CREATE UNIQUE INDEX idx_bookings_slot_unique ON bookings (slot_start)
-#     WHERE (status IN ('hold', 'confirmed'));
+# -- THE fence (migration 012). Enforced on INSERT and UPDATE, so it holds even
+# -- for a writer that forgets its app-level guard. It replaced a partial unique
+# -- index on slot_start alone, which only caught identical starts and so let a
+# -- 60-min booking at 13:00 coexist with a 30-min one at 13:30.
+# ALTER TABLE bookings ADD CONSTRAINT bookings_no_overlap
+#     EXCLUDE USING gist (tstzrange(slot_start, slot_end, '[)') WITH &&)
+#     WHERE (status IN ('hold', 'confirmed', 'calendar_failed', 'blocked'));
 # CREATE INDEX idx_bookings_slot ON bookings (slot_start, status);
 # CREATE INDEX idx_bookings_stripe ON bookings (stripe_session_id);
 # CREATE INDEX idx_bookings_client_email ON bookings (client_email);
@@ -1467,7 +1475,7 @@ async def paypal_webhook(request: Request):
 
 
 @app.get("/api/booking/slots")
-async def get_booking_slots(date: str, session_type: str = "30"):
+async def get_booking_slots(date: str, request: Request, session_type: str = "30"):
     """Return available booking slots for a given date.
 
     Queries Google Calendar freebusy API and checks Supabase bookings table
@@ -1480,6 +1488,10 @@ async def get_booking_slots(date: str, session_type: str = "30"):
     from datetime import date as date_type
     from calendar_service import BOOKING_TIMEZONE
 
+    # Generous enough for a visitor clicking through a month, tight enough that the
+    # endpoint isn't a free availability-scraping API.
+    _check_rate(request, "slots", 60, 30, "Too many availability requests. Please slow down.")
+
     if session_type not in ("30", "60"):
         raise HTTPException(status_code=400, detail="session_type must be '30' or '60'.")
 
@@ -1489,8 +1501,11 @@ async def get_booking_slots(date: str, session_type: str = "30"):
     except (ValueError, TypeError):
         raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD.")
 
-    # Don't allow booking too far in the future (90 days) or in the past
-    today = date_type.today()
+    # Don't allow booking too far in the future (90 days) or in the past.
+    # "Today" must be today in BOOKING_TIMEZONE, not in the container's clock: it
+    # runs UTC, so every Pacific evening date_type.today() is already tomorrow and
+    # a request for the current Pacific date 400'd as "in the past".
+    today = _DateTime.now(ZoneInfo(BOOKING_TIMEZONE)).date()
     if target_date < today:
         raise HTTPException(status_code=400, detail="Cannot book dates in the past.")
     if (target_date - today).days > 90:
@@ -1520,7 +1535,6 @@ async def get_booking_slots(date: str, session_type: str = "30"):
                 )
 
                 # Get all held/confirmed slot_starts for this date
-                from zoneinfo import ZoneInfo
                 tz = ZoneInfo(BOOKING_TIMEZONE)
                 day_start = _DateTime(
                     target_date.year, target_date.month, target_date.day,
@@ -1530,15 +1544,19 @@ async def get_booking_slots(date: str, session_type: str = "30"):
                     target_date.year, target_date.month, target_date.day,
                     23, 59, 59, tzinfo=tz,
                 )
+                # Overlap, not "starts within the day": an owner block can span a
+                # whole day (or several), in which case its slot_start is BEFORE
+                # this day began and a slot_start-range filter would miss it
+                # entirely and re-offer blocked time.
                 rows = await conn.fetch(
                     """
                     SELECT slot_start, slot_end
                     FROM bookings
-                    WHERE status IN ('hold', 'confirmed')
-                      AND slot_start >= $1
-                      AND slot_start <= $2
+                    WHERE status = ANY($3::text[])
+                      AND slot_start < $2
+                      AND slot_end > $1
                     """,
-                    day_start, day_end,
+                    day_start, day_end, list(BLOCKING_STATUSES),
                 )
 
                 # Compare instants, never ISO strings: asyncpg hands back
@@ -1585,16 +1603,19 @@ async def get_booking_slots(date: str, session_type: str = "30"):
 
 
 @app.post("/api/booking/checkout")
-async def create_booking_checkout(req: BookingCheckoutRequest):
+async def create_booking_checkout(req: BookingCheckoutRequest, request: Request):
     """Create a Stripe Checkout Session for a consulting booking.
 
     Server-side pricing: maps session_type to Stripe Price ID.
-    Revalidates slot availability before creating hold.
+    Revalidates slot availability against the published offer before holding.
     Inserts hold row into Supabase bookings table.
     Returns Stripe Checkout redirect URL.
     """
     if stripe is None or not STRIPE_SECRET_KEY:
         raise HTTPException(status_code=503, detail="Stripe payments not configured.")
+
+    _check_rate(request, "checkout", 900, 5,
+                "Too many checkout attempts. Please wait a few minutes and try again.")
 
     price_id = BOOKING_PRICE_MAP.get(req.session_type)
     if not price_id:
@@ -1613,6 +1634,11 @@ async def create_booking_checkout(req: BookingCheckoutRequest):
     # Validate slot is in the future
     if slot_start <= _DateTime.now(timezone.utc):
         raise HTTPException(status_code=400, detail="Cannot book a slot in the past.")
+
+    # Revalidate against the published offer. Without this the docstring's promise
+    # was false: this endpoint took ANY future instant, so a hand-rolled POST could
+    # buy 3am Sunday, or a date years out, and get a real Stripe session for it.
+    await _assert_slot_offered(slot_start, req.session_type)
 
     # Compute slot_end
     duration_minutes = 30 if req.session_type == "30" else 60
@@ -1639,16 +1665,26 @@ async def create_booking_checkout(req: BookingCheckoutRequest):
                     """
                 )
 
-                # Attempt insert — the partial unique index on (slot_start)
-                # WHERE status IN ('hold', 'confirmed') prevents double-booking
+                # Same overlap-safe insert the free path uses. Previously this was a
+                # plain INSERT relying on a unique index over identical slot_start,
+                # so a 60-min checkout at 13:30 landed cleanly on top of an existing
+                # 13:00-14:00 booking — no concurrency needed. Migration 012's
+                # exclusion constraint is the backstop; this gives the friendly 409.
                 try:
-                    await conn.execute(
+                    insert_status = await conn.execute(
                         """
                         INSERT INTO bookings (
                             id, stripe_session_id, session_type,
                             slot_start, slot_end, client_name, client_email,
                             notes, status, amount_cents
-                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'hold', $9)
+                        )
+                        SELECT $1, $2, $3, $4, $5, $6, $7, $8, 'hold', $9
+                        WHERE NOT EXISTS (
+                            SELECT 1 FROM bookings
+                            WHERE status = ANY($10::text[])
+                              AND slot_start < $5
+                              AND slot_end > $4
+                        )
                         """,
                         uuid.UUID(booking_id),
                         stripe_session_id_placeholder,
@@ -1659,10 +1695,18 @@ async def create_booking_checkout(req: BookingCheckoutRequest):
                         req.email,
                         req.notes,
                         amount_cents,
+                        list(BLOCKING_STATUSES),
                     )
                 except Exception as db_exc:
-                    # Likely unique constraint violation — slot already taken
                     logger.warning("[BOOKING] Slot conflict: %s", db_exc)
+                    raise HTTPException(
+                        status_code=409,
+                        detail="This time slot is no longer available. Please choose another.",
+                    )
+
+                # "INSERT 0 0" => the NOT EXISTS guard blocked it. Without this
+                # check the caller got a Stripe session for a slot never held.
+                if insert_status.strip().endswith(" 0"):
                     raise HTTPException(
                         status_code=409,
                         detail="This time slot is no longer available. Please choose another.",
@@ -1755,28 +1799,61 @@ def _check_free_consult_rate(request: Request) -> None:
                 "Too many booking attempts. Please wait a few minutes and try again.")
 
 
-async def _assert_slot_offered(slot_start: "_DateTime") -> None:
+async def _ics_identity(conn, booking_id) -> tuple[str, int]:
+    """Return (calendar UID, SEQUENCE) for a booking row.
+
+    A reschedule creates a NEW row, but the client's calendar must MOVE the event
+    it already has rather than gain a second one — and that only happens if the
+    iCalendar UID stays the same and SEQUENCE increases. `rescheduled_from` chains
+    each row to its predecessor, so the stable identity is the ROOT of that chain
+    and the revision number is how far we are from it.
+    """
+    row = await conn.fetchrow(
+        """
+        WITH RECURSIVE chain AS (
+            SELECT id, rescheduled_from, 0 AS depth
+            FROM bookings WHERE id = $1
+            UNION ALL
+            SELECT b.id, b.rescheduled_from, c.depth + 1
+            FROM bookings b JOIN chain c ON b.id = c.rescheduled_from
+        )
+        SELECT id::text AS root_id, depth FROM chain ORDER BY depth DESC LIMIT 1
+        """,
+        booking_id,
+    )
+    if row is None:                      # row vanished; fall back to its own id
+        return str(booking_id), 0
+    return row["root_id"], int(row["depth"])
+
+
+async def _assert_slot_offered(slot_start: "_DateTime", session_type: str = "30") -> None:
     """Revalidate `slot_start` against the SAME availability source as
-    GET /api/booking/slots (office hours, 30-min boundaries, 90-day horizon,
-    Google Calendar freebusy). Raises HTTPException if the instant is not a
-    currently-offered 30-min slot start."""
-    from datetime import date as _date_type
+    GET /api/booking/slots (office hours, slot boundaries, 90-day horizon, and
+    the calendar's busy periods when one is connected). Raises HTTPException if
+    the instant is not a currently-offered slot start for `session_type`.
+
+    `session_type` matters: the weekday grid is staggered, so the second slot of
+    a 2-slot window is a valid 30-min start but NOT a valid 60-min start — the
+    back half would spill into unpublished time. get_available_slots already
+    enforces that adjacency, so passing the real duration is what makes this a
+    revalidation rather than a rubber stamp.
+    """
     from calendar_service import BOOKING_TIMEZONE
-    from zoneinfo import ZoneInfo
 
     tz = ZoneInfo(BOOKING_TIMEZONE)
     local_date = slot_start.astimezone(tz).date()
 
-    today = _date_type.today()
+    # Today in booking time, not in the container's UTC clock (see get_booking_slots).
+    today = _DateTime.now(tz).date()
     if local_date < today:
         raise HTTPException(status_code=400, detail="Cannot book a slot in the past.")
     if (local_date - today).days > 90:
         raise HTTPException(status_code=400, detail="Cannot book more than 90 days in advance.")
 
     try:
-        offered = await get_available_slots(local_date, "30")
+        offered = await get_available_slots(local_date, session_type)
     except Exception as exc:
-        logger.error("[BOOKING] Free-consult availability lookup failed: %s", exc)
+        logger.error("[BOOKING] Availability lookup failed: %s", exc)
         raise HTTPException(status_code=503, detail="Availability is temporarily unavailable. Please try again.")
 
     for s in offered:
@@ -1838,18 +1915,14 @@ async def create_free_consult(req: FreeConsultRequest, request: Request):
                     """
                 )
 
-                # Atomic overlap-safe insert: the overlap check and the insert
-                # are ONE statement, so there is no app-level read-then-write gap
-                # (session_type is stored schema-valid '30'; free/fit is encoded
-                # by amount_cents = 0 and the 'free_' session id). The partial
-                # UNIQUE(slot_start) index additionally guards identical-start
-                # races. 0 rows inserted => an overlapping hold/confirmed exists.
-                # DEBT: true cross-path overlap safety (a 60-min paid booking
-                # straddling this 30-min slot under concurrent uncommitted writes)
-                # needs a tstzrange GIST exclusion constraint on the bookings
-                # table — not present in the current schema. The paid checkout
-                # path shares this gap. Upgrade when 30/60-min bookings are taken
-                # concurrently at volume or the first real double-book is observed.
+                # Atomic overlap-safe insert: the overlap check and the insert are
+                # ONE statement, so there is no app-level read-then-write gap
+                # (session_type is stored schema-valid '30'; free/fit is encoded by
+                # amount_cents = 0 and the 'free_' session id). 0 rows inserted =>
+                # an overlapping occupied row exists, which we turn into a friendly
+                # 409. Behind this, migration 012's tstzrange exclusion constraint
+                # is the real fence: it holds under true concurrency and for any
+                # writer that skips this guard.
                 try:
                     insert_status = await conn.execute(
                         """
@@ -1861,7 +1934,7 @@ async def create_free_consult(req: FreeConsultRequest, request: Request):
                         SELECT $1, $2, '30', $3, $4, $5, $6, $7, 'hold', 0
                         WHERE NOT EXISTS (
                             SELECT 1 FROM bookings
-                            WHERE status IN ('hold', 'confirmed')
+                            WHERE status = ANY($8::text[])
                               AND slot_start < $4
                               AND slot_end > $3
                         )
@@ -1873,9 +1946,10 @@ async def create_free_consult(req: FreeConsultRequest, request: Request):
                         req.name,
                         req.email,
                         req.notes,
+                        list(BLOCKING_STATUSES),
                     )
                 except Exception as db_exc:
-                    # Identical-start collision caught by the partial unique index.
+                    # Lost a genuine race: the exclusion constraint refused it.
                     logger.warning("[BOOKING] Free-consult slot conflict: %s", db_exc)
                     raise HTTPException(
                         status_code=409,
@@ -1999,6 +2073,9 @@ async def create_free_consult(req: FreeConsultRequest, request: Request):
             name=req.name, email=req.email,
             session_type="30", slot_start=req.slot_start, meet_link=meet_link,
             notes=req.notes,
+            # First revision of this booking's calendar entry; a later move or
+            # cancellation reuses this UID so the client's calendar updates in place.
+            kind="confirmed", booking_id=booking_id, ics_sequence=0,
         )
     except Exception as exc:
         logger.error("[BOOKING] Confirmation email failed (non-blocking): %s", exc)
@@ -2551,8 +2628,13 @@ async def cancel_booking(booking_id: str, req: CancelBookingRequest, auth: Parse
         if slot_start and slot_start <= now:
             raise HTTPException(status_code=400, detail="Cannot cancel a past session.")
 
-        # Determine refund eligibility (>24 hours before session)
-        refund_eligible = slot_start and slot_start > now + timedelta(hours=24)
+        # Determine refund eligibility (>24 hours before session). Nothing was paid
+        # on a free call, so there is nothing to refund — without the amount check
+        # we asked Stripe to retrieve a 'free_<uuid>' session on every cancellation
+        # and logged the resulting error.
+        refund_eligible = bool(
+            slot_start and slot_start > now + timedelta(hours=24) and (row["amount_cents"] or 0) > 0
+        )
         refund_id = None
         refund_amount = 0
 
@@ -2593,6 +2675,29 @@ async def cancel_booking(booking_id: str, req: CancelBookingRequest, auth: Parse
             """,
             new_status, req.reason or None, refund_id, refund_amount, uuid.UUID(booking_id),
         )
+
+        ics_uid, ics_seq = await _ics_identity(conn, uuid.UUID(booking_id))
+
+    # Tell the client. Until now cancelling sent them nothing at all — only a
+    # Telegram ping to the owner — so someone who cancelled on the site had no
+    # confirmation it worked, and the event stayed in their calendar.
+    try:
+        cancel_emailed = await send_booking_confirmation_email(
+            name=row["client_name"],
+            email=row["client_email"],
+            session_type=row["session_type"],
+            slot_start=slot_start.isoformat() if slot_start else "",
+            kind="cancelled",
+            booking_id=ics_uid,
+            ics_sequence=ics_seq + 1,   # a revision ON TOP of the current state
+        )
+        if not cancel_emailed:
+            logger.error(
+                "[BOOKING] Cancellation email FAILED for %s (%s) — booking IS "
+                "cancelled; tell them by hand", booking_id, row["client_email"],
+            )
+    except Exception as exc:
+        logger.error("[BOOKING] Cancellation email failed: %s", exc)
 
     # Send notification
     try:
@@ -2664,6 +2769,11 @@ async def reschedule_booking(booking_id: str, req: RescheduleBookingRequest, aut
         if slot_start and slot_start <= now + timedelta(hours=2):
             raise HTTPException(status_code=400, detail="Cannot reschedule less than 2 hours before session.")
 
+        # The new time has to be one we actually offer — same check the booking
+        # endpoints use. Without it, reschedule was a way around published hours:
+        # any future instant was accepted.
+        await _assert_slot_offered(new_slot_start, row["session_type"])
+
         # Compute new slot end
         duration_minutes = 30 if row["session_type"] == "30" else 60
         new_slot_end = new_slot_start + timedelta(minutes=duration_minutes)
@@ -2672,9 +2782,20 @@ async def reschedule_booking(booking_id: str, req: RescheduleBookingRequest, aut
         # Transaction: mark old as rescheduled, create new booking, handle calendar
         try:
             async with conn.transaction():
-                # Mark old booking as rescheduled
+                # Mark old booking as rescheduled, and free up its stripe_session_id.
+                # That column is UNIQUE, and the new row below has to carry the real
+                # id (cancel/refund reads it from there). Leaving it on both rows
+                # made EVERY reschedule violate the constraint and get reported as
+                # "that time is no longer available". Keyed on the row's own PK, so
+                # rescheduling the same chain twice cannot collide either.
                 await conn.execute(
-                    "UPDATE bookings SET status = 'rescheduled', updated_at = NOW() WHERE id = $1",
+                    """
+                    UPDATE bookings
+                    SET status = 'rescheduled',
+                        stripe_session_id = 'superseded_' || id::text,
+                        updated_at = NOW()
+                    WHERE id = $1
+                    """,
                     uuid.UUID(booking_id),
                 )
 
@@ -2736,6 +2857,31 @@ async def reschedule_booking(booking_id: str, req: RescheduleBookingRequest, aut
             """,
             new_cal_event_id, new_meet_link, new_booking_id,
         )
+
+        ics_uid, ics_seq = await _ics_identity(conn, new_booking_id)
+
+    # Tell the client — this sent nothing before, so a rescheduled call left them
+    # with the OLD time in their inbox and calendar. Same UID as the original with
+    # a higher SEQUENCE, so their calendar moves the event instead of duplicating it.
+    try:
+        move_emailed = await send_booking_confirmation_email(
+            name=row["client_name"],
+            email=row["client_email"],
+            session_type=row["session_type"],
+            slot_start=new_slot_start.isoformat(),
+            meet_link=new_meet_link,
+            notes=row["notes"],
+            kind="rescheduled",
+            booking_id=ics_uid,
+            ics_sequence=ics_seq,
+        )
+        if not move_emailed:
+            logger.error(
+                "[BOOKING] Reschedule email FAILED for %s (%s) — the booking DID "
+                "move; tell them by hand", new_booking_id, row["client_email"],
+            )
+    except Exception as exc:
+        logger.error("[BOOKING] Reschedule email failed: %s", exc)
 
     # Notification
     try:
