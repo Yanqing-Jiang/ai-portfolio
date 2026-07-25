@@ -62,28 +62,24 @@ In the project that owns the OAuth client — `gcp-oauth.keys.json` →
    died with `invalid_grant`, though Google gives the same error for revocation,
    six months of disuse, and a password change on a token with Gmail scopes.
 
-## Why not a service account
+## Why a service account cannot work here (don't re-add one)
 
-The event sets `sendUpdates="all"` and adds the requestor as an attendee, which
-is all the API needs — but a service account is its own principal with no
-mailbox, and Google will not send an invitation on its behalf to an external
-address. The documented fix is domain-wide delegation, which requires **Google
-Workspace**.
+The owner's OAuth token is the *only* credential path, and that is a constraint
+of Google's, not a preference. The event sets `sendUpdates="all"` and adds the
+requestor as an attendee, which is all the API needs — but a service account is
+its own principal with no mailbox, and Google will not send an invitation on its
+behalf to an external address. The documented fix is domain-wide delegation,
+which requires **Google Workspace**.
 
 This calendar is on a consumer Gmail account (`yanqing.app@gmail.com`), where
-domain-wide delegation does not exist. So the service-account route cannot
-deliver an invite here at all, no matter how it is configured. Authenticating as
-the owner is the only path that works — hence the OAuth user token.
+domain-wide delegation does not exist. So a service account cannot deliver an
+invite here at all, however it is configured — it would produce events nobody is
+invited to. A service-account branch used to sit in `calendar_service.py` for a
+hypothetical future Workspace move; it was deleted as dead code, since it could
+never activate (its env vars were unset) and could not have worked if it had.
 
-The service-account branch is still in `calendar_service.py` for a future
-Workspace setup. It activates only when `GOOGLE_SERVICE_ACCOUNT_JSON`,
-`GOOGLE_CALENDAR_ID` **and** `GOOGLE_CALENDAR_IMPERSONATE_USER` are all set and
-no OAuth token with calendar scope exists. Without the impersonated user it is
-refused rather than used, because it would create events nobody gets invited to.
-
-Note that it is a fallback for an *absent* OAuth token, not a rescue for a broken
-one: a token file that exists but fails to refresh raises, and that error is
-reported rather than silently falling through.
+If this ever does move to Workspace, write it then against that account's actual
+setup rather than restoring a branch that was never once executed.
 
 ## Environment keys
 
@@ -92,12 +88,10 @@ reported rather than silently falling through.
 | `GMAIL_FROM_EMAIL` | both emails | Set |
 | `GMAIL_CREDENTIALS_PATH` | both emails + calendar | Set. Must be readable by the backend process — mount it into the container |
 | `GOOGLE_OAUTH_CREDENTIALS_PATH` | calendar | Optional; defaults to `GMAIL_CREDENTIALS_PATH` so one token serves both |
-| `GOOGLE_CALENDAR_ID` | — | Optional; defaults to `primary`. Only the service-account path needs it |
+| `GOOGLE_CALENDAR_ID` | — | Optional; defaults to `primary` (the authorized account's own calendar). Set it to book onto a different calendar on that account |
 | `ADMIN_ALERT_EMAIL` | owner alert | Optional; defaults to `yanqing.app@gmail.com,jiangyanqing91@gmail.com` |
 | `BOOKING_TIMEZONE` | slot math, email times | Optional; defaults to `America/Los_Angeles` |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | Telegram ping | Optional |
-| `GOOGLE_SERVICE_ACCOUNT_JSON` | Workspace-only fallback | base64 of the whole service-account JSON |
-| `GOOGLE_CALENDAR_IMPERSONATE_USER` | Workspace-only fallback | The delegated user |
 
 ## What a booking needs besides Google
 

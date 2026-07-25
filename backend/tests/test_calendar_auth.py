@@ -32,13 +32,9 @@ GMAIL_MODIFY = "https://www.googleapis.com/auth/gmail.modify"
 def _reset_calendar_client():
     """_get_calendar_service memoizes both success and failure — clear it."""
     cs._calendar_service = None
-    cs._calendar_configured = False
-    cs._calendar_auth_mode = "none"
     cs._calendar_unconfigured = False
     yield
     cs._calendar_service = None
-    cs._calendar_configured = False
-    cs._calendar_auth_mode = "none"
     cs._calendar_unconfigured = False
 
 
@@ -110,48 +106,29 @@ def test_client_id_is_backfilled_from_the_sibling_keys_file(tmp_path):
     assert info["token_uri"] == "https://oauth2.googleapis.com/token"
 
 
-# --- auth mode selection ----------------------------------------------------
+# --- credential selection ----------------------------------------------------
 
-def test_oauth_user_token_is_preferred_over_a_service_account(monkeypatch, token_file):
-    """A service account cannot invite external attendees here, so if both are
-    configured the user token must win."""
+def test_the_client_is_built_with_the_owners_oauth_token(monkeypatch, token_file):
+    """The owner's user token is the only credential path: only a real user can
+    have Google deliver the invitation and Meet link to an external attendee."""
     seen: dict = {}
     _stub_build(monkeypatch, seen)
     monkeypatch.setattr(cs, "GOOGLE_OAUTH_CREDENTIALS_PATH", str(token_file))
-    monkeypatch.setattr(cs, "GOOGLE_SERVICE_ACCOUNT_JSON", "c2hvdWxkIG5vdCBiZSB1c2Vk")
     monkeypatch.setattr(cs, "GOOGLE_CALENDAR_ID", "cal@example.com")
 
     sentinel = object()
     monkeypatch.setattr(cs, "load_user_credentials", lambda *a, **k: sentinel)
 
     assert cs._get_calendar_service() is not None
-    assert cs._calendar_auth_mode == "oauth_user"
-    assert seen["credentials"] is sentinel
-
-
-def test_service_account_is_used_when_there_is_no_oauth_token(monkeypatch, tmp_path):
-    seen: dict = {}
-    _stub_build(monkeypatch, seen)
-    monkeypatch.setattr(cs, "GOOGLE_OAUTH_CREDENTIALS_PATH", str(tmp_path / "absent.json"))
-    monkeypatch.setattr(cs, "GOOGLE_CALENDAR_ID", "cal@example.com")
-    monkeypatch.setattr(cs, "GOOGLE_SERVICE_ACCOUNT_JSON", "x")
-
-    sentinel = object()
-    monkeypatch.setattr(cs, "_service_account_credentials", lambda: sentinel)
-
-    assert cs._get_calendar_service() is not None
-    assert cs._calendar_auth_mode == "service_account"
     assert seen["credentials"] is sentinel
 
 
 def test_no_credentials_means_not_configured(monkeypatch, tmp_path):
     monkeypatch.setattr(cs, "GOOGLE_OAUTH_CREDENTIALS_PATH", str(tmp_path / "absent.json"))
-    monkeypatch.setattr(cs, "GOOGLE_SERVICE_ACCOUNT_JSON", "")
     monkeypatch.setattr(cs, "GOOGLE_CALENDAR_ID", "")
 
     assert cs._get_calendar_service() is None
     assert cs.is_calendar_configured() is False
-    assert cs._calendar_auth_mode == "none"
 
 
 def test_a_token_without_calendar_scope_is_refused(monkeypatch, tmp_path):
@@ -167,34 +144,11 @@ def test_a_token_without_calendar_scope_is_refused(monkeypatch, tmp_path):
         "client_secret": "csec", "scopes": [GMAIL_MODIFY],
     }))
     monkeypatch.setattr(cs, "GOOGLE_OAUTH_CREDENTIALS_PATH", str(path))
-    monkeypatch.setattr(cs, "GOOGLE_SERVICE_ACCOUNT_JSON", "")
 
     # Goes through the real loader: the token exists and is readable, so a pass
     # here would mean the scope gate let it through.
     assert cs._oauth_user_credentials() is None
     assert cs._get_calendar_service() is None
-
-
-def test_service_account_without_an_explicit_calendar_id_is_not_used(monkeypatch):
-    """A service account's own `primary` calendar is nobody's calendar."""
-    monkeypatch.setattr(cs, "GOOGLE_SERVICE_ACCOUNT_JSON", "x")
-    monkeypatch.setattr(cs, "GOOGLE_CALENDAR_ID", "")
-    assert cs._service_account_credentials() is None
-
-
-def test_service_account_without_impersonation_is_refused(monkeypatch):
-    """It would book as itself and Google would not invite the attendee — the
-    visitor ends up 'booked' with no invitation and no Meet link."""
-    monkeypatch.setattr(cs, "GOOGLE_SERVICE_ACCOUNT_JSON", "x")
-    monkeypatch.setattr(cs, "GOOGLE_CALENDAR_ID", "cal@example.com")
-    monkeypatch.setattr(cs, "GOOGLE_CALENDAR_IMPERSONATE_USER", "")
-
-    called = {"n": 0}
-    monkeypatch.setattr(cs, "_calendar_id", lambda: "cal@example.com")
-
-    # Refused before any credential is constructed, so no import is needed.
-    assert cs._service_account_credentials() is None
-    assert called["n"] == 0
 
 
 def test_a_settled_unconfigured_verdict_is_not_re_decided(monkeypatch, tmp_path):
@@ -210,7 +164,6 @@ def test_a_settled_unconfigured_verdict_is_not_re_decided(monkeypatch, tmp_path)
         return None  # a settled verdict: the token lacks calendar scope
 
     monkeypatch.setattr(cs, "GOOGLE_OAUTH_CREDENTIALS_PATH", str(path))
-    monkeypatch.setattr(cs, "GOOGLE_SERVICE_ACCOUNT_JSON", "")
     monkeypatch.setattr(cs, "load_user_credentials", counting_loader)
 
     for _ in range(5):
@@ -236,7 +189,6 @@ def test_a_transient_failure_is_retried_rather_than_cached(monkeypatch, tmp_path
         return object()
 
     monkeypatch.setattr(cs, "GOOGLE_OAUTH_CREDENTIALS_PATH", str(path))
-    monkeypatch.setattr(cs, "GOOGLE_SERVICE_ACCOUNT_JSON", "")
     monkeypatch.setattr(cs, "load_user_credentials", flaky_loader)
 
     assert cs.is_calendar_configured() is False  # the blip

@@ -10,9 +10,7 @@ Purpose: Manage consulting session availability and booking confirmation.
 """
 from __future__ import annotations
 
-import base64
 import hashlib
-import json
 import logging
 import os
 import random
@@ -33,7 +31,6 @@ BOOKING_TIMEZONE = os.getenv("BOOKING_TIMEZONE", "America/Los_Angeles")
 # Unset means the authenticated user's own calendar, which is what we want when
 # authenticating as the owner. Only the service-account path needs an explicit ID.
 GOOGLE_CALENDAR_ID = os.getenv("GOOGLE_CALENDAR_ID", "")
-GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "")
 
 # Preferred auth: the owner's own OAuth token — the same file Gmail uses, so one
 # `authorize_google.py` run configures both. See google_oauth for why a service
@@ -72,7 +69,6 @@ MEET_POLL_DELAY_S = 1.0
 # Workspace domain-wide delegation: the service account acts AS this user, which
 # is what lets Google email the invitation to an external attendee. Left empty,
 # the service account books as itself and attendee invites are unreliable.
-GOOGLE_CALENDAR_IMPERSONATE_USER = os.getenv("GOOGLE_CALENDAR_IMPERSONATE_USER", "")
 
 # A standing meeting room (personal Google Meet / Zoom / Jitsi URL) used when no
 # calendar is connected to mint a per-booking Meet link. Set it and every booking
@@ -96,8 +92,6 @@ SESSION_DURATIONS = {
 # ---------------------------------------------------------------------------
 
 _calendar_service = None
-_calendar_configured = False
-_calendar_auth_mode = "none"  # "oauth_user" | "service_account" | "none"
 # Set only when we have established there is genuinely no credential to use (no
 # token file, or one missing the required scopes). /api/booking/slots asks on
 # every request, and re-deciding costs a file read plus a token refresh. The cost
@@ -109,10 +103,9 @@ _calendar_unconfigured = False
 def _calendar_id() -> str:
     """Which calendar to read and write.
 
-    `primary` is the authenticated principal's own calendar — correct for the
-    OAuth-user path and the reason that path needs no configuration at all. A
-    service account's own primary calendar is useless, so that path is only
-    reachable with an explicit GOOGLE_CALENDAR_ID (enforced below).
+    `primary` is the authenticated owner's own calendar, which is why the OAuth
+    path needs no configuration at all. Set GOOGLE_CALENDAR_ID to point bookings
+    at a different calendar on the same account.
     """
     return GOOGLE_CALENDAR_ID or "primary"
 
@@ -125,37 +118,6 @@ def _oauth_user_credentials():
     return load_user_credentials(creds_path, CALENDAR_SCOPES, log_prefix="[CALENDAR]")
 
 
-def _service_account_credentials():
-    """Fallback for a Workspace setup: a service account, optionally delegated."""
-    if not GOOGLE_SERVICE_ACCOUNT_JSON or not GOOGLE_CALENDAR_ID:
-        return None
-
-    if not GOOGLE_CALENDAR_IMPERSONATE_USER:
-        # Fail closed rather than report ready: an undelegated service account
-        # books as itself, and Google will not email the invitation to the
-        # attendee — the visitor would be "booked" with no invite and no Meet.
-        logger.error(
-            "[CALENDAR] Service account is configured without "
-            "GOOGLE_CALENDAR_IMPERSONATE_USER, so it cannot invite attendees. "
-            "Refusing to use it. Set the impersonated user (needs Workspace "
-            "domain-wide delegation) or use the OAuth-user path "
-            "(authorize_google.py)."
-        )
-        return None
-
-    from google.oauth2 import service_account
-
-    creds_info = json.loads(base64.b64decode(GOOGLE_SERVICE_ACCOUNT_JSON))
-    credentials = service_account.Credentials.from_service_account_info(
-        creds_info, scopes=CALENDAR_SCOPES,
-    ).with_subject(GOOGLE_CALENDAR_IMPERSONATE_USER)
-    logger.info(
-        "[CALENDAR] Impersonating %s (domain-wide delegation)",
-        GOOGLE_CALENDAR_IMPERSONATE_USER,
-    )
-    return credentials
-
-
 def _get_calendar_service():
     """Lazy-initialize the Google Calendar API client.
 
@@ -163,8 +125,7 @@ def _get_calendar_service():
     user can have Google deliver the invitation and Meet link to an external
     attendee without Workspace domain-wide delegation.
     """
-    global _calendar_service, _calendar_configured, _calendar_auth_mode
-    global _calendar_unconfigured
+    global _calendar_service, _calendar_unconfigured
 
     if _calendar_service is not None:
         return _calendar_service
@@ -178,39 +139,28 @@ def _get_calendar_service():
         from googleapiclient.discovery import build
 
         credentials = _oauth_user_credentials()
-        mode = "oauth_user"
-        if credentials is None:
-            credentials = _service_account_credentials()
-            mode = "service_account"
-
         if credentials is None:
             logger.info(
                 "[CALENDAR] No calendar connected — no OAuth token with calendar "
-                "scope at %s, and no usable service account. Bookings still work "
+                "scope at %s. Bookings still work "
                 "from the published hours + the bookings table, but get no "
                 "calendar event and no Meet link. To connect one, run "
                 "`python3 backend/scripts/authorize_google.py`, then restart.",
                 GOOGLE_OAUTH_CREDENTIALS_PATH,
             )
-            _calendar_configured = False
-            _calendar_auth_mode = "none"
             _calendar_unconfigured = True
             return None
 
         _calendar_service = build("calendar", "v3", credentials=credentials)
-        _calendar_configured = True
-        _calendar_auth_mode = mode
         logger.info(
-            "[CALENDAR] Google Calendar API client initialized (auth=%s calendar=%s)",
-            mode, _calendar_id(),
+            "[CALENDAR] Google Calendar API client initialized (calendar=%s)",
+            _calendar_id(),
         )
         return _calendar_service
 
     except Exception as exc:
         # Deliberately NOT cached — see above.
         logger.error("[CALENDAR] Failed to initialize Google Calendar client: %s", exc)
-        _calendar_configured = False
-        _calendar_auth_mode = "none"
         return None
 
 
