@@ -1,6 +1,8 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Loader2, Send, X } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Check, Clock, Loader2, Send, X } from 'lucide-react';
 import { configService } from '@/services/config';
+import { CalendarPicker } from './CalendarPicker';
+import { useAvailableSlots } from './useAvailableSlots';
 
 /*
  * AI Brief Agent — the /consult intake chat (Phase 2).
@@ -13,7 +15,7 @@ import { configService } from '@/services/config';
  * guided form (carrying the partial brief).
  */
 
-type Path = 'business' | 'individual';
+type Path = 'business' | 'individual' | 'training';
 
 export interface Brief {
     desired_outcome?: string;
@@ -26,17 +28,28 @@ export interface Brief {
     open_questions?: string[];
 }
 
+// --- Generative UI (A2UI) component contract — mirrors the server whitelist ---
+export type SessionType = 'fit' | '30' | '60';
+export interface UIChoiceOption { value: string; label: string }
+export type UIComponent =
+    | { kind: 'choice'; id: string; label: string; options: UIChoiceOption[]; multi: boolean }
+    | { kind: 'text'; id: string; label: string; placeholder: string; multiline: boolean }
+    | { kind: 'calendar'; session_type: SessionType }
+    | { kind: 'contact' };
+
 interface TurnResult {
     reply: string;
     brief: Brief;
     quick_replies: string[];
     complete: boolean;
     recommended_next_step: string; // 'fit' | '30' | '60' | ''
+    ui: UIComponent[];
     session?: string;
     capped?: boolean;
 }
 
-interface Msg { role: 'user' | 'assistant'; content: string }
+// Assistant turns may carry generated UI; `turnKey` scopes answer/answered state.
+interface Msg { role: 'user' | 'assistant'; content: string; ui?: UIComponent[]; turnKey?: number }
 
 const STR_FIELDS: Array<{ key: keyof Brief; label: string }> = [
     { key: 'desired_outcome', label: 'Desired outcome' },
@@ -48,14 +61,100 @@ const STR_FIELDS: Array<{ key: keyof Brief; label: string }> = [
     { key: 'timing_and_stakeholders', label: 'Timing & stakeholders' },
 ];
 
-const seedFor = (path: Path) =>
-    path === 'business'
-        ? 'I want to improve a business workflow.'
-        : 'I want to build a personal system.';
+// --- Client-seeded opening turns ------------------------------------------
+// The chat now owns BOTH the path fork (was a card grid above the chat) and the
+// first real question, so every question renders as tappable choices attached to
+// the question itself. Seeded turns are answered locally: the fork just switches
+// path, and the Q1 answer becomes the first message the server ever sees (its
+// script knows the UI already asked Q1 — see backend/intake_agent.py).
+const PATH_TURN_KEY = 0;
+const Q1_TURN_KEY = 1;
+const PATH_COMPONENT_ID = 'consult_path';
+
+const PATH_OPTIONS: Array<{ value: Path; label: string }> = [
+    { value: 'business', label: 'Enterprise workflow' },
+    { value: 'individual', label: 'Personal Agent OS' },
+    { value: 'training', label: 'Hands on training' },
+];
+
+const isPath = (v: string): v is Path =>
+    v === 'business' || v === 'individual' || v === 'training';
+
+// Question 1 per path. Concrete options beat an open "what outcome do you want?"
+// — the prospect sees exactly what is on offer. The composer stays available for
+// anything that isn't listed.
+const FIRST_TURN: Record<Path, { question: string; ui: UIComponent[] }> = {
+    business: {
+        question: 'Which process do you want to cut down? Pick the closest one — or type your own.',
+        ui: [{
+            kind: 'choice', id: 'desired_outcome', multi: false,
+            label: 'The process',
+            options: [
+                { value: 'db-to-deliverable', label: 'Database → PowerPoint or dashboard' },
+                { value: 'documents', label: 'Document / invoice processing' },
+                { value: 'research', label: 'Research & analysis' },
+                { value: 'support-ops', label: 'Customer or ops support' },
+            ],
+        }],
+    },
+    individual: {
+        question: 'What do you want to build first? Pick the closest one — or type your own.',
+        ui: [{
+            kind: 'choice', id: 'desired_outcome', multi: false,
+            label: 'What you want',
+            options: [
+                { value: 'agent-os', label: 'Build my personal agent OS' },
+                { value: 'harness', label: 'Learn an agent harness — Claude Code, Codex' },
+                { value: 'website', label: 'Let an AI agent build my personal website' },
+            ],
+        }],
+    },
+    training: {
+        question: 'Who is the training for, and what should be different afterward?',
+        ui: [
+            {
+                kind: 'choice', id: 'people_and_frequency', multi: false,
+                label: 'Who it is for',
+                options: [
+                    { value: 'just-me', label: 'Just me' },
+                    { value: 'small-team', label: 'My team (2–10)' },
+                    { value: 'org', label: 'My org (10+)' },
+                ],
+            },
+            {
+                kind: 'text', id: 'desired_outcome', multiline: true,
+                label: 'What should be different afterward',
+                placeholder: 'e.g. the team ships with Claude Code without hand-holding',
+            },
+        ],
+    },
+};
+
+const pathQuestionMsg = (): Msg => ({
+    role: 'assistant',
+    content: 'What are you trying to improve?',
+    turnKey: PATH_TURN_KEY,
+    ui: [{
+        kind: 'choice', id: PATH_COMPONENT_ID, multi: false,
+        label: 'Pick the closest one',
+        options: PATH_OPTIONS.map((o) => ({ value: o.value, label: o.label })),
+    }],
+});
+
+const firstQuestionMsg = (path: Path): Msg => ({
+    role: 'assistant',
+    content: FIRST_TURN[path].question,
+    turnKey: Q1_TURN_KEY,
+    ui: FIRST_TURN[path].ui,
+});
 
 export const briefToNotes = (path: Path, brief: Brief): string => {
+    const pathLabel =
+        path === 'business' ? 'Enterprise workflow' :
+        path === 'training' ? 'Hands on training' :
+        'Personal Agent OS';
     const lines: string[] = [
-        `Path: ${path === 'business' ? 'Business workflow' : 'Personal system'}`,
+        `Path: ${pathLabel}`,
         '',
         'AI intake brief:',
     ];
@@ -83,6 +182,52 @@ const cleanBrief = (b: Brief): Brief => {
 const briefCount = (b: Brief): number =>
     STR_FIELDS.filter((f) => (b[f.key] as string | undefined)?.trim()).length +
     ((b.open_questions && b.open_questions.filter(Boolean).length) ? 1 : 0);
+
+// Strict client-side validation of the generated `ui` array — mirrors the
+// server whitelist and, like coerceTurn, THROWS on malformed kinds rather than
+// silently rendering junk (same strictness philosophy as recommended_next_step).
+const coerceUI = (raw: unknown): UIComponent[] => {
+    if (raw === undefined || raw === null) return [];
+    if (!Array.isArray(raw)) throw new Error('intake: ui must be an array');
+    const out: UIComponent[] = [];
+    for (const item of raw) {
+        if (!item || typeof item !== 'object') throw new Error('intake: ui item must be an object');
+        const c = item as Record<string, unknown>;
+        const kind = c.kind;
+        if (kind === 'choice') {
+            if (typeof c.id !== 'string' || typeof c.label !== 'string' || !Array.isArray(c.options)) {
+                throw new Error('intake: malformed choice component');
+            }
+            const options: UIChoiceOption[] = c.options.map((o) => {
+                const oo = o as Record<string, unknown>;
+                if (typeof oo?.value !== 'string' || typeof oo?.label !== 'string') {
+                    throw new Error('intake: malformed choice option');
+                }
+                return { value: oo.value, label: oo.label };
+            });
+            out.push({ kind: 'choice', id: c.id, label: c.label, options, multi: c.multi === true });
+        } else if (kind === 'text') {
+            if (typeof c.id !== 'string' || typeof c.label !== 'string') {
+                throw new Error('intake: malformed text component');
+            }
+            out.push({
+                kind: 'text', id: c.id, label: c.label,
+                placeholder: typeof c.placeholder === 'string' ? c.placeholder : '',
+                multiline: c.multiline === true,
+            });
+        } else if (kind === 'calendar') {
+            if (c.session_type !== 'fit' && c.session_type !== '30' && c.session_type !== '60') {
+                throw new Error('intake: malformed calendar component');
+            }
+            out.push({ kind: 'calendar', session_type: c.session_type });
+        } else if (kind === 'contact') {
+            out.push({ kind: 'contact' });
+        } else {
+            throw new Error('intake: unknown ui component kind');
+        }
+    }
+    return out;
+};
 
 // Strict client-side validation of a turn response — mirrors the server's
 // _validate_output. THROWS on a malformed/type-violating turn (which callTurn
@@ -134,35 +279,190 @@ const coerceTurn = (data: unknown): TurnResult => {
         quick_replies: quick,
         complete: d.complete,
         recommended_next_step: d.recommended_next_step,
+        ui: coerceUI(d.ui),
         session: d.session,
         capped: d.capped === true,
     };
 };
 
+// JetBrains Mono for A2UI component labels/ids (design token).
+const MONO = "'JetBrains Mono', ui-monospace, SFMono-Regular, monospace";
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+const fmtSlot = (iso: string): string => {
+    try {
+        return new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }).format(new Date(iso));
+    } catch {
+        return iso;
+    }
+};
+
+// Day + time, for confirming back the slot the prospect just picked.
+const fmtSlotFull = (iso: string): string => {
+    try {
+        return new Intl.DateTimeFormat('en-US', {
+            weekday: 'short', month: 'short', day: 'numeric',
+            hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
+        }).format(new Date(iso));
+    } catch {
+        return iso;
+    }
+};
+
+// Shown instead of the picker when the backend reports it cannot book. Offering
+// times we know would 502 is worse than asking for an email.
+const UnbookableNotice: React.FC = () => (
+    <div className="rounded-[4px] border border-[#37332E] bg-[#191816]/50 p-4">
+        <p className="text-[13px] leading-relaxed text-[#F1EADF]">
+            Online scheduling is temporarily unavailable. Email{' '}
+            <a
+                href="mailto:jiangyanqing91@gmail.com?subject=Free%2030-minute%20intro%20call"
+                className="font-semibold text-[#F04A32] underline decoration-[#F04A32]/40 hover:decoration-[#F04A32]"
+            >
+                jiangyanqing91@gmail.com
+            </a>{' '}
+            with a couple of times that work and Yanqing will send an invite directly.
+        </p>
+    </div>
+);
+
+// In-chat calendar: mounts the shared CalendarPicker + the SAME slots fetch the
+// booking page uses, then hands the picked date+time back for the existing flow.
+// Exported for tests: the retraction rule below decides whether the booking step
+// is live, and driving it through a full chat run needs live LLM turns.
+export const InChatCalendar: React.FC<{
+    sessionType: SessionType;
+    disabled?: boolean;
+    onPick: (date: string, time: string) => void;
+    onClearPick: () => void;
+}> = ({ sessionType, disabled, onPick, onClearPick }) => {
+    const [date, setDate] = useState<string | null>(null);
+    const [picked, setPicked] = useState<string | null>(null);
+    const slotType: '30' | '60' = sessionType === '60' ? '60' : '30';
+    const { slots, loading, error, bookable } = useAvailableSlots(date, slotType);
+
+    // A pick only stands while the latest response still offers it. Otherwise
+    // changing the date left the parent holding the old slot: no time appeared
+    // selected, yet the contact step was live and would book the abandoned one.
+    useEffect(() => {
+        if (!picked || loading) return;
+        if (!bookable || !slots.some((s) => s.start === picked)) {
+            setPicked(null);
+            onClearPick();
+        }
+    }, [picked, loading, bookable, slots, onClearPick]);
+
+    return (
+        <div className={disabled ? 'pointer-events-none opacity-60' : ''}>
+            <CalendarPicker
+                selectedDate={date}
+                onSelectDate={(d) => { setDate(d); setPicked(null); onClearPick(); }}
+            />
+            {date && (
+                <div className="mt-4 space-y-2">
+                    <h4 className="flex items-center gap-2 text-[13px] font-semibold text-[#F1EADF]">
+                        <Clock className="h-3.5 w-3.5 text-[#F04A32]" /> Available times
+                    </h4>
+                    {loading ? (
+                        <div className="flex items-center gap-2 py-2 text-[13px] text-[#A8A096]"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</div>
+                    ) : error ? (
+                        <p className="py-2 text-[13px] text-[#F04A32]">Couldn't load availability.</p>
+                    ) : !bookable ? (
+                        /* The times that came back are mock data and booking would
+                           fail at the last click — ask for an email instead. */
+                        <UnbookableNotice />
+                    ) : slots.length === 0 ? (
+                        <p className="py-2 text-[13px] text-[#A8A096]">No times for this date.</p>
+                    ) : (
+                        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                            {slots.map((slot) => (
+                                <button
+                                    key={slot.start}
+                                    disabled={disabled}
+                                    onClick={() => { setPicked(slot.start); onPick(date, slot.start); }}
+                                    className={`min-h-[44px] rounded-[4px] border px-3 py-2 text-[13px] font-medium transition-colors ${
+                                        picked === slot.start
+                                            ? 'border-[#F04A32] bg-[#F04A32] text-[#12110F]'
+                                            : 'border-[#37332E] text-[#F1EADF] hover:border-[#A8A096]/60'
+                                    }`}
+                                >
+                                    {fmtSlot(slot.start)}
+                                </button>
+                            ))}
+                        </div>
+                    )}
+                    {/* Confirm the pick back in words — a highlighted chip alone
+                        left people unsure the time had been captured. */}
+                    {picked && (
+                        <p className="flex items-center gap-2 pt-1 text-[13px] text-[#F1EADF]">
+                            <Check className="h-3.5 w-3.5 shrink-0 text-[#F04A32]" />
+                            <span>Time saved — <strong className="font-semibold">{fmtSlotFull(picked)}</strong>. Tap another slot to change it.</span>
+                        </p>
+                    )}
+                </div>
+            )}
+        </div>
+    );
+};
+
 interface IntakeChatProps {
-    path: Path;
+    // null = no landing intent: the chat opens with the path fork as its first
+    // question instead of jumping straight to Q1.
+    path: Path | null;
     onComplete: (notes: string, recommendedNextStep: string, brief: Brief, session: string | null) => void;
     onFallback: (partialBrief?: Brief) => void;
+    // Fires when the in-chat fork resolves the path, so the page can mirror it
+    // into its own buyer-intent state (notes, preselect).
+    onPathSelect?: (path: Path) => void;
+    // A2UI handoffs: the in-chat calendar hands a picked date+time into the
+    // existing booking flow; the contact block lifts name/email/company to the page.
+    onCalendarPick?: (args: {
+        date: string; time: string; sessionType: SessionType;
+        notes: string; brief: Brief; session: string | null;
+    }) => void;
+    onContact?: (contact: { name: string; email: string; company: string }) => void;
 }
 
-export const IntakeChat: React.FC<IntakeChatProps> = ({ path, onComplete, onFallback }) => {
-    const [display, setDisplay] = useState<Msg[]>([]);
+export const IntakeChat: React.FC<IntakeChatProps> = ({
+    path: initialPath, onComplete, onFallback, onPathSelect, onCalendarPick, onContact,
+}) => {
+    // Resolved either from the landing intent (?path=) or by the in-chat fork.
+    const [path, setPath] = useState<Path | null>(initialPath);
+    const [display, setDisplay] = useState<Msg[]>(() =>
+        initialPath ? [firstQuestionMsg(initialPath)] : [pathQuestionMsg()]
+    );
     const [session, setSession] = useState<string | null>(null);
     // `brief` is the editable source of truth (display + notes + persist).
     const [brief, setBrief] = useState<Brief>({});
     const [touched, setTouched] = useState<Set<string>>(new Set());
     const [changed, setChanged] = useState<Set<string>>(new Set());
+    // Server-suggested short replies. Seeded turns carry their own choice chips,
+    // so this starts empty for every path.
     const [quickReplies, setQuickReplies] = useState<string[]>([]);
     const [complete, setComplete] = useState(false);
     const [nextStep, setNextStep] = useState('');
     const [input, setInput] = useState('');
-    const [loading, setLoading] = useState(true);
+    const [loading, setLoading] = useState(false);
     const [error, setError] = useState(false);
     const [briefOpen, setBriefOpen] = useState(false);
+    // A2UI: answers keyed by `${turnKey}:${componentId}`; answered turns go inert.
+    const [answers, setAnswers] = useState<Record<string, string[]>>({});
+    const [answeredTurns, setAnsweredTurns] = useState<Set<number>>(new Set());
+    const [contactDraft, setContactDraft] = useState({ name: '', email: '', company: '' });
+    const [pendingCalendarPick, setPendingCalendarPick] = useState<{
+        turnKey: number;
+        date: string;
+        time: string;
+        sessionType: SessionType;
+    } | null>(null);
+    // Seeded turns hold keys 0 (fork) and 1 (Q1); server turns start at 2.
+    const turnKeyRef = useRef(Q1_TURN_KEY);
     const scrollRef = useRef<HTMLDivElement>(null);
-    const startedRef = useRef(false);
     const briefRef = useRef<Brief>({});
     briefRef.current = brief;
+    const sessionRef = useRef<string | null>(null);
+    sessionRef.current = session;
     // Mirror `touched` in a ref so an in-flight merge reads the CURRENT edit set,
     // not the stale closure captured when the request started (edit-clobber race).
     const touchedRef = useRef<Set<string>>(touched);
@@ -192,18 +492,19 @@ export const IntakeChat: React.FC<IntakeChatProps> = ({ path, onComplete, onFall
         });
     };
 
-    const callTurn = async (message: string, sess: string | null) => {
+    const callTurn = async (message: string, sess: string | null, forPath: Path) => {
         setLoading(true);
         setError(false);
         try {
             const res = await fetch(`${backendUrl}/api/intake/message`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ path, session: sess, message }),
+                body: JSON.stringify({ path: forPath, session: sess, message }),
             });
             if (!res.ok) throw new Error(String(res.status));
             const data = coerceTurn(await res.json());
-            setDisplay((d) => [...d, { role: 'assistant', content: data.reply }]);
+            const tk = ++turnKeyRef.current;
+            setDisplay((d) => [...d, { role: 'assistant', content: data.reply, ui: data.ui, turnKey: tk }]);
             setSession(data.session ?? null);
             mergeServerBrief(data.brief);
             setQuickReplies(data.quick_replies);
@@ -224,14 +525,6 @@ export const IntakeChat: React.FC<IntakeChatProps> = ({ path, onComplete, onFall
         }
     };
 
-    // Kick off with a hidden seed so the agent asks the first question.
-    useEffect(() => {
-        if (startedRef.current) return;
-        startedRef.current = true;
-        callTurn(seedFor(path), null);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [path]);
-
     useEffect(() => {
         scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
     }, [display, loading]);
@@ -244,13 +537,18 @@ export const IntakeChat: React.FC<IntakeChatProps> = ({ path, onComplete, onFall
         return () => window.removeEventListener('keydown', onKey);
     }, [briefOpen]);
 
-    const send = (text: string) => {
+    // `shownAs` lets a structured answer read naturally in the transcript ("Build
+    // my personal agent OS") while the model still receives the field-tagged form
+    // ("desired_outcome: Build my personal agent OS").
+    const send = (text: string, shownAs?: string) => {
         const t = text.trim();
-        if (!t || loading) return;
-        setDisplay((d) => [...d, { role: 'user', content: t }]);
+        // Before the fork resolves there is no path to interview against — the
+        // composer is disabled in that state, so this is a guard, not a UX path.
+        if (!t || loading || !path) return;
+        setDisplay((d) => [...d, { role: 'user', content: (shownAs || t).trim() }]);
         setInput('');
         setQuickReplies([]);
-        callTurn(t, session);
+        callTurn(t, session, path);
     };
 
     const editField = (key: keyof Brief, value: string) => {
@@ -266,7 +564,255 @@ export const IntakeChat: React.FC<IntakeChatProps> = ({ path, onComplete, onFall
         setBrief((b) => ({ ...b, open_questions: text.split('\n').map((l) => l.trim()).filter(Boolean) }));
     };
 
+    // --- A2UI component interaction -----------------------------------------
+    const ansKey = (turnKey: number, id: string) => `${turnKey}:${id}`;
+
+    // A turn whose only input is one single-select choice submits on tap — no
+    // second "Send answers" click for what reads as a quick reply.
+    const isOneTapTurn = (m: Msg): boolean =>
+        !!m.ui && m.ui.length === 1 && m.ui[0].kind === 'choice' && !m.ui[0].multi;
+
+    const toggleChoice = (m: Msg, c: Extract<UIComponent, { kind: 'choice' }>, value: string) => {
+        const turnKey = m.turnKey!;
+        const key = ansKey(turnKey, c.id);
+        setAnswers((prev) => {
+            const cur = prev[key] || [];
+            if (c.multi) {
+                const next = cur.includes(value) ? cur.filter((v) => v !== value) : [...cur, value];
+                return { ...prev, [key]: next };
+            }
+            return { ...prev, [key]: [value] };
+        });
+        // Submit from the tapped value directly — `answers` has not re-rendered yet.
+        if (isOneTapTurn(m)) submitTurnAnswers(m, { [key]: [value] });
+    };
+
+    const setTextAnswer = (turnKey: number, id: string, value: string) =>
+        setAnswers((prev) => ({ ...prev, [ansKey(turnKey, id)]: [value] }));
+
+    // Does this turn have at least one non-empty choice/text answer yet?
+    const turnHasAnswer = (m: Msg): boolean =>
+        !!m.ui && m.turnKey != null && m.ui.some((c) => {
+            if (c.kind === 'choice') return (answers[ansKey(m.turnKey!, c.id)] || []).length > 0;
+            if (c.kind === 'text') return ((answers[ansKey(m.turnKey!, c.id)] || [])[0] || '').trim().length > 0;
+            return false;
+        });
+
+    // Resolve the in-chat path fork locally: no server turn, just switch path and
+    // seed question 1 for the chosen path.
+    const submitPathChoice = (value: string) => {
+        if (!isPath(value) || answeredTurns.has(PATH_TURN_KEY)) return;
+        const label = PATH_OPTIONS.find((o) => o.value === value)?.label ?? value;
+        setAnsweredTurns((s) => new Set(s).add(PATH_TURN_KEY));
+        setPath(value);
+        onPathSelect?.(value);
+        setDisplay((d) => [...d, { role: 'user', content: label }, firstQuestionMsg(value)]);
+    };
+
+    // Serialize a turn's choice/text answers into a compact human-readable string
+    // (e.g. "systems_and_data: SAP, Excel; urgency: this quarter") and send it as
+    // the next user message — the model reads it as prose, no schema change needed.
+    // `override` carries a just-tapped value that `answers` has not committed yet.
+    const submitTurnAnswers = (m: Msg, override?: Record<string, string[]>) => {
+        if (!m.ui || m.turnKey == null || loading) return;
+        const picked = { ...answers, ...(override || {}) };
+        if (m.turnKey === PATH_TURN_KEY) {
+            submitPathChoice((picked[ansKey(PATH_TURN_KEY, PATH_COMPONENT_ID)] || [])[0] || '');
+            return;
+        }
+        const parts: string[] = [];   // for the model: field-tagged
+        const shown: string[] = [];   // for the transcript: plain answers
+        for (const c of m.ui) {
+            if (c.kind === 'choice') {
+                const sel = picked[ansKey(m.turnKey, c.id)] || [];
+                const labels = sel.map((v) => c.options.find((o) => o.value === v)?.label ?? v);
+                if (labels.length) {
+                    parts.push(`${c.id}: ${labels.join(', ')}`);
+                    shown.push(labels.join(', '));
+                }
+            } else if (c.kind === 'text') {
+                const val = ((picked[ansKey(m.turnKey, c.id)] || [])[0] || '').trim();
+                if (val) {
+                    parts.push(`${c.id}: ${val}`);
+                    shown.push(val);
+                }
+            }
+        }
+        if (!parts.length) return;
+        setAnsweredTurns((s) => new Set(s).add(m.turnKey!));
+        send(parts.join('; '), shown.join(' · '));
+    };
+
+    // Same email shape the booking page enforces — a malformed address here would
+    // only fail once the booking request was already in flight.
+    const contactReady = !!contactDraft.name.trim() && EMAIL_RE.test(contactDraft.email.trim());
+
+    const submitContact = (turnKey: number) => {
+        const { name, email } = contactDraft;
+        if (!contactReady || loading || !path) return;
+        onContact?.({ name: name.trim(), email: email.trim(), company: contactDraft.company.trim() });
+        setAnsweredTurns((s) => new Set(s).add(turnKey));
+        if (pendingCalendarPick?.turnKey === turnKey) {
+            const cleaned = cleanBrief(briefRef.current);
+            onCalendarPick?.({
+                date: pendingCalendarPick.date,
+                time: pendingCalendarPick.time,
+                sessionType: pendingCalendarPick.sessionType,
+                notes: briefToNotes(path, cleaned),
+                brief: cleaned,
+                session: sessionRef.current,
+            });
+            return;
+        }
+        send('Shared my contact details.');
+    };
+
+    const handleCalendarPick = (
+        turnKey: number,
+        sessionType: SessionType,
+        date: string,
+        time: string,
+    ) => setPendingCalendarPick({ turnKey, date, time, sessionType });
+
+    // Stable identity: InChatCalendar depends on this inside an effect.
+    const clearCalendarPick = useCallback(() => setPendingCalendarPick(null), []);
+
     const count = briefCount(brief);
+    // The completing turn carries the calendar, so booking finishes inside the
+    // chat; the full booking page becomes the secondary route, not the next step.
+    const bookingInChat = !!display[display.length - 1]?.ui?.some((c) => c.kind === 'calendar');
+    const finishWithBrief = () => {
+        if (!path) return;
+        onComplete(briefToNotes(path, cleanBrief(brief)), nextStep, cleanBrief(brief), session);
+    };
+
+    // Render one assistant turn's generated UI components under its bubble.
+    const renderTurnUI = (m: Msg) => {
+        if (!m.ui || !m.ui.length || m.turnKey == null) return null;
+        const tk = m.turnKey;
+        const answered = answeredTurns.has(tk);
+        // One-tap turns submit from the chip itself, so they need no submit button.
+        const hasInputs = m.ui.some((c) => c.kind === 'choice' || c.kind === 'text') && !isOneTapTurn(m);
+        return (
+            <div className="w-full max-w-[85%] space-y-4 rounded-[6px] border border-[#37332E] bg-[#191816]/50 p-4">
+                {m.ui.map((c, ci) => {
+                    if (c.kind === 'choice') {
+                        const sel = answers[ansKey(tk, c.id)] || [];
+                        return (
+                            <div key={ci} className="space-y-2">
+                                <div className="flex items-center justify-between">
+                                    <label style={{ fontFamily: MONO }} className="text-[11px] uppercase tracking-[0.12em] text-[#A8A096]">{c.label}</label>
+                                    {c.multi && <span style={{ fontFamily: MONO }} className="text-[10px] text-[#565049]">multi-select</span>}
+                                </div>
+                                <div className="flex flex-wrap gap-2">
+                                    {c.options.map((o) => {
+                                        const on = sel.includes(o.value);
+                                        return (
+                                            <button
+                                                key={o.value}
+                                                disabled={answered || loading}
+                                                onClick={() => toggleChoice(m, c, o.value)}
+                                                className={`min-h-[40px] rounded-[4px] border px-3 py-1.5 text-[13px] font-medium transition-colors disabled:cursor-default ${
+                                                    on
+                                                        ? 'border-[#F04A32] bg-[#F04A32] text-[#12110F]'
+                                                        : 'border-[#37332E] text-[#F1EADF] hover:border-[#F04A32] disabled:opacity-40'
+                                                }`}
+                                            >
+                                                {o.label}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        );
+                    }
+                    if (c.kind === 'text') {
+                        const val = (answers[ansKey(tk, c.id)] || [])[0] || '';
+                        return (
+                            <div key={ci} className="space-y-2">
+                                <label style={{ fontFamily: MONO }} className="text-[11px] uppercase tracking-[0.12em] text-[#A8A096]">{c.label}</label>
+                                {c.multiline ? (
+                                    <textarea
+                                        value={val}
+                                        disabled={answered || loading}
+                                        onChange={(e) => setTextAnswer(tk, c.id, e.target.value)}
+                                        rows={2}
+                                        placeholder={c.placeholder || '…'}
+                                        className="w-full resize-none rounded-[4px] border border-[#37332E] bg-[#12110F] p-2.5 text-[14px] text-[#F1EADF] placeholder-[#565049] outline-none focus:border-[#F04A32] disabled:opacity-50"
+                                    />
+                                ) : (
+                                    <input
+                                        type="text"
+                                        value={val}
+                                        disabled={answered || loading}
+                                        onChange={(e) => setTextAnswer(tk, c.id, e.target.value)}
+                                        placeholder={c.placeholder || '…'}
+                                        className="w-full rounded-[4px] border border-[#37332E] bg-[#12110F] p-2.5 text-[14px] text-[#F1EADF] placeholder-[#565049] outline-none focus:border-[#F04A32] disabled:opacity-50"
+                                    />
+                                )}
+                            </div>
+                        );
+                    }
+                    if (c.kind === 'calendar') {
+                        return (
+                            <div key={ci} className="space-y-2">
+                                <label style={{ fontFamily: MONO }} className="text-[11px] uppercase tracking-[0.12em] text-[#A8A096]">Pick a time</label>
+                                <InChatCalendar
+                                    sessionType={c.session_type}
+                                    disabled={answered}
+                                    onPick={(date, time) => handleCalendarPick(tk, c.session_type, date, time)}
+                                    onClearPick={clearCalendarPick}
+                                />
+                            </div>
+                        );
+                    }
+                    // The deterministic contact step appears only after a slot is picked.
+                    if (pendingCalendarPick?.turnKey !== tk) return null;
+                    // contact
+                    return (
+                        <div key={ci} className="space-y-2">
+                            <label style={{ fontFamily: MONO }} className="text-[11px] uppercase tracking-[0.12em] text-[#A8A096]">Your contact details</label>
+                            <div className="grid gap-2 sm:grid-cols-2">
+                                <input type="text" value={contactDraft.name} disabled={answered || loading} maxLength={100}
+                                    onChange={(e) => setContactDraft((d) => ({ ...d, name: e.target.value }))}
+                                    placeholder="Name"
+                                    className="rounded-[4px] border border-[#37332E] bg-[#12110F] p-2.5 text-[14px] text-[#F1EADF] placeholder-[#565049] outline-none focus:border-[#F04A32] disabled:opacity-50" />
+                                <input type="email" value={contactDraft.email} disabled={answered || loading}
+                                    onChange={(e) => setContactDraft((d) => ({ ...d, email: e.target.value }))}
+                                    placeholder="Email"
+                                    className="rounded-[4px] border border-[#37332E] bg-[#12110F] p-2.5 text-[14px] text-[#F1EADF] placeholder-[#565049] outline-none focus:border-[#F04A32] disabled:opacity-50" />
+                            </div>
+                            <input type="text" value={contactDraft.company} disabled={answered || loading} maxLength={120}
+                                onChange={(e) => setContactDraft((d) => ({ ...d, company: e.target.value }))}
+                                placeholder="Company (optional)"
+                                className="w-full rounded-[4px] border border-[#37332E] bg-[#12110F] p-2.5 text-[14px] text-[#F1EADF] placeholder-[#565049] outline-none focus:border-[#F04A32] disabled:opacity-50" />
+                            {!answered && (
+                                <button onClick={() => submitContact(tk)} disabled={loading || !contactReady}
+                                    className="mt-1 inline-flex min-h-[40px] items-center rounded-[4px] bg-[#F04A32] px-4 text-[13px] font-semibold text-[#12110F] transition-colors hover:bg-[#D63B27] disabled:opacity-40">
+                                    {/* This click books — the page confirms it on
+                                        handoff, so the label must say so. */}
+                                    {pendingCalendarPick.sessionType === 'fit'
+                                        ? 'Book the free 30-min call'
+                                        : 'Continue to booking'}
+                                </button>
+                            )}
+                        </div>
+                    );
+                })}
+                {hasInputs && !answered && (
+                    <button
+                        onClick={() => submitTurnAnswers(m)}
+                        disabled={loading || !turnHasAnswer(m)}
+                        style={{ fontFamily: MONO }}
+                        className="inline-flex min-h-[40px] items-center gap-2 rounded-[4px] bg-[#F04A32] px-4 text-[13px] font-semibold text-[#12110F] transition-colors hover:bg-[#D63B27] disabled:opacity-40"
+                    >
+                        Send answers →
+                    </button>
+                )}
+                {answered && <p style={{ fontFamily: MONO }} className="text-[11px] text-[#565049]">Answered.</p>}
+            </div>
+        );
+    };
 
     const BriefPane = (
         <div className="space-y-4">
@@ -321,15 +867,37 @@ export const IntakeChat: React.FC<IntakeChatProps> = ({ path, onComplete, onFall
             <div className="flex min-h-[520px] flex-col rounded-[6px] border border-[#37332E] bg-[#191816]/40">
                 <div ref={scrollRef} className="flex-1 space-y-5 overflow-y-auto p-5" style={{ maxHeight: 560 }}>
                     {display.map((m, i) => (
-                        <div key={i} className={m.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
-                            <div className={`max-w-[85%] rounded-[6px] px-4 py-3 text-[15px] leading-[1.5] ${
-                                m.role === 'user'
-                                    ? 'bg-[#F04A32] text-[#12110F]'
-                                    : 'border border-[#37332E] bg-[#12110F] text-[#F1EADF]'
-                            }`}>
-                                {m.content}
+                        m.role === 'user' ? (
+                            <div key={i} className="flex justify-end">
+                                <div className="max-w-[85%] rounded-[6px] bg-[#F04A32] px-4 py-3 text-[15px] leading-[1.5] text-[#12110F]">
+                                    {m.content}
+                                </div>
                             </div>
-                        </div>
+                        ) : (
+                            <div key={i} className="flex flex-col items-start gap-3">
+                                <div className="max-w-[85%] rounded-[6px] border border-[#37332E] bg-[#12110F] px-4 py-3 text-[15px] leading-[1.5] text-[#F1EADF]">
+                                    {m.content}
+                                </div>
+                                {renderTurnUI(m)}
+                                {/* Server quick replies belong to the question that
+                                    asked them, not to the composer. At the booking
+                                    step the calendar is the only next action. */}
+                                {i === display.length - 1 && quickReplies.length > 0 && !bookingInChat && (
+                                    <div className="flex flex-wrap gap-2">
+                                        {quickReplies.map((q) => (
+                                            <button
+                                                key={q}
+                                                onClick={() => send(q)}
+                                                disabled={loading}
+                                                className="min-h-[40px] rounded-[4px] border border-[#37332E] px-3 py-1.5 text-[13px] text-[#F1EADF] transition-colors hover:border-[#F04A32] disabled:opacity-40"
+                                            >
+                                                {q}
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        )
                     ))}
                     {loading && (
                         <div className="flex items-center gap-2 text-[14px] text-[#A8A096]">
@@ -345,51 +913,48 @@ export const IntakeChat: React.FC<IntakeChatProps> = ({ path, onComplete, onFall
 
                 {complete ? (
                     <div className="border-t border-[#37332E] p-5">
-                        <p className="text-[14px] text-[#A8A096]">Your project brief is ready. Correct anything I misread on the right, then book.</p>
-                        <button
-                            onClick={() => onComplete(briefToNotes(path, cleanBrief(brief)), nextStep, cleanBrief(brief), session)}
-                            className="mt-3 inline-flex min-h-[48px] items-center gap-2 rounded-[4px] bg-[#F04A32] px-6 text-[15px] font-semibold text-[#12110F] transition-colors hover:bg-[#D63B27]"
-                        >
-                            Book with this brief →
-                        </button>
+                        {bookingInChat ? (
+                            <>
+                                <p className="text-[14px] text-[#A8A096]">
+                                    Last step — pick a date and time above, then add your details to confirm.
+                                </p>
+                                <button onClick={finishWithBrief} className="mt-3 text-[13px] text-[#A8A096] underline decoration-[#37332E] underline-offset-4 hover:text-[#F1EADF]">
+                                    Rather book from the full page? →
+                                </button>
+                            </>
+                        ) : (
+                            <>
+                                <p className="text-[14px] text-[#A8A096]">Your project brief is ready. Correct anything I misread on the right, then book.</p>
+                                <button
+                                    onClick={finishWithBrief}
+                                    className="mt-3 inline-flex min-h-[48px] items-center gap-2 rounded-[4px] bg-[#F04A32] px-6 text-[15px] font-semibold text-[#12110F] transition-colors hover:bg-[#D63B27]"
+                                >
+                                    Book with this brief →
+                                </button>
+                            </>
+                        )}
                     </div>
                 ) : (
                     <div className="border-t border-[#37332E] p-4">
-                        {quickReplies.length > 0 && (
-                            <div className="mb-3 flex flex-wrap gap-2">
-                                {quickReplies.map((q) => (
-                                    <button
-                                        key={q}
-                                        onClick={() => send(q)}
-                                        disabled={loading}
-                                        className="rounded-[4px] border border-[#37332E] px-3 py-1.5 text-[13px] text-[#F1EADF] transition-colors hover:border-[#F04A32] disabled:opacity-40"
-                                    >
-                                        {q}
-                                    </button>
-                                ))}
-                            </div>
-                        )}
                         <form onSubmit={(e) => { e.preventDefault(); send(input); }} className="flex items-end gap-2">
                             <textarea
                                 value={input}
                                 onChange={(e) => setInput(e.target.value)}
                                 onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(input); } }}
                                 rows={1}
-                                placeholder="Type your answer…"
-                                className="min-h-[48px] flex-1 resize-none rounded-[4px] border border-[#37332E] bg-[#12110F] p-3 text-[15px] text-[#F1EADF] placeholder-[#A8A096] outline-none focus:border-[#F04A32]"
+                                disabled={!path}
+                                placeholder={path ? 'Type your answer…' : 'Pick one above to start…'}
+                                className="min-h-[48px] flex-1 resize-none rounded-[4px] border border-[#37332E] bg-[#12110F] p-3 text-[15px] text-[#F1EADF] placeholder-[#A8A096] outline-none focus:border-[#F04A32] disabled:opacity-50"
                             />
                             <button
                                 type="submit"
-                                disabled={loading || !input.trim()}
+                                disabled={loading || !input.trim() || !path}
                                 aria-label="Send"
                                 className="flex h-[48px] w-[48px] items-center justify-center rounded-[4px] bg-[#F04A32] text-[#12110F] transition-colors hover:bg-[#D63B27] disabled:opacity-40"
                             >
                                 <Send className="h-5 w-5" />
                             </button>
                         </form>
-                        <button onClick={() => onFallback(cleanBrief(brief))} className="mt-3 text-[13px] text-[#A8A096] hover:text-[#F1EADF]">
-                            Rather not chat? Use the quick form →
-                        </button>
                     </div>
                 )}
             </div>

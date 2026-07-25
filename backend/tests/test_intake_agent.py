@@ -67,9 +67,45 @@ def test_clamp_brief_non_dict():
 
 def test_min_brief_ok():
     assert not ia.min_brief_ok("business", {})
-    assert not ia.min_brief_ok("business", {"desired_outcome": "goal"})  # only 1 field
-    ok = {"desired_outcome": "goal", "current_workflow": "manual", "success_metric": "hrs"}
-    assert ia.min_brief_ok("business", ok)
+    assert not ia.min_brief_ok("business", {"desired_outcome": "goal"})
+    assert not ia.min_brief_ok(
+        "business",
+        {"desired_outcome": "goal", "success_metric": "hrs"},
+    )
+    assert ia.min_brief_ok(
+        "business",
+        {"desired_outcome": "goal", "current_workflow": "manual"},
+    )
+
+
+def test_norm_path_preserves_supported_paths_and_defaults_unknown():
+    assert ia._norm_path("business") == "business"
+    assert ia._norm_path("individual") == "individual"
+    assert ia._norm_path("training") == "training"
+    assert ia._norm_path("unknown") == "individual"
+
+
+def test_user_turn_cap_is_four():
+    assert ia.MAX_USER_TURNS == 4
+
+
+def test_system_prompts_enforce_two_core_questions_and_one_clarifier():
+    for path in ("business", "individual", "training"):
+        prompt = ia._system_prompt(path)
+        assert "only TWO core questions long" in prompt
+        # Question 1 is asked by the browser UI as a tappable choice, so the first
+        # user message is its answer and the model must never re-ask it.
+        assert "already asked question 1" in prompt.lower()
+        assert "ALREADY ASKED by the UI" in prompt
+        assert "ONE short clarifier" in prompt
+        assert "Aim to finish in about 6 questions" not in prompt
+        assert "`desired_outcome`" in prompt
+        assert "`current_workflow`" in prompt
+
+    training = ia._system_prompt("training")
+    for name in ("GitHub Copilot", "Claude Code / Cowork", "Codex", "Pi", "OpenClaw", "Hermes"):
+        assert name in training
+    assert "first 30-minute call is FREE for every path" in training
 
 
 def test_validate_output_clamps_enum_and_length():
@@ -104,6 +140,8 @@ def test_validate_output_rejects_type_violations():
 
 def test_run_turn_retries_once_then_fails(monkeypatch):
     # First model output malformed, second valid -> run_turn recovers on retry.
+    # Isolate the sonnet brief-turn retry from the SECOND (haiku) UI model call.
+    monkeypatch.setattr(ia, "_generate_ui", lambda *a, **k: [])
     calls = {"n": 0}
 
     def _flaky_create(**kwargs):
@@ -180,16 +218,58 @@ def test_run_turn_honors_complete_only_with_min_brief(monkeypatch):
     # Now a full brief -> complete honored.
     monkeypatch.setattr(ia, "_get_client", lambda: _fake_client({
         "reply": "done", "brief": {
-            "desired_outcome": "goal", "current_workflow": "manual", "success_metric": "hrs",
+            "desired_outcome": "goal", "current_workflow": "manual",
         },
         "quick_replies": [], "complete": True, "recommended_next_step": "fit",
     }))
     res2 = ia.run_turn(ia.new_state("business"), "hi")
     assert res2["complete"] is True
+    assert res2["ui"] == [
+        {"kind": "calendar", "session_type": "fit"},
+        {"kind": "contact"},
+    ]
     assert res2["state"]["turns"] == 1
     # Transcript is server-owned and includes the assistant reply.
     roles = [m["role"] for m in res2["state"]["transcript"]]
     assert roles == ["user", "assistant"]
+
+
+def test_run_turn_force_closes_at_the_round_budget(monkeypatch):
+    # The LAST allowed answer terminates the interview at booking even if the model
+    # is still interviewing (complete=False) and the brief is thin. Its question is
+    # replaced by a wrap-up so the reply can't contradict the calendar beneath it.
+    monkeypatch.setattr(ia, "_get_client", lambda: _fake_client({
+        "reply": "And how do you track them today?", "brief": {"desired_outcome": "get organized"},
+        "quick_replies": ["An app", "Paper"], "complete": False, "recommended_next_step": "",
+    }))
+    last = ia.new_state("individual")
+    last["turns"] = ia.MAX_USER_TURNS - 1
+    res = ia.run_turn(last, "tasks & to-dos")
+
+    assert res["state"]["turns"] == ia.MAX_USER_TURNS
+    assert res["complete"] is True
+    assert res["recommended_next_step"] == "fit"
+    assert res["ui"] == [
+        {"kind": "calendar", "session_type": "fit"},
+        {"kind": "contact"},
+    ]
+    assert res["quick_replies"] == []           # calendar is the only next action
+    assert "how do you track" not in res["reply"].lower()
+    assert "pick a time" in res["reply"].lower()
+
+
+def test_run_turn_does_not_force_close_before_the_budget(monkeypatch):
+    # One answer short of the cap: still interviewing, no booking UI.
+    monkeypatch.setattr(ia, "_get_client", lambda: _fake_client({
+        "reply": "And how do you track them today?", "brief": {"desired_outcome": "get organized"},
+        "quick_replies": ["An app"], "complete": False, "recommended_next_step": "",
+    }))
+    mid = ia.new_state("individual")
+    mid["turns"] = ia.MAX_USER_TURNS - 2
+    res = ia.run_turn(mid, "tasks & to-dos")
+    assert res["complete"] is False
+    assert [c["kind"] for c in res["ui"]] != ["calendar", "contact"]
+    assert res["reply"] == "And how do you track them today?"
 
 
 def test_run_turn_merges_brief_across_turns(monkeypatch):
@@ -212,20 +292,27 @@ def _fake_turn(state, message):
                  "transcript": (state.get("transcript") or []) + [{"role": "user", "content": message}, {"role": "assistant", "content": "next?"}],
                  "brief": {"desired_outcome": "goal"}}
     return {"state": new_state, "reply": "next?", "brief": {"desired_outcome": "goal"},
-            "quick_replies": ["a"], "complete": False, "recommended_next_step": ""}
+            "quick_replies": ["a"], "complete": False, "recommended_next_step": "", "ui": []}
 
 
-def test_intake_message_starts_and_signs_session(monkeypatch):
+@pytest.mark.parametrize("path", ["business", "individual", "training"])
+def test_intake_message_starts_and_signs_session(monkeypatch, path):
     monkeypatch.setattr(main, "intake_available", lambda: True)
     monkeypatch.setattr(main, "intake_run_turn", _fake_turn)
     client = TestClient(main.app)
-    r = client.post("/api/intake/message", json={"path": "business", "message": "hi"})
+    r = client.post("/api/intake/message", json={"path": path, "message": "hi"})
     assert r.status_code == 200
     body = r.json()
     assert body["reply"] == "next?"
     assert "session" in body and body["session"]
-    # The returned session must verify server-side.
-    assert main.intake_verify_session(body["session"]) is not None
+    state = main.intake_verify_session(body["session"])
+    assert state is not None and state["path"] == path
+
+    resumed = client.post(
+        "/api/intake/message",
+        json={"path": path, "session": body["session"], "message": "again"},
+    )
+    assert resumed.status_code == 200
 
 
 def test_intake_message_rejects_forged_session(monkeypatch):
@@ -236,9 +323,10 @@ def test_intake_message_rejects_forged_session(monkeypatch):
     assert r.status_code == 400
 
 
-def test_intake_message_cap_thin_brief_not_complete(monkeypatch):
-    # Cap reached with a ONE-field brief: capped, but NOT complete — the min-brief
-    # invariant holds on the cap path, so the client hands off to the form.
+def test_intake_message_cap_thin_brief_still_ends_at_booking(monkeypatch):
+    # Cap reached with a ONE-field brief: the round budget is spent, so the turn is
+    # terminal — complete, with the booking UI. A capped interview never dead-ends
+    # into "tell me more" or a hand-off to the form.
     monkeypatch.setattr(main, "intake_available", lambda: True)
     monkeypatch.setattr(main, "intake_run_turn", _fake_turn)
     client = TestClient(main.app)
@@ -248,21 +336,26 @@ def test_intake_message_cap_thin_brief_not_complete(monkeypatch):
     assert r.status_code == 200
     body = r.json()
     assert body.get("capped") is True
-    assert body["complete"] is False  # thin brief cannot auto-complete at the cap
+    assert body["complete"] is True
+    assert body["recommended_next_step"] == "fit"
+    kinds = [c["kind"] for c in body["ui"]]
+    assert "calendar" in kinds and "contact" in kinds
 
 
-def test_intake_message_cap_full_brief_completes(monkeypatch):
-    # Cap reached with a useful brief: capped AND complete -> booking handoff.
+@pytest.mark.parametrize("path", ["business", "individual", "training"])
+def test_intake_message_cap_full_brief_completes(monkeypatch, path):
+    # Cap reached with a useful brief: capped AND complete -> free-call handoff.
     monkeypatch.setattr(main, "intake_available", lambda: True)
     monkeypatch.setattr(main, "intake_run_turn", _fake_turn)
     client = TestClient(main.app)
-    full = {"desired_outcome": "goal", "current_workflow": "manual", "success_metric": "hrs"}
-    capped = main.intake_sign_session({"sid": "sidcapfull", "iat": int(_now()), "path": "business",
+    full = {"desired_outcome": "goal", "current_workflow": "manual"}
+    capped = main.intake_sign_session({"sid": f"sidcapfull-{path}", "iat": int(_now()), "path": path,
                                        "turns": main.MAX_USER_TURNS, "transcript": [], "brief": full})
-    r = client.post("/api/intake/message", json={"path": "business", "session": capped, "message": "one more"})
+    r = client.post("/api/intake/message", json={"path": path, "session": capped, "message": "one more"})
     assert r.status_code == 200
     body = r.json()
     assert body.get("capped") is True and body["complete"] is True
+    assert body["recommended_next_step"] == "fit"
 
 
 def test_intake_message_503_when_unconfigured(monkeypatch):
@@ -496,10 +589,9 @@ def test_link_brief_to_booking_ignores_bad_uuid(monkeypatch):
 
 # --- Unicode session size (serialized-length fitting) -----------------------
 
-def test_fit_session_bounds_unicode_max_state():
-    # A legally max-bounded state whose transcript is emoji / CJG-heavy. Under the
-    # old ASCII-escaping + codepoint clamp this signed to ~350K chars; now it must
-    # be trimmed to fit the request cap while the FULL brief is preserved.
+def test_fit_session_preserves_unicode_max_state_under_cap():
+    # A legally max-bounded state whose transcript is emoji / CJG-heavy remains
+    # under the request cap at three turns and should be preserved unchanged.
     for filler in ("😀", "漢字", "🚀🌍"):
         msg = filler * (ia.MAX_TRANSCRIPT_MSG_CHARS // len(filler))
         transcript = [{"role": "user" if i % 2 == 0 else "assistant", "content": msg}
@@ -508,13 +600,12 @@ def test_fit_session_bounds_unicode_max_state():
         brief["open_questions"] = [filler * 30] * ia.MAX_OPEN_QUESTIONS
         state = {"sid": "sidu", "iat": int(_now()), "path": "business",
                  "turns": ia.MAX_USER_TURNS, "transcript": transcript, "brief": brief}
-        # Unbounded sign would be far over the cap.
-        assert len(ia.sign_session(state)) > ia.MAX_SESSION_TOKEN_CHARS
+        assert len(ia.sign_session(state)) <= ia.MAX_SESSION_TOKEN_CHARS
         fitted = ia.fit_session_to_cap(state)
         tok = ia.sign_session(fitted)
         assert len(tok) <= ia.MAX_SESSION_TOKEN_CHARS
         assert ia.verify_session(tok) is not None
-        # The full brief survived the trim (only transcript is shed).
+        assert fitted == state
         assert fitted["brief"] == brief
 
 
@@ -571,3 +662,247 @@ def test_intake_message_rejects_unbound_legacy_token(monkeypatch):
     assert client.post("/api/intake/message", json={"path": "business", "session": no_iat, "message": "hi"}).status_code == 401
     # And the brief endpoint rejects an unbound token too.
     assert client.post("/api/intake/brief", json={"session": legacy, "brief": {"desired_outcome": "x"}}).status_code == 401
+
+
+# --- Generative UI (A2UI) validation ----------------------------------------
+
+def _choice(cid="systems_and_data", n=3):
+    return {"kind": "choice", "id": cid, "label": "Which systems?",
+            "options": [{"value": f"v{i}", "label": f"L{i}"} for i in range(n)], "multi": True}
+
+
+def test_validate_ui_valid_components_pass():
+    ui = ia._validate_ui(
+        [
+            _choice(),
+            {"kind": "text", "id": "constraints", "label": "Any constraints?",
+             "placeholder": "e.g. security review", "multiline": True},
+        ],
+        brief={}, min_ok=False, asked_ids=[],
+    )
+    assert len(ui) == 2
+    assert ui[0]["kind"] == "choice" and ui[0]["multi"] is True
+    assert len(ui[0]["options"]) == 3
+    assert ui[1]["kind"] == "text" and ui[1]["multiline"] is True
+
+
+def test_validate_ui_strips_unknown_and_malformed():
+    ui = ia._validate_ui(
+        [
+            {"kind": "evil_script", "id": "x", "label": "y"},   # unknown kind -> stripped
+            {"kind": "choice", "id": "a", "label": "q", "options": [{"value": "only"}]},  # <2 options -> stripped
+            {"kind": "text", "id": "", "label": "no id"},        # missing id -> stripped
+            _choice(cid="desired_outcome"),                        # valid -> kept
+        ],
+        brief={}, min_ok=False, asked_ids=[],
+    )
+    assert [c["kind"] for c in ui] == ["choice"]
+    assert ui[0]["id"] == "desired_outcome"
+
+
+def test_validate_ui_non_list_raises():
+    with pytest.raises(ValueError):
+        ia._validate_ui({"not": "a list"}, brief={}, min_ok=False, asked_ids=[])
+    # None is a legitimate "no UI" -> [].
+    assert ia._validate_ui(None, brief={}, min_ok=False, asked_ids=[]) == []
+
+
+def test_validate_ui_calendar_gated_on_min_ok():
+    cal = {"kind": "calendar", "session_type": "fit"}
+    # min_ok False -> calendar stripped.
+    assert ia._validate_ui([cal], brief={}, min_ok=False, asked_ids=[]) == []
+    # min_ok True -> calendar kept.
+    out = ia._validate_ui([cal], brief={}, min_ok=True, asked_ids=[])
+    assert out == [{"kind": "calendar", "session_type": "fit"}]
+    # Bad session_type stripped even when min_ok.
+    assert ia._validate_ui([{"kind": "calendar", "session_type": "90"}], brief={}, min_ok=True, asked_ids=[]) == []
+
+
+def test_validate_ui_at_most_one_calendar_and_contact():
+    out = ia._validate_ui(
+        [
+            {"kind": "calendar", "session_type": "30"},
+            {"kind": "calendar", "session_type": "60"},
+            {"kind": "contact"},
+            {"kind": "contact"},
+        ],
+        brief={}, min_ok=True, asked_ids=[],
+    )
+    kinds = [c["kind"] for c in out]
+    assert kinds.count("calendar") == 1
+    assert kinds.count("contact") == 1
+
+
+def test_validate_ui_clamps_to_four_components():
+    many = [_choice(cid=f"desired_outcome{i}") for i in range(8)]
+    out = ia._validate_ui(many, brief={}, min_ok=False, asked_ids=[])
+    assert len(out) == ia.UI_MAX_COMPONENTS == 4
+
+
+def test_validate_ui_dedupes_ids():
+    out = ia._validate_ui([_choice(cid="systems_and_data"), _choice(cid="systems_and_data")],
+                          brief={}, min_ok=False, asked_ids=[])
+    assert len(out) == 1
+
+
+def test_validate_ui_clamps_lengths():
+    out = ia._validate_ui(
+        [{"kind": "text", "id": "x" * 100, "label": "y" * 400,
+          "placeholder": "z" * 400, "multiline": False}],
+        brief={}, min_ok=False, asked_ids=[],
+    )
+    c = out[0]
+    assert len(c["id"]) == ia.UI_ID_CHARS
+    assert len(c["label"]) == ia.UI_LABEL_CHARS
+    assert len(c["placeholder"]) == ia.UI_PLACEHOLDER_CHARS
+
+
+# --- Adaptive questioning (no repeats) --------------------------------------
+
+def test_validate_ui_strips_already_filled_brief_field():
+    # desired_outcome already answered -> its component is dropped; the empty one stays.
+    out = ia._validate_ui(
+        [_choice(cid="desired_outcome"), _choice(cid="constraints")],
+        brief={"desired_outcome": "cut AP time"}, min_ok=False, asked_ids=[],
+    )
+    assert [c["id"] for c in out] == ["constraints"]
+
+
+def test_validate_ui_strips_previously_asked_id():
+    out = ia._validate_ui(
+        [_choice(cid="systems_and_data"), _choice(cid="success_metric")],
+        brief={}, min_ok=False, asked_ids=["systems_and_data"],
+    )
+    assert [c["id"] for c in out] == ["success_metric"]
+
+
+# --- Two-model run_turn: UI generation round-trip + graceful degrade ---------
+
+class _NamedBlock:
+    type = "tool_use"
+
+    def __init__(self, name, payload):
+        self.name = name
+        self.input = payload
+
+
+class _NamedResp:
+    def __init__(self, name, payload):
+        self.content = [_NamedBlock(name, payload)]
+
+
+def _dual_client(turn_payload, ui_payload, *, ui_raises=False):
+    """One fake client serving BOTH model calls: routes by the forced tool name
+    (submit_turn = sonnet brief turn, submit_ui = haiku UI turn)."""
+    class _Msgs:
+        @staticmethod
+        def create(**kwargs):
+            name = (kwargs.get("tool_choice") or {}).get("name")
+            if name == "submit_ui":
+                if ui_raises:
+                    raise RuntimeError("haiku transport blew up")
+                return _NamedResp("submit_ui", {"ui": ui_payload})
+            return _NamedResp("submit_turn", turn_payload)
+
+    class _Client:
+        messages = _Msgs()
+
+    return _Client()
+
+
+def test_run_turn_generates_ui_and_records_asked_ids(monkeypatch):
+    turn = {"reply": "Which systems does it touch?", "brief": {"desired_outcome": "goal"},
+            "quick_replies": [], "complete": False, "recommended_next_step": ""}
+    ui = [{"kind": "choice", "id": "systems_and_data", "label": "Which systems?",
+           "options": [{"value": "sap", "label": "SAP"}, {"value": "excel", "label": "Excel"}], "multi": True}]
+    monkeypatch.setattr(ia, "_get_client", lambda: _dual_client(turn, ui))
+    res = ia.run_turn(ia.new_state("business"), "we reconcile invoices")
+    assert res["ui"] and res["ui"][0]["id"] == "systems_and_data"
+    # The shown id is recorded in the session so it won't be re-asked next turn.
+    assert "systems_and_data" in res["state"]["asked_ids"]
+
+
+def test_run_turn_haiku_failure_degrades_to_no_ui(monkeypatch):
+    # The UI (haiku) call fails on both attempts -> turn STILL succeeds with ui=[].
+    turn = {"reply": "ok", "brief": {"desired_outcome": "goal"},
+            "quick_replies": [], "complete": False, "recommended_next_step": ""}
+    monkeypatch.setattr(ia, "_get_client", lambda: _dual_client(turn, [], ui_raises=True))
+    res = ia.run_turn(ia.new_state("business"), "hi")
+    assert res["reply"] == "ok"
+    assert res["ui"] == []  # degraded, not raised
+
+
+def test_training_second_question_injects_exact_tool_choices(monkeypatch):
+    turn = {
+        "reply": "Which tools do you use or want to adopt, and what is your experience?",
+        "brief": {"desired_outcome": "Train my team to ship agentic workflows"},
+        "quick_replies": [],
+        "complete": False,
+        "recommended_next_step": "",
+    }
+    monkeypatch.setattr(ia, "_get_client", lambda: _fake_client(turn))
+    monkeypatch.setattr(
+        ia,
+        "_generate_ui",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("training Q2 must be deterministic")),
+    )
+
+    res = ia.run_turn(ia.new_state("training"), "My team needs to ship with agents")
+    choices = next(c for c in res["ui"] if c["kind"] == "choice")
+    labels = [o["label"] for o in choices["options"]]
+    assert labels == [
+        "GitHub Copilot", "Claude Code / Cowork", "Codex", "Personal Pi",
+        "OpenClaw", "Hermes agent setup", "Not sure — recommend for me",
+    ]
+    assert any(c["kind"] == "text" and c["id"] == "current_workflow" for c in res["ui"])
+
+
+@pytest.mark.parametrize("path", ["business", "individual", "training"])
+def test_run_turn_injects_booking_ui_without_haiku(monkeypatch, path):
+    turn = {
+        "reply": "Pick a time.",
+        "brief": {"desired_outcome": "goal", "current_workflow": "manual"},
+        "quick_replies": [],
+        "complete": True,
+        # Deliberately wrong: server policy must override model routing.
+        "recommended_next_step": "30",
+    }
+    monkeypatch.setattr(ia, "_get_client", lambda: _fake_client(turn))
+    monkeypatch.setattr(
+        ia,
+        "_generate_ui",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("Haiku must be skipped")),
+    )
+
+    res = ia.run_turn(ia.new_state(path), "answer")
+
+    assert res["recommended_next_step"] == "fit"
+    assert res["ui"] == [
+        {"kind": "calendar", "session_type": "fit"},
+        {"kind": "contact"},
+    ]
+
+
+def test_generate_ui_no_client_returns_empty(monkeypatch):
+    monkeypatch.setattr(ia, "_get_client", lambda: None)
+    assert ia._generate_ui(ia.new_state("business"), "business", {}, "q?", False, []) == []
+
+
+# --- Endpoint: a choice-answer message round-trips --------------------------
+
+def test_intake_message_roundtrips_serialized_choice_answer(monkeypatch):
+    # The client serializes component answers into the message string; the endpoint
+    # must accept it and round-trip a coherent turn (with the ui array present).
+    monkeypatch.setattr(main, "intake_available", lambda: True)
+    monkeypatch.setattr(main, "intake_run_turn", _fake_turn)
+    client = TestClient(main.app)
+    tok1 = client.post("/api/intake/message", json={"path": "business", "message": "hi"}).json()["session"]
+    r = client.post("/api/intake/message", json={
+        "path": "business", "session": tok1,
+        "message": "systems_and_data: SAP, Excel; urgency: this quarter; details: 3 FTEs reconcile manually",
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body["reply"] == "next?"
+    assert "ui" in body and isinstance(body["ui"], list)
+    assert main.intake_verify_session(body["session"]) is not None

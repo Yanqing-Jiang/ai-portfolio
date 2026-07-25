@@ -82,6 +82,7 @@ const Chat: React.FC<ChatProps> = ({ project, onFirstMessage }) => {
       : "🤖 Initializing chat service...";
 
     // Set initial welcome message
+    setHasUserSentMessage(false);
     setMessages([{
       id: 'initial-message',
       role: 'model',
@@ -401,13 +402,14 @@ const Chat: React.FC<ChatProps> = ({ project, onFirstMessage }) => {
           </div>
         )}
         {messages.length === 1 && activeDefaultPrompts?.length > 0 && (
-          <div className="max-w-4xl mx-auto mb-3 sm:mb-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-3">
+          <div className="max-w-4xl mx-auto mb-2 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5 sm:gap-2">
             {activeDefaultPrompts.map((prompt, i) => (
               <button
                 key={i}
                 disabled={isLoading}
                 onClick={() => handlePromptClick(prompt)}
-                className="bg-gray-800/50 border border-gray-700/80 rounded-lg p-3 sm:p-4 md:p-5 text-left hover:bg-gray-700/50 transition-colors text-gray-300 text-xs sm:text-sm md:text-base disabled:opacity-50 leading-relaxed"
+                title={prompt}
+                className="bg-gray-800/50 border border-gray-700/80 rounded-lg min-h-[44px] px-3 py-2 sm:py-2.5 text-left hover:bg-gray-700/50 transition-colors text-gray-300 text-xs sm:text-sm disabled:opacity-50 leading-snug line-clamp-2"
               >
                 {prompt}
               </button>

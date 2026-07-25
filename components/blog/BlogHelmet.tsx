@@ -58,7 +58,7 @@ interface Props {
  *   - BreadcrumbList JSON-LD enables the "Home › Field Notes › Title"
  *     breadcrumb in Google SERP cards.
  *   - publisher.logo is required by Google Rich Results for Article — we
- *     point to the existing favicon.svg until a dedicated logo lands.
+ *     point to the 512px profile favicon until a dedicated logo lands.
  *   - inLanguage: 'en' tells crawlers + screen readers explicitly.
  */
 const BlogHelmet: React.FC<Props> = ({ post }) => {
@@ -101,7 +101,7 @@ const BlogHelmet: React.FC<Props> = ({ post }) => {
       url: SITE,
       logo: {
         '@type': 'ImageObject',
-        url: `${SITE}/favicon.svg`,
+        url: `${SITE}/favicon-512.png`,
       },
     },
     mainEntityOfPage: {

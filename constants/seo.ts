@@ -6,12 +6,13 @@ export const DEFAULT_THEME_COLOR = '#12110F';
 // Visible commercial-front-door navigation (mirrors the on-page nav). Emitted
 // as SiteNavigationElement so structured nav matches what users see — the old
 // project chronology stays in WebSite.hasPart, not in navigation.
+// Every url here must resolve to something that exists: #build / #proof /
+// #process were advertised for months after those sections were removed.
 export const LANDING_NAV = [
-  { name: 'What I build', url: `${SITE_BASE_URL}/#build` },
-  { name: 'Proof', url: `${SITE_BASE_URL}/#proof` },
-  { name: 'Process', url: `${SITE_BASE_URL}/#process` },
+  { name: 'The work', url: `${SITE_BASE_URL}/#work` },
+  { name: 'Pre-AI projects', url: `${SITE_BASE_URL}/#pre-ai` },
   { name: 'Writing', url: `${SITE_BASE_URL}/blog` },
-  { name: 'Start a project', url: `${SITE_BASE_URL}/consult` },
+  { name: 'Start a booking', url: `${SITE_BASE_URL}/consult` },
 ];
 export const DEFAULT_TWITTER_HANDLE = '@yanqing_j';
 
@@ -51,75 +52,83 @@ export const LANDING_METRICS = [
   },
 ];
 
-// The four visible offers, verbatim to the landing page's two-path offers.
+// The three offers shown on the landing page, plus the free intro call that is
+// the only conversion path. Names and framing track the visible cards — a
+// service catalog that lists offers the page doesn't sell is a mismatch signal.
 export const LANDING_SERVICE_SUMMARY = [
   {
-    name: 'Enterprise agentic pipelines',
+    name: 'Enterprise workflow',
     description:
-      'Automate document-heavy, analytical, or multi-system work. Every build starts with a baseline - hours, cost, cycle time, error rate - and ships with telemetry around the result.',
-    serviceType: 'AI Systems Engineering',
-    keywords: ['Agentic Pipelines', 'Workflow Automation', 'Telemetry', 'Function Calling'],
+      'Cut up to 90% of the work time out of an operating process with an AI agent workflow - from the database through to the delivered PowerPoint or dashboard. Every build starts from a baseline (hours, cost, cycle time, error rate) and ships with telemetry around the result.',
+    serviceType: 'AI Workflow Automation',
+    keywords: ['Agentic Pipelines', 'Workflow Automation', 'Reporting Automation', 'Telemetry', 'Function Calling'],
     areaServed: 'Global',
   },
   {
-    name: 'Embedded AI delivery team',
+    name: 'Personal Agent OS',
     description:
-      'A five-person team across AI, data, product, and interface delivery that builds, instruments, launches, and hands over the system once the plan is agreed.',
-    serviceType: 'AI Delivery',
-    keywords: ['AI Delivery Team', 'Product', 'Data Engineering', 'Interface Design'],
-    areaServed: 'Global',
-  },
-  {
-    name: 'Personal agent OS',
-    description:
-      'Short-term context, long-term memory, scheduled work, and controlled access to your tools - running on infrastructure you own. A system that compounds context over months.',
+      'A personal agent that remembers how you work: short-term context, long-term memory, scheduled work, and controlled access to your tools, running on infrastructure you own. Includes agent-managed personal websites that publish, deploy, and monitor themselves.',
     serviceType: 'Personal AI Systems',
-    keywords: ['Personal Agent', 'Long-Term Memory', 'MCP Tools', 'Scheduled Jobs'],
+    keywords: ['Personal Agent', 'Long-Term Memory', 'MCP Tools', 'Scheduled Jobs', 'Agent-Managed Website'],
     areaServed: 'Global',
   },
   {
-    name: 'Zero-maintenance personal website',
+    name: 'Hands on training',
     description:
-      'Designed, built, hosted, maintained. Publishing, metadata, deployment, and monitoring are automated, while the site and content remain yours.',
-    serviceType: 'Web Systems',
-    keywords: ['Personal Website', 'Automated Publishing', 'Hosting', 'Monitoring'],
+      'Learn the agentic stack on your own toolset - GitHub Copilot, Claude Code, Codex, Pi, OpenClaw, Hermes - for yourself, a team, or an org. Working sessions on real repositories, not slideware.',
+    serviceType: 'AI Training',
+    keywords: ['Claude Code Training', 'Codex Training', 'Agent Harness', 'AI Enablement', 'Team Training'],
     areaServed: 'Global',
+  },
+  {
+    name: 'Free 30-minute intro call',
+    description:
+      'A free first call to scope the work: what should change, what happens today, and whether an agent system is the right answer. Booked directly at /consult - no sign-in, no payment.',
+    serviceType: 'Consultation',
+    keywords: ['Free Consultation', 'AI Scoping Call', 'Discovery Call'],
+    areaServed: 'Global',
+    price: '0',
+    priceCurrency: 'USD',
   },
 ];
 
 export const LANDING_SEO = {
-  title: 'Yanqing Jiang - AI Agent System Builder',
+  title: 'AI Agent System Builder · Book with me | Yanqing Jiang',
   description:
-    'Yanqing Jiang designs and ships enterprise agentic pipelines, personal AI systems with durable memory, and zero-maintenance personal websites, backed by a five-person delivery team.',
+    'AI agent system builder. Cut up to 90% of the work time in an enterprise workflow, build a personal agent OS, or train your team on the agentic stack. Free 30-minute call.',
   // Social share framing (overrides title/description for og: and twitter:).
   ogTitle: 'What It Takes to Make Agents Work in Production',
   ogDescription:
     'Case studies in agent memory, orchestration, analytics copilots, and end-to-end automation—from prototypes to production.',
+  // Lead with the positioning the site actually sells against; the stack terms
+  // stay because they are what technical buyers search for.
   keywords: [
+    'AI agent system builder',
+    'AI agent workflow automation',
+    'agentic AI consultant',
+    'personal agent OS',
+    'Claude Code training',
+    'Codex training',
     'AI systems engineer',
     'analytics automation',
     'LangGraph developer',
     'agentic workflows',
-    'data platform modernization',
-    'FastAPI Supabase stack',
     'enterprise analytics copilots',
-    'forecasting automation',
     'Context Engineering',
     'RAG Systems',
     'Multi-Agent Systems',
     'AI Orchestration',
-    'Claude Code Production',
     'A2UI',
     'Generative UI',
-    'Skills.md management',
+    'FastAPI Supabase stack',
   ],
   author: 'Yanqing Jiang',
-  subject: 'AI systems, analytics automation, and enterprise data workflows',
-  category: 'AI Consulting & Analytics Automation',
+  subject: 'AI agent systems, workflow automation, and agentic-stack training',
+  category: 'AI Agent Systems & Workflow Automation',
   canonical: `${SITE_BASE_URL}/`,
   locale: 'en_US',
+  updatedTime: '2026-07-24T00:00:00Z',
   sameAs: DEFAULT_SAME_AS,
-  updatedTime: '2026-01-05T00:00:00Z',
 };
 
 // FAQ content kept as a constant for reuse in non-landing surfaces ONLY.

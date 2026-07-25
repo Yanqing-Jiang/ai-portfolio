@@ -48,6 +48,9 @@ temp_view.txt
 
 # Secrets & Credentials
 *.pem
+# ...except Supabase's published root CA, which is a public certificate and has
+# to ship in the backend image for the DB connection to verify. See db_ssl.py.
+!backend/certs/supabase-prod-ca-2021.pem
 *.key
 *.p12
 *.pfx

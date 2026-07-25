@@ -26,8 +26,11 @@ class TokenStore:
         self._lock = asyncio.Lock()
         self._ssl_context: Optional[ssl.SSLContext] = None
 
-        if self._database_url and os.getenv("SUPABASE_DB_DISABLE_SSL", "false").lower() != "true":
-            self._ssl_context = ssl.create_default_context()
+        if self._database_url:
+            # Supabase's pooler uses a private CA; a plain default context
+            # rejects it. See db_ssl.
+            from db_ssl import supabase_ssl_context
+            self._ssl_context = supabase_ssl_context()
 
     @property
     def is_configured(self) -> bool:
