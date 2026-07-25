@@ -1,8 +1,9 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
+import { motion, useReducedMotion } from 'framer-motion';
 // @ts-ignore
 import { Helmet } from 'react-helmet-async';
+import ProjectMedia from './ProjectMedia';
 import type { Project, ProjectYear } from '../types';
 import {
     DEFAULT_OG_IMAGE,
@@ -48,6 +49,35 @@ const Reveal: React.FC<{ children: React.ReactNode; className?: string; delay?: 
     );
 };
 
+// Fires once when the element scrolls into view. Reduced-motion (or no
+// IntersectionObserver) resolves to `true` immediately so the lit/final state
+// is shown without waiting for a scroll.
+const useInViewOnce = <T extends HTMLElement>(threshold = 0.35): [React.RefObject<T | null>, boolean] => {
+    const ref = useRef<T>(null);
+    const reduce = useReducedMotion();
+    const [inView, setInView] = useState(false);
+    useEffect(() => {
+        if (reduce || typeof IntersectionObserver === 'undefined') {
+            setInView(true);
+            return;
+        }
+        const el = ref.current;
+        if (!el) return;
+        const obs = new IntersectionObserver(
+            ([entry]) => {
+                if (entry.isIntersecting) {
+                    setInView(true);
+                    obs.disconnect();
+                }
+            },
+            { threshold }
+        );
+        obs.observe(el);
+        return () => obs.disconnect();
+    }, [reduce, threshold]);
+    return [ref, inView];
+};
+
 // --- Small building blocks -------------------------------------------------
 const PrimaryCTA: React.FC<{ to: string; children: React.ReactNode; onClick?: () => void }> = ({ to, children, onClick }) => (
     <Link
@@ -60,20 +90,69 @@ const PrimaryCTA: React.FC<{ to: string; children: React.ReactNode; onClick?: ()
     </Link>
 );
 
-const LinkCTA: React.FC<{ to: string; children: React.ReactNode; onClick?: () => void }> = ({ to, children, onClick }) => (
-    <Link
-        to={to}
-        onClick={onClick}
-        className="group inline-flex min-h-[48px] items-center gap-2 py-2 text-[15px] font-semibold text-[#F1EADF] transition-colors hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#F04A32]"
-    >
-        {children}
-        <span className="text-[#F04A32] transition-transform duration-200 group-hover:translate-x-1">→</span>
-    </Link>
-);
+// --- Animated proof-rail stat ----------------------------------------------
+// Prerenders the final figure (crawlable, no-JS visible); on the client the
+// number counts up from 0 the first time it scrolls into view, staggered per
+// column. The non-numeric unit (+, M) pops in vermilion once the count lands,
+// echoing the hero period. Clicking replays the count. Reduced motion: static.
+const easeOutExpo = (t: number) => (t >= 1 ? 1 : 1 - Math.pow(2, -10 * t));
 
-const Eyebrow: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-    <p className="text-[12px] font-semibold uppercase tracking-[0.22em] text-[#A8A096]">{children}</p>
-);
+const AnimatedStat: React.FC<{ n: string; l: string; index: number }> = ({ n, l, index }) => {
+    const reduce = useReducedMotion();
+    const [ref, inView] = useInViewOnce<HTMLDivElement>(0.5);
+    // '4,000+' → ['', '4,000', '+'] · '$150M' → ['$', '150', 'M']
+    const [, prefix = '', digits = '0', suffix = ''] = n.match(/^([^\d]*)([\d,]+)([^\d]*)$/) ?? [];
+    const target = parseInt(digits.replace(/,/g, ''), 10);
+    const [value, setValue] = useState(target);
+    const [done, setDone] = useState(true);
+    const rafRef = useRef(0);
+
+    const play = React.useCallback(
+        (delay: number) => {
+            cancelAnimationFrame(rafRef.current);
+            setValue(0);
+            setDone(false);
+            const start = performance.now() + delay;
+            const duration = 1400;
+            const tick = (now: number) => {
+                const t = Math.min(Math.max((now - start) / duration, 0), 1);
+                setValue(Math.round(target * easeOutExpo(t)));
+                if (t < 1) {
+                    rafRef.current = requestAnimationFrame(tick);
+                } else {
+                    setDone(true);
+                }
+            };
+            rafRef.current = requestAnimationFrame(tick);
+        },
+        [target]
+    );
+
+    // First play, staggered per column; SSR/no-JS keeps the static figure.
+    useEffect(() => {
+        if (reduce || !inView) return;
+        play(index * 150);
+        return () => cancelAnimationFrame(rafRef.current);
+    }, [reduce, inView, index, play]);
+
+    return (
+        <div ref={ref} onClick={() => !reduce && play(0)} className={reduce ? undefined : 'cursor-pointer select-none'}>
+            <dt className="text-[40px] font-black tracking-[-0.03em] text-[#F1EADF] sm:text-[48px]">
+                {prefix}
+                {value.toLocaleString('en-US')}
+                {suffix && (
+                    <span
+                        className="inline-block text-[#F04A32] transition-[opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]"
+                        style={done ? undefined : { opacity: 0, transform: 'translateY(0.15em) scale(0.6)' }}
+                    >
+                        {suffix}
+                    </span>
+                )}
+            </dt>
+            <dd className="mt-1 text-[15px] text-[#A8A096]">{l}</dd>
+        </div>
+    );
+};
 
 interface LandingPageFlowProps {
     projectData: ProjectYear[];
@@ -81,11 +160,23 @@ interface LandingPageFlowProps {
 }
 
 const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelectProject }) => {
-    const [menuOpen, setMenuOpen] = useState(false);
-    const allProjects = useMemo(
-        () => projectData.filter((g) => !g.hiddenOnLanding).flatMap((y) => y.projects),
+    // Pre-AI heading lights up (muted → bone) the first time it scrolls in.
+    const [preAiRef, preAiLit] = useInViewOnce<HTMLHeadingElement>(0.5);
+    // "The Work" carousel: every visible year group, in chronology order.
+    const displayYears = useMemo(
+        () => projectData.filter((g) => !g.hiddenOnLanding),
         [projectData]
     );
+    const allProjects = useMemo(() => displayYears.flatMap((y) => y.projects), [displayYears]);
+    // Pre-AI era pulled out by label/year (mirrors the legacy landing memo).
+    const preAiGroup = useMemo(
+        () =>
+            projectData.find(
+                (g) => g.label?.toLowerCase().includes('pre-ai') || g.year === 2021
+            ),
+        [projectData]
+    );
+    const preAiProjects = preAiGroup?.projects ?? [];
     // SiteNavigation schema mirrors the visible commercial nav, not the legacy
     // project chronology (which stays in WebSite.hasPart via buildWebsiteSchema).
     const landingSchemas = useMemo(
@@ -94,17 +185,6 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
     );
     const personSchema = useMemo(() => buildPersonSchema(), []);
     const landingKeywords = useMemo(() => LANDING_SEO.keywords.join(', '), []);
-
-    // Resolve real project routes for the "selected systems" section.
-    const findProject = (id: string) => allProjects.find((p) => p.id === id);
-    const homer = findProject('homer');
-    const agentToUi = findProject('agent-to-ui');
-    const analytics = findProject('next-gen-analytics-agent');
-
-    const goTo = (id: string) => {
-        const p = findProject(id);
-        if (p) onSelectProject(p);
-    };
 
     return (
         <div className="min-h-screen bg-[#12110F] text-[#F1EADF] antialiased" style={{ colorScheme: 'dark' }}>
@@ -143,7 +223,11 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
             <style>{`
                 .hero-h1 .hero-line { display: block; }
                 @media (prefers-reduced-motion: no-preference) {
-                    .hero-h1 .hero-line { overflow: hidden; padding-top: 0.12em; margin-top: -0.12em; }
+                    /* Clip box needs vertical breathing room: the reveal wants overflow
+                       hidden, but line-height 0.86 crops ascenders (top) and descenders
+                       (g/y, bottom). Pad both edges and cancel the padding with negative
+                       margins so leading stays identically tight. */
+                    .hero-h1 .hero-line { overflow: hidden; padding-top: 0.15em; padding-bottom: 0.22em; margin-top: -0.15em; margin-bottom: -0.22em; }
                     .hero-h1 .hero-line-inner {
                         display: inline-block;
                         animation: heroClipReveal 800ms cubic-bezier(0.22, 1, 0.36, 1) both;
@@ -157,354 +241,92 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                     @keyframes heroClipReveal { from { transform: translateY(105%); } to { transform: translateY(0); } }
                     @keyframes heroPeriodIn { from { opacity: 0; } to { opacity: 1; } }
                 }
+                .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+                .hide-scrollbar::-webkit-scrollbar { display: none; }
+                @media (prefers-reduced-motion: no-preference) {
+                    .cta-pulse .cta-arrow { animation: ctaArrowNudge 3.4s ease-in-out infinite; }
+                    @keyframes ctaArrowNudge {
+                        0%, 86%, 100% { transform: translateX(0); }
+                        90% { transform: translateX(3px); }
+                        94% { transform: translateX(0); }
+                    }
+                }
             `}</style>
 
-            {/* ── Section 0 — Nav ─────────────────────────────────────── */}
-            <header className="sticky top-0 z-50 border-b border-[#37332E] bg-[#12110F]/90 backdrop-blur-md">
-                <nav className="mx-auto flex h-16 max-w-[1280px] items-center justify-between px-6 lg:px-10">
-                    <a href="#top" className="text-[15px] font-bold tracking-tight text-[#F1EADF]">
-                        Yanqing Jiang
-                    </a>
-                    <div className="hidden items-center gap-8 md:flex">
-                        <a href="#build" className="text-[14px] text-[#A8A096] transition-colors hover:text-[#F1EADF]">What I build</a>
-                        <a href="#proof" className="text-[14px] text-[#A8A096] transition-colors hover:text-[#F1EADF]">Proof</a>
-                        <a href="#process" className="text-[14px] text-[#A8A096] transition-colors hover:text-[#F1EADF]">Process</a>
-                        <Link to="/blog" className="text-[14px] text-[#A8A096] transition-colors hover:text-[#F1EADF]">Writing</Link>
-                    </div>
-                    <div className="flex items-center gap-3">
-                        <Link
-                            to="/consult"
-                            className="rounded-[4px] bg-[#F04A32] px-4 py-2 text-[13px] font-semibold text-[#12110F] transition-colors hover:bg-[#D63B27]"
-                        >
-                            Start a project
-                        </Link>
-                        <button
-                            type="button"
-                            onClick={() => setMenuOpen(true)}
-                            aria-label="Open menu"
-                            aria-expanded={menuOpen}
-                            className="flex min-h-[44px] min-w-[44px] items-center justify-center text-[14px] font-semibold text-[#F1EADF] md:hidden"
-                        >
-                            Menu
-                        </button>
-                    </div>
-                </nav>
-            </header>
-
-            {/* Mobile menu sheet */}
-            <AnimatePresence>
-                {menuOpen && (
-                    <motion.div
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        className="fixed inset-0 z-[60] bg-[#12110F] px-6 py-6 md:hidden"
-                    >
-                        <div className="flex h-16 items-center justify-between">
-                            <span className="text-[15px] font-bold text-[#F1EADF]">Yanqing Jiang</span>
-                            <button
-                                type="button"
-                                onClick={() => setMenuOpen(false)}
-                                aria-label="Close menu"
-                                className="flex min-h-[44px] min-w-[44px] items-center justify-center text-[14px] font-semibold text-[#F1EADF]"
-                            >
-                                Close
-                            </button>
-                        </div>
-                        <div className="mt-8 flex flex-col gap-6">
-                            <a href="#build" onClick={() => setMenuOpen(false)} className="text-[22px] font-semibold text-[#F1EADF]">What I build</a>
-                            <a href="#proof" onClick={() => setMenuOpen(false)} className="text-[22px] font-semibold text-[#F1EADF]">Proof</a>
-                            <a href="#process" onClick={() => setMenuOpen(false)} className="text-[22px] font-semibold text-[#F1EADF]">Process</a>
-                            <Link to="/blog" onClick={() => setMenuOpen(false)} className="text-[22px] font-semibold text-[#F1EADF]">Writing</Link>
-                            <Link
-                                to="/consult"
-                                onClick={() => setMenuOpen(false)}
-                                className="mt-4 inline-flex min-h-[48px] items-center justify-center rounded-[4px] bg-[#F04A32] px-6 text-[16px] font-semibold text-[#12110F]"
-                            >
-                                Start a project
-                            </Link>
-                        </div>
-                    </motion.div>
-                )}
-            </AnimatePresence>
-
+            {/* Nav lives in the shared top header (SidebarV2 in App.tsx Layout):
+                "Yanqing Jiang" returns home, "Menu" opens the Projects/Blog drawer. */}
             <main id="top">
                 {/* ── Section 1 — Hero + proof rail ───────────────────── */}
-                <section className="mx-auto max-w-[1280px] px-6 pt-20 pb-24 sm:pt-28 lg:px-10 lg:pt-32 lg:pb-32">
-                    <Eyebrow>Yanqing Jiang · Advanced Analytics at P&amp;G</Eyebrow>
-                    <h1 className="hero-h1 mt-8 font-black leading-[0.86] tracking-[-0.06em] text-[#F1EADF]" style={{ fontSize: 'clamp(52px, 12vw, 190px)' }}>
+                <section className="mx-auto max-w-[1280px] px-6 pt-16 pb-24 sm:pt-20 lg:px-10 lg:pt-24 lg:pb-32">
+                    <h1 className="hero-h1 font-black leading-[0.86] tracking-[-0.06em] text-[#F1EADF]" style={{ fontSize: 'clamp(52px, 12vw, 190px)' }}>
                         <span className="hero-line"><span className="hero-line-inner">AI agent</span></span>
                         <span className="hero-line"><span className="hero-line-inner">system builder<span className="hero-period text-[#F04A32]">.</span></span></span>
                     </h1>
-                    <div className="mt-10 grid gap-10 lg:grid-cols-[1.4fr_1fr] lg:items-end">
-                        <p className="max-w-[46ch] text-[18px] leading-[1.5] text-[#A8A096] sm:text-[20px]">
-                            I design and ship enterprise pipelines that remove repetitive work, and personal AI
-                            systems that remember how you work. Once the plan is agreed, a five-person team is
-                            ready to deliver.
-                        </p>
-                        <div className="flex flex-col gap-4 sm:flex-row sm:items-center lg:justify-end">
-                            <PrimaryCTA to="/consult?path=enterprise">Build for my business</PrimaryCTA>
-                            <LinkCTA to="/consult?path=individual">Build for me</LinkCTA>
+                    <div className="mt-10">
+                        <div className="grid gap-4 sm:grid-cols-3">
+                            {[
+                                { t: 'Enterprise workflow', d: 'Cut 90% of the work time with an AI agent workflow — from the database to the delivered PowerPoint or dashboard.' },
+                                { t: 'Personal Agent OS', d: 'A personal agent that remembers how you work, or an agent-managed personal website.' },
+                                { t: 'Hands on training', d: 'Learn the agentic stack on your own toolset — GitHub Copilot, Claude Code, Codex, Pi, OpenClaw, Hermes.' },
+                            ].map((o) => (
+                                <div key={o.t} className="rounded-[6px] border border-[#37332E] bg-[#191816]/40 p-5">
+                                    <h2 className="text-[17px] font-bold leading-snug text-[#F1EADF]">{o.t}</h2>
+                                    <p className="mt-2 text-[14px] leading-[1.5] text-[#A8A096]">{o.d}</p>
+                                </div>
+                            ))}
+                        </div>
+                        <div className="mt-7">
+                            <PrimaryCTA to="/consult">Start a booking</PrimaryCTA>
                         </div>
                     </div>
 
-                    {/* Proof rail */}
+                    {/* Proof rail — numbers count up on first scroll-in; the unit
+                        marks (+, M) pop in vermilion after the count, echoing the
+                        hero period. Click a number to replay its count. */}
                     <div className="mt-16 border-t border-[#37332E] pt-8">
                         <dl className="grid grid-cols-2 gap-8 sm:grid-cols-3" style={{ fontVariantNumeric: 'tabular-nums' }}>
                             {[
                                 { n: '4,000+', l: 'hours automated' },
                                 { n: '$150M', l: 'in decisions influenced' },
-                                { n: '5 people', l: 'ready to deliver' },
-                            ].map((m) => (
-                                <div key={m.l}>
-                                    <dt className="text-[40px] font-black tracking-[-0.03em] text-[#F1EADF] sm:text-[48px]">{m.n}</dt>
-                                    <dd className="mt-1 text-[15px] text-[#A8A096]">{m.l}</dd>
-                                </div>
+                                { n: '4', l: 'full-time AI engineers' },
+                            ].map((m, i) => (
+                                <AnimatedStat key={m.l} n={m.n} l={m.l} index={i} />
                             ))}
                         </dl>
-                        <p className="mt-6 text-[13px] text-[#A8A096]">Numbers from production systems, not demos.</p>
                     </div>
                 </section>
 
-                {/* ── Section 2 — Offers, two buyer paths ─────────────── */}
-                <section id="build" className="border-t border-[#37332E]">
-                    <div className="mx-auto max-w-[1280px] px-6 py-24 lg:px-10 lg:py-32">
-                        <Reveal>
-                            <h2 className="font-black tracking-[-0.04em] text-[#F1EADF]" style={{ fontSize: 'clamp(36px, 6vw, 72px)' }}>
-                                What should work better?
-                            </h2>
-                            <p className="mt-4 text-[18px] text-[#A8A096]">Choose the outcome. The technology follows.</p>
-                        </Reveal>
+                {/* ── Section 2 — The Work (vertical staggered rows) ──── */}
+                <WorkCarousel displayYears={displayYears} onSelect={onSelectProject} />
 
-                        <div className="mt-16 grid gap-12 lg:grid-cols-2 lg:gap-0">
-                            {/* FOR BUSINESSES */}
-                            <div className="lg:pr-14">
-                                <Eyebrow>For businesses</Eyebrow>
-                                <p className="mt-3 max-w-[42ch] text-[16px] text-[#A8A096]">
-                                    Remove expensive work from an operating process, then give the system a metric it has to move.
-                                </p>
-                                <div className="mt-10 space-y-10">
-                                    <OfferRow
-                                        title="Enterprise agentic pipelines"
-                                        tagline="Pipelines with a number attached."
-                                        body="Automate document-heavy, analytical, or multi-system work. Every build starts with a baseline — hours, cost, cycle time, error rate — and ships with telemetry around the result."
-                                        proof="1,000 analyst hours saved · 90% fewer late payments"
-                                        cta="Scope an enterprise pipeline"
-                                        to="/consult?path=enterprise&offer=pipeline"
-                                    />
-                                    <OfferRow
-                                        title="Embedded AI delivery team"
-                                        tagline="A five-person team that ships."
-                                        body="Need execution, not another recommendation deck? Yanqing leads a five-person team across AI, data, product, and interface delivery once the plan, milestones, owners, and success criteria are agreed."
-                                        cta="Bring in the delivery team"
-                                        to="/consult?path=enterprise&offer=delivery-team"
-                                    />
-                                </div>
-                            </div>
-
-                            {/* FOR INDIVIDUALS */}
-                            <div className="border-t border-[#37332E] pt-12 lg:border-l lg:border-t-0 lg:pl-14 lg:pt-0">
-                                <Eyebrow>For individuals</Eyebrow>
-                                <p className="mt-3 max-w-[42ch] text-[16px] text-[#A8A096]">
-                                    Build a system around the way you think, work, publish, and remember.
-                                </p>
-                                <div className="mt-10 space-y-10">
-                                    <OfferRow
-                                        title="Personal agent OS"
-                                        tagline="An assistant that remembers you."
-                                        body="Short-term context, long-term memory, scheduled work, and controlled access to your tools — running on infrastructure you own. Not another chat window: a system that compounds context over months."
-                                        proof="I run one myself. It's called Homer, and it runs my life."
-                                        cta="Design my personal agent"
-                                        to="/consult?path=individual&offer=personal-agent"
-                                    />
-                                    <OfferRow
-                                        title="Zero-maintenance personal website"
-                                        tagline="A site you never touch."
-                                        body="Designed, built, hosted, maintained. Publishing, metadata, deployment, and monitoring are automated, while the site and content remain yours."
-                                        proof="This site is one."
-                                        cta="Build my personal site"
-                                        to="/consult?path=individual&offer=website"
-                                    />
-                                </div>
-                            </div>
-                        </div>
-
-                        <div className="mt-16 border-t border-[#37332E] pt-8">
-                            <p className="text-[16px] text-[#A8A096]">
-                                Not sure which path fits? Start with the problem and we'll route it.{' '}
-                                <Link to="/consult" className="font-semibold text-[#F1EADF] underline decoration-[#F04A32] decoration-2 underline-offset-4 hover:text-white">
-                                    Describe the problem →
-                                </Link>
-                            </p>
-                        </div>
-                    </div>
-                </section>
-
-                {/* ── Section 3 — Flagship enterprise case ────────────── */}
-                <section id="proof" className="border-t border-[#37332E] bg-[#191816]">
-                    <div className="mx-auto max-w-[1280px] px-6 py-24 lg:px-10 lg:py-32">
-                        <Reveal>
-                            <Eyebrow>Enterprise case study · Invoice reconciliation</Eyebrow>
-                            <h2 className="mt-6 font-black leading-[0.92] tracking-[-0.045em] text-[#F1EADF]" style={{ fontSize: 'clamp(34px, 6vw, 84px)' }}>
-                                1,000 analyst hours back.<br />
-                                <span className="text-[#F04A32]">90% fewer late payments.</span>
-                            </h2>
-                        </Reveal>
-                        <div className="mt-14 grid gap-12 lg:grid-cols-[5fr_7fr]">
-                            <div>
-                                <p className="text-[18px] leading-[1.5] text-[#A8A096]">
-                                    An LLM invoice processor turned a fragmented reconciliation process into a
-                                    production workflow for P&amp;G Walgreens teams.
-                                </p>
-                                <p className="mt-6 text-[15px] leading-[1.6] text-[#A8A096]">
-                                    Mixed PDFs, XLSX, and XLSB in — structured extraction — one-to-many
-                                    reconciliation — an actionable discrepancy report out.
-                                </p>
-                                <p className="mt-8 font-mono text-[12px] leading-[1.7] text-[#A8A096]">
-                                    Function calling · Python · Flask · pandas · PDF/XLSB processing · Azure
-                                </p>
-                                <div className="mt-10 flex flex-col gap-4 sm:flex-row sm:items-center">
-                                    {findProject('llm-invoice-processor') ? (
-                                        <LinkCTA to="/project/llm-invoice-processor" onClick={() => goTo('llm-invoice-processor')}>
-                                            Read the invoice case study
-                                        </LinkCTA>
-                                    ) : null}
-                                    <LinkCTA to="/consult?path=enterprise&offer=pipeline&context=invoice-reconciliation">
-                                        Discuss a similar workflow
-                                    </LinkCTA>
-                                </div>
-                            </div>
-                            <ol className="space-y-6">
-                                {[
-                                    ['01', 'Ingest', 'Mixed-format invoices and statements (PDF, XLSX, XLSB) land in one intake.'],
-                                    ['02', 'Extract', 'Function-calling turns unstructured documents into structured, validated line items.'],
-                                    ['03', 'Reconcile', 'One-to-many matching against expected records surfaces every discrepancy.'],
-                                    ['04', 'Report', 'An actionable discrepancy report ships to the AP team with the exceptions ranked.'],
-                                ].map(([n, t, d]) => (
-                                    <li key={n} className="flex gap-5 border-t border-[#37332E] pt-6">
-                                        <span className="font-mono text-[13px] text-[#F04A32]">{n}</span>
-                                        <div>
-                                            <p className="text-[17px] font-semibold text-[#F1EADF]">{t}</p>
-                                            <p className="mt-1 text-[15px] text-[#A8A096]">{d}</p>
-                                        </div>
-                                    </li>
-                                ))}
-                            </ol>
-                        </div>
-                    </div>
-                </section>
-
-                {/* ── Section 4 — Selected working systems ────────────── */}
-                <section className="border-t border-[#37332E]">
-                    <div className="mx-auto max-w-[1280px] px-6 py-24 lg:px-10 lg:py-32">
-                        <Reveal>
-                            <h2 className="max-w-[20ch] font-black tracking-[-0.04em] text-[#F1EADF]" style={{ fontSize: 'clamp(30px, 5vw, 60px)' }}>
-                                Systems you can inspect, not claims you have to take on faith.
-                            </h2>
-                        </Reveal>
-                        <div className="mt-14 divide-y divide-[#37332E] border-y border-[#37332E]">
-                            <SystemRow
-                                kicker="Personal AI OS"
-                                title="Homer remembers, schedules, and acts."
-                                body="Runs 24/7 on a Mac Mini: SQLite-backed hybrid memory, five CLI executors, MCP tools, scheduled jobs. The working reference behind the personal-agent offer."
-                                proof="Live for 6+ months · five executors · ~12,000 memory claims"
-                                cta="Open the Homer console"
-                                to={homer?.link ?? '/homer'}
-                                onClick={() => goTo('homer')}
-                            />
-                            <SystemRow
-                                kicker="Generative interfaces"
-                                title="The agent assembles the interface."
-                                body="Ask a finance question and Agent to UI streams the relevant charts, KPIs, tables, and news — no static dashboard required."
-                                cta="Try Agent to UI"
-                                to={agentToUi?.link ?? '/project/agent-to-ui'}
-                                onClick={() => goTo('agent-to-ui')}
-                            />
-                            <SystemRow
-                                kicker="Agentic analytics"
-                                title="Answers without another static dashboard."
-                                body="Clarify the question, query the data, generate charts, and expose a traceable task graph you can follow end to end."
-                                cta="See the analytics architecture"
-                                to={analytics?.link ?? '/project/next-gen-analytics-agent'}
-                                onClick={() => goTo('next-gen-analytics-agent')}
-                            />
-                        </div>
-                        <div className="mt-10">
-                            <a
-                                href="https://www.jiangyanqing.com"
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="group inline-flex items-center gap-2 text-[15px] font-semibold text-[#F1EADF] hover:text-white"
+                {/* ── Section 2b — Pre-AI projects ────────────────────── */}
+                {preAiProjects.length > 0 && (
+                    <section id="pre-ai" className="border-t border-[#37332E]">
+                        <div className="mx-auto max-w-[1280px] px-6 py-24 lg:px-10 lg:py-32">
+                            <h2
+                                ref={preAiRef}
+                                data-lit={preAiLit}
+                                className={`font-bold tracking-[-0.03em] transition-colors duration-[600ms] ease-out ${preAiLit ? 'text-[#F1EADF]' : 'text-[#A8A096]/60'}`}
+                                style={{ fontSize: 'clamp(28px, 4vw, 44px)' }}
                             >
-                                Full archive
-                                <span className="text-[#F04A32] transition-transform duration-200 group-hover:translate-x-1">→</span>
-                            </a>
-                        </div>
-                    </div>
-                </section>
-
-                {/* ── Section 5 — Engagement process ──────────────────── */}
-                <section id="process" className="border-t border-[#37332E] bg-[#191816]">
-                    <div className="mx-auto max-w-[1280px] px-6 py-24 lg:px-10 lg:py-32">
-                        <Reveal>
-                            <h2 className="font-black tracking-[-0.04em] text-[#F1EADF]" style={{ fontSize: 'clamp(36px, 6vw, 72px)' }}>
-                                Agree on the plan. Then we ship.
+                                Pre-AI projects<span className={`transition-colors duration-[600ms] ease-out ${preAiLit ? 'text-[#F04A32]' : 'text-transparent'}`}>.</span>
                             </h2>
-                        </Reveal>
-                        <div className="mt-14 grid gap-8 md:grid-cols-2">
-                            {[
-                                ['01 · Diagnose', 'We map the current workflow, the people doing it, the systems involved, and the cost of leaving it unchanged.'],
-                                ['02 · Design the plan', 'You get proposed scope, architecture, milestones, owners, a success metric, and a fixed commercial proposal.'],
-                                ['03 · Deliver', 'Once approved, Yanqing leads a five-person team to build, instrument, launch, and hand over the system.'],
-                                ['04 · Prove the result', 'We compare the shipped workflow with the baseline and decide what to improve, expand, or stop.'],
-                            ].map(([t, d]) => (
-                                <div key={t} className="border-t border-[#37332E] pt-6">
-                                    <p className="font-mono text-[13px] tracking-wide text-[#F04A32]">{t}</p>
-                                    <p className="mt-3 text-[16px] leading-[1.55] text-[#A8A096]">{d}</p>
-                                </div>
-                            ))}
-                        </div>
-                        <div className="mt-12">
-                            <PrimaryCTA to="/consult">Start a project</PrimaryCTA>
-                        </div>
-                    </div>
-                </section>
-
-                {/* ── Section 6 — Builder-led trust ───────────────────── */}
-                <section className="border-t border-[#37332E]">
-                    <div className="mx-auto max-w-[1280px] px-6 py-24 lg:px-10 lg:py-32">
-                        <div className="grid gap-12 lg:grid-cols-[1fr_1.2fr]">
-                            <Reveal>
-                                <h2 className="font-black tracking-[-0.04em] text-[#F1EADF]" style={{ fontSize: 'clamp(32px, 5vw, 64px)' }}>
-                                    Builder-led.<br />Team-delivered.
-                                </h2>
-                            </Reveal>
-                            <div>
-                                <p className="text-[18px] leading-[1.55] text-[#A8A096]">
-                                    Yanqing Jiang works where AI models meet operating reality: data, memory, tools,
-                                    interfaces, guardrails, and ownership. His enterprise perspective comes from
-                                    Advanced Analytics at P&amp;G; his proof comes from systems that run and outcomes
-                                    that can be measured.
-                                </p>
-                                <div className="mt-10 grid gap-6 sm:grid-cols-3">
-                                    {[
-                                        'Measure before modeling.',
-                                        'Integrate before replacing.',
-                                        'Leave ownership behind.',
-                                    ].map((p) => (
-                                        <p key={p} className="border-t border-[#37332E] pt-4 text-[16px] font-semibold text-[#F1EADF]">{p}</p>
+                            <div className="mt-12">
+                                <CarouselTrack>
+                                    {preAiProjects.map((project) => (
+                                        <ProjectCard
+                                            key={project.id}
+                                            project={project}
+                                            year={preAiGroup?.year}
+                                            onSelect={onSelectProject}
+                                            variant="pre"
+                                        />
                                     ))}
-                                </div>
-                                <p className="mt-8 text-[14px] text-[#A8A096]">
-                                    Ship with observability, docs, and a handoff path — no permanent consulting dependency.
-                                </p>
-                                <div className="mt-10">
-                                    <LinkCTA to="/blog">Read Yanqing's writing</LinkCTA>
-                                </div>
+                                </CarouselTrack>
                             </div>
                         </div>
-                    </div>
-                </section>
+                    </section>
+                )}
 
                 {/* ── Section 7 — Final CTA ───────────────────────────── */}
                 <section className="border-t border-[#37332E] bg-[#191816]">
@@ -520,8 +342,8 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                         </p>
                         <div className="mt-12 flex flex-col items-center justify-center gap-5 sm:flex-row">
                             <PrimaryCTA to="/consult">Start a project</PrimaryCTA>
-                            <a href="#process" className="text-[15px] font-semibold text-[#A8A096] transition-colors hover:text-[#F1EADF]">
-                                See how the process works
+                            <a href="#work" className="text-[15px] font-semibold text-[#A8A096] transition-colors hover:text-[#F1EADF]">
+                                See the work
                             </a>
                         </div>
                         <p className="mx-auto mt-10 text-[13px] text-[#A8A096]">
@@ -541,15 +363,13 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
                             </div>
                             <div className="space-y-3">
                                 <p className="text-[12px] uppercase tracking-[0.2em] text-[#A8A096]">Offers</p>
-                                <a href="#build" className="block text-[15px] text-[#A8A096] hover:text-[#F1EADF]">Enterprise agentic pipelines</a>
-                                <a href="#build" className="block text-[15px] text-[#A8A096] hover:text-[#F1EADF]">Embedded AI delivery team</a>
-                                <a href="#build" className="block text-[15px] text-[#A8A096] hover:text-[#F1EADF]">Personal agent OS</a>
-                                <a href="#build" className="block text-[15px] text-[#A8A096] hover:text-[#F1EADF]">Zero-maintenance website</a>
+                                <Link to="/consult?path=enterprise" className="block text-[15px] text-[#A8A096] hover:text-[#F1EADF]">Enterprise workflow</Link>
+                                <Link to="/consult?path=individual" className="block text-[15px] text-[#A8A096] hover:text-[#F1EADF]">Personal Agent OS</Link>
+                                <Link to="/consult?path=training" className="block text-[15px] text-[#A8A096] hover:text-[#F1EADF]">Hands on training</Link>
                             </div>
                             <div className="space-y-3">
                                 <p className="text-[12px] uppercase tracking-[0.2em] text-[#A8A096]">More</p>
-                                <a href="https://www.jiangyanqing.com" target="_blank" rel="noopener noreferrer" className="block text-[15px] text-[#A8A096] hover:text-[#F1EADF]">Work</a>
-                                <Link to="/blog" className="block text-[15px] text-[#A8A096] hover:text-[#F1EADF]">Writing</Link>
+                                <a href="#work" className="block text-[15px] text-[#A8A096] hover:text-[#F1EADF]">The Work</a>
                                 <Link to="/consult" className="block text-[15px] text-[#A8A096] hover:text-[#F1EADF]">Start a project</Link>
                                 <a href="https://www.linkedin.com/in/jiangyanqing/" target="_blank" rel="noopener noreferrer" className="block text-[15px] text-[#A8A096] hover:text-[#F1EADF]">LinkedIn</a>
                                 <a href="https://github.com/Yanqing-Jiang" target="_blank" rel="noopener noreferrer" className="block text-[15px] text-[#A8A096] hover:text-[#F1EADF]">GitHub</a>
@@ -565,53 +385,261 @@ const LandingPageFlow: React.FC<LandingPageFlowProps> = ({ projectData, onSelect
     );
 };
 
-// --- Offer row (two-path offers) ------------------------------------------
-const OfferRow: React.FC<{
-    title: string;
-    tagline: string;
-    body: string;
-    proof?: string;
-    cta: string;
-    to: string;
-}> = ({ title, tagline, body, proof, cta, to }) => (
-    <Reveal>
+// --- Cover media with CSS-drawn fallback ----------------------------------
+// Renders the project cover; when no source exists, draws a flat placeholder
+// (surface bg + hairline + mono label) rather than a broken image.
+const CoverMedia: React.FC<{ src?: string; alt: string; className: string }> = ({ src, alt, className }) => {
+    if (!src) {
+        return (
+            <div className={`${className} flex items-center justify-center bg-[#191816]`}>
+                <span className="px-4 text-center font-mono text-[11px] uppercase tracking-[0.14em] text-[#A8A096]">{alt}</span>
+            </div>
+        );
+    }
+    return <ProjectMedia src={src} alt={alt} className={className} loading="lazy" />;
+};
+
+// --- Horizontal scroll track (dependency-light; snap + hidden scrollbar) ---
+const CarouselTrack: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+    const ref = useRef<HTMLDivElement>(null);
+    const scrollBy = (dir: number) => ref.current?.scrollBy({ left: dir * 560, behavior: 'smooth' });
+    return (
         <div>
-            <h3 className="text-[24px] font-bold tracking-[-0.02em] text-[#F1EADF] sm:text-[28px]">{title}</h3>
-            <p className="mt-1 text-[16px] italic text-[#A8A096]">{tagline}</p>
-            <p className="mt-4 max-w-[46ch] text-[16px] leading-[1.55] text-[#A8A096]">{body}</p>
-            {proof ? <p className="mt-4 text-[15px] font-semibold text-[#F04A32]">{proof}</p> : null}
-            <div className="mt-5">
-                <LinkCTA to={to}>{cta}</LinkCTA>
+            <div className="mb-6 hidden justify-end gap-2 md:flex">
+                <button
+                    type="button"
+                    aria-label="Scroll back"
+                    onClick={() => scrollBy(-1)}
+                    className="flex h-10 w-10 items-center justify-center border border-[#37332E] font-mono text-[15px] text-[#A8A096] transition-colors hover:border-[#A8A096] hover:text-[#F1EADF]"
+                >
+                    ←
+                </button>
+                <button
+                    type="button"
+                    aria-label="Scroll forward"
+                    onClick={() => scrollBy(1)}
+                    className="flex h-10 w-10 items-center justify-center border border-[#37332E] font-mono text-[15px] text-[#A8A096] transition-colors hover:border-[#A8A096] hover:text-[#F1EADF]"
+                >
+                    →
+                </button>
+            </div>
+            <div
+                ref={ref}
+                className="hide-scrollbar flex flex-col gap-12 md:flex-row md:items-stretch md:gap-10 md:overflow-x-auto md:snap-x md:snap-mandatory md:pb-2"
+            >
+                {children}
             </div>
         </div>
-    </Reveal>
+    );
+};
+
+// --- Tag chips -------------------------------------------------------------
+// Year as a leading accent chip, then each technology as its own small mono
+// chip (1px hairline, surface fill) — old-card style recolored to new tokens.
+const TagChips: React.FC<{ year?: number; techs: string[]; align?: 'left' | 'right' }> = ({
+    year,
+    techs,
+    align = 'left',
+}) => (
+    <div className={`flex flex-wrap gap-1.5 ${align === 'right' ? 'lg:justify-end' : ''}`}>
+        {year != null && (
+            <span className="rounded-[3px] border border-[#F04A32]/40 bg-[#F04A32]/10 px-2 py-1 font-mono text-[10px] uppercase leading-none tracking-[0.14em] text-[#F04A32]">
+                {year}
+            </span>
+        )}
+        {techs.map((t) => (
+            <span
+                key={t}
+                className="rounded-[3px] border border-[#37332E] bg-[#191816] px-2 py-1 font-mono text-[10px] uppercase leading-none tracking-[0.14em] text-[#A8A096]"
+            >
+                {t}
+            </span>
+        ))}
+    </div>
 );
 
-// --- System row (selected working systems) --------------------------------
-const SystemRow: React.FC<{
-    kicker: string;
-    title: string;
-    body: string;
-    proof?: string;
-    cta: string;
-    to: string;
-    onClick?: () => void;
-}> = ({ kicker, title, body, proof, cta, to, onClick }) => (
-    <Reveal>
-        <div className="grid gap-6 py-10 lg:grid-cols-[1fr_1.4fr] lg:gap-16">
-            <div>
-                <p className="text-[12px] uppercase tracking-[0.2em] text-[#A8A096]">{kicker}</p>
-                <h3 className="mt-3 text-[26px] font-bold leading-[1.05] tracking-[-0.02em] text-[#F1EADF] sm:text-[32px]">{title}</h3>
+// --- Project card (picture-first; flat + typographic) ----------------------
+const ProjectCard: React.FC<{
+    project: Project;
+    year?: number;
+    onSelect: (project: Project) => void;
+    variant?: 'work' | 'pre';
+}> = ({ project, year, onSelect, variant = 'work' }) => {
+    const isPre = variant === 'pre';
+    const to = project.link ?? `/project/${project.id}`;
+    const techs = project.technologies.slice(0, isPre ? 2 : 3);
+    return (
+        <article className={`group flex w-full max-w-[600px] shrink-0 flex-col md:max-w-none md:snap-start ${isPre ? 'md:w-[320px]' : 'md:w-[420px]'}`}>
+            <Link
+                to={to}
+                onClick={() => onSelect(project)}
+                aria-label={`View ${project.title}`}
+                className="block overflow-hidden rounded-[6px] border border-[#37332E] transition-[transform,border-color,box-shadow] duration-300 ease-out group-hover:-translate-y-1 group-hover:border-[#F04A32]/60 group-hover:shadow-[0_16px_40px_rgba(0,0,0,0.35)]"
+            >
+                <CoverMedia
+                    src={project.coverUrl ?? project.imageUrl}
+                    alt={project.title}
+                    className="aspect-[16/10] w-full object-cover grayscale transition-[filter] duration-500 group-hover:grayscale-0"
+                />
+            </Link>
+            <div className="mt-4">
+                <TagChips year={year} techs={techs} />
+                <h3 className={`mt-3 font-black leading-[1.05] tracking-[-0.03em] text-[#F1EADF] ${isPre ? 'text-[18px]' : 'text-[20px]'}`}>
+                    {project.title}
+                </h3>
+                <p className="mt-2 line-clamp-1 text-[14px] text-[#A8A096]">
+                    {project.cardDescription ?? project.description}
+                </p>
+                <Link
+                    to={to}
+                    onClick={() => onSelect(project)}
+                    className="mt-3 inline-flex items-center gap-2 text-[13px] font-semibold text-[#A8A096] transition-colors group-hover:text-[#F1EADF]"
+                >
+                    {project.linkText ?? 'View project'}
+                    <span className="text-[#F04A32] transition-transform duration-200 group-hover:translate-x-1">→</span>
+                </Link>
             </div>
-            <div>
-                <p className="text-[16px] leading-[1.6] text-[#A8A096]">{body}</p>
-                {proof ? <p className="mt-4 font-mono text-[13px] text-[#A8A096]">{proof}</p> : null}
-                <div className="mt-5">
-                    <LinkCTA to={to} onClick={onClick}>{cta}</LinkCTA>
+        </article>
+    );
+};
+
+// --- Year marker (vertical flow) -------------------------------------------
+// Opens each year group in the vertical timeline. Keeps the old carousel
+// marker's four ingredients: giant ghost numeral, glowing vermilion node,
+// faded vertical hairline, mono era label — restacked for downward reading.
+const YearMarker: React.FC<{ year: number; subtitle?: string }> = ({ year, subtitle }) => (
+    <div className="relative flex flex-col gap-2.5 pt-1">
+        {/* Ghost oversized numeral, bleeding behind the group (scaled down) */}
+        <span
+            aria-hidden
+            className="pointer-events-none absolute -top-6 left-0 select-none bg-gradient-to-b from-[#F1EADF]/[0.07] to-transparent bg-clip-text font-black leading-none text-transparent blur-[1px]"
+            style={{ fontSize: 'clamp(4rem, 9vw, 7rem)' }}
+        >
+            {year}
+        </span>
+        {/* Glowing accent node */}
+        <div className="relative z-10 h-3 w-3 rounded-full bg-[#F04A32]" style={{ boxShadow: '0 0 16px #F04A32' }} />
+        {/* Vertical hairline dropping into the group */}
+        <div className="relative z-10 h-9 w-px bg-gradient-to-b from-[#37332E] to-transparent" />
+        {/* Mono era subtitle (prefixed with the readable year) */}
+        <h3 className="relative z-10 font-mono text-[12px] uppercase tracking-[0.2em] text-[#F04A32]">
+            {year} · {subtitle?.replace(/[()]/g, '') || 'Era'}
+        </h3>
+    </div>
+);
+
+// --- The Work row (editorial, stagger-aligned) -----------------------------
+// Picture-first row: media + content in a 2-col grid on desktop, alternating
+// which side the media sits on (align). Scroll-revealed via <Reveal>. Mobile
+// (<lg): single column, media on top, everything left-aligned (no stagger).
+const WorkRow: React.FC<{
+    project: Project;
+    year: number;
+    align: 'left' | 'right';
+    onSelect: (project: Project) => void;
+}> = ({ project, year, align, onSelect }) => {
+    const to = project.link ?? `/project/${project.id}`;
+    const techs = project.technologies.slice(0, 3);
+    const right = align === 'right';
+    return (
+        <Reveal>
+            <div
+                className={`group flex flex-col gap-4 lg:flex-row lg:items-center lg:gap-10 ${
+                    right ? 'lg:flex-row-reverse' : ''
+                }`}
+            >
+                {/* Media — small (aspect 2/1, ~44% wide on desktop), lifts + colors on hover.
+                    Stacked (<lg) it caps at 600px so its absolute size stays close to the
+                    desktop 44% column — no gigantic full-bleed covers at tablet widths. */}
+                <Link
+                    to={to}
+                    onClick={() => onSelect(project)}
+                    aria-label={`View ${project.title}`}
+                    className="block w-full max-w-[600px] shrink-0 overflow-hidden rounded-[6px] border border-[#37332E] transition-[transform,border-color,box-shadow] duration-300 ease-out group-hover:-translate-y-1 group-hover:border-[#F04A32]/60 group-hover:shadow-[0_16px_40px_rgba(0,0,0,0.35)] lg:w-[44%] lg:max-w-none"
+                >
+                    <CoverMedia
+                        src={project.coverUrl ?? project.imageUrl}
+                        alt={project.title}
+                        className="aspect-[2/1] w-full object-cover grayscale transition-[filter] duration-500 group-hover:grayscale-0"
+                    />
+                </Link>
+                {/* Content */}
+                <div className={`lg:flex-1 ${right ? 'lg:text-right' : ''}`}>
+                    <TagChips year={year} techs={techs} align={right ? 'right' : 'left'} />
+                    <h3 className="mt-3 font-black leading-[1.05] tracking-[-0.03em] text-[#F1EADF] text-[22px] lg:text-[26px]">
+                        {project.title}
+                    </h3>
+                    <p className={`mt-2 max-w-[46ch] text-[15px] leading-[1.5] text-[#A8A096] ${right ? 'lg:ml-auto' : ''}`}>
+                        {project.cardDescription ?? project.description}
+                    </p>
+                    <Link
+                        to={to}
+                        onClick={() => onSelect(project)}
+                        className={`mt-3 inline-flex items-center gap-2 text-[13px] font-semibold text-[#A8A096] transition-colors group-hover:text-[#F1EADF] ${
+                            right ? 'lg:flex-row-reverse' : ''
+                        }`}
+                    >
+                        {project.linkText ?? 'View project'}
+                        <span className="text-[#F04A32] transition-transform duration-200 group-hover:translate-x-1">→</span>
+                    </Link>
                 </div>
             </div>
-        </div>
-    </Reveal>
-);
+        </Reveal>
+    );
+};
+
+// --- The Work section ------------------------------------------------------
+// Normal vertical scroll. Each year group opens with a <YearMarker>, then its
+// projects render as stagger-aligned editorial rows (alternating left/right on
+// desktop, single column on mobile). Scroll reveals respect reduced motion.
+const WorkCarousel: React.FC<{
+    displayYears: ProjectYear[];
+    onSelect: (project: Project) => void;
+}> = ({ displayYears, onSelect }) => {
+    // Flatten to markers + project rows, tagging each project row's alignment so
+    // the stagger alternates across the whole section (not per-year).
+    const rows = useMemo(() => {
+        const out: Array<
+            | { kind: 'marker'; key: string; year: number; subtitle?: string }
+            | { kind: 'project'; key: string; project: Project; year: number; align: 'left' | 'right' }
+        > = [];
+        let i = 0;
+        for (const group of displayYears) {
+            out.push({ kind: 'marker', key: `year-${group.year}`, year: group.year, subtitle: group.subtitle });
+            for (const project of group.projects) {
+                out.push({
+                    kind: 'project',
+                    key: project.id,
+                    project,
+                    year: group.year,
+                    align: i % 2 === 0 ? 'left' : 'right',
+                });
+                i += 1;
+            }
+        }
+        return out;
+    }, [displayYears]);
+
+    return (
+        <section id="work" className="border-t border-[#37332E] bg-[#191816]">
+            <div className="mx-auto max-w-[1280px] px-6 py-24 lg:px-10 lg:py-32">
+                <Reveal>
+                    <h2 className="font-black tracking-[-0.04em] text-[#F1EADF]" style={{ fontSize: 'clamp(40px, 7vw, 88px)' }}>
+                        The Work<span className="text-[#F04A32]">.</span>
+                    </h2>
+                </Reveal>
+                <div className="mt-12 flex flex-col gap-10 lg:mt-14 lg:gap-14">
+                    {rows.map((row) =>
+                        row.kind === 'marker' ? (
+                            <YearMarker key={row.key} year={row.year} subtitle={row.subtitle} />
+                        ) : (
+                            <WorkRow key={row.key} project={row.project} year={row.year} align={row.align} onSelect={onSelect} />
+                        )
+                    )}
+                </div>
+            </div>
+        </section>
+    );
+};
 
 export default LandingPageFlow;

@@ -15,13 +15,13 @@ import { DEFAULT_OG_IMAGE } from '@/constants/seo';
 /*
  * /consult — Phase 1 "Prices on the door" booking.
  * De-walled: no sign-in required. Visible pricing ($50/$90, kept exactly).
- * Enterprise fit call is FREE. A short REQUIRED context form runs before the
- * calendar; its answers ride in `notes` and are copied to both intake
- * recipients server-side (D5). Locked visual system: charcoal / bone /
- * single vermilion accent — no blue, purple, or amber.
+ * The first 30-minute call is FREE for every path. A short REQUIRED context
+ * form runs before the calendar; its answers ride in `notes` and are copied
+ * to both intake recipients server-side (D5). Locked visual system: charcoal /
+ * bone / single vermilion accent — no blue, purple, or amber.
  */
 
-// 'fit' = free enterprise fit call (30 min). '30'/'60' = paid working sessions.
+// 'fit' = free first call (30 min). '30'/'60' = paid follow-up working sessions.
 type Offering = 'fit' | '30' | '60';
 
 interface OfferingDef {
@@ -37,12 +37,12 @@ interface OfferingDef {
 const OFFERINGS: OfferingDef[] = [
     {
         id: 'fit',
-        label: 'Enterprise fit call',
+        label: 'First call',
         duration: '30 min',
         priceLabel: 'Free',
         free: true,
-        blurb: 'A qualification call for teams. We confirm the problem is a fit, and what a scoped build would look like.',
-        features: ['Is this a fit?', 'Rough shape of a build', 'What scoping would cost'],
+        blurb: 'A focused first conversation for any path. We clarify the outcome, current setup, and the right next step.',
+        features: ['Clarify the problem', 'Review the current setup', 'Choose the right next step'],
     },
     {
         id: '30',
@@ -67,7 +67,7 @@ const OFFERINGS: OfferingDef[] = [
 const FAQ = [
     {
         q: 'What happens after I book?',
-        a: "You'll receive a confirmation email with a Google Meet link and a calendar invitation. The enterprise fit call is free; working sessions are paid at booking.",
+        a: "You'll receive a confirmation email with a Google Meet link and a calendar invitation. Your first 30-minute call is free; follow-up working sessions are paid at booking.",
     },
     {
         q: 'Can I reschedule or cancel?',
@@ -75,7 +75,7 @@ const FAQ = [
     },
     {
         q: 'What about a full build?',
-        a: 'Builds receive a fixed proposal after scoping — no hourly meter. Start with a fit call or a working session and we size it from the actual problem.',
+        a: 'Builds receive a fixed proposal after scoping — no hourly meter. Start with the free 30-minute call and we size the next step from the actual problem.',
     },
 ];
 
@@ -85,8 +85,8 @@ const slotSessionType = (offering: Offering): '30' | '60' => (offering === '60' 
 const OFFER_LABELS: Record<string, string> = {
     pipeline: 'Enterprise agentic pipelines',
     'delivery-team': 'Embedded AI delivery team',
-    'personal-agent': 'Personal agent OS',
-    website: 'Zero-maintenance personal website',
+    'personal-agent': 'Personal Agent OS',
+    website: 'Agent-managed personal website',
 };
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -103,12 +103,15 @@ const readIntent = (): { path: string | null; offer: string | null; context: str
     return { path: p.get('path'), offer: p.get('offer'), context: p.get('context') };
 };
 
-// Offer intent is finer-grained than path: pipeline/delivery-team are
-// enterprise (free fit call); personal-agent/website are individual (working
-// session). Returns null when nothing was specified (generic entry).
+// Every recognized landing intent starts with the same free 30-minute call.
+// Returns null when nothing was specified (generic entry).
 const intentToOffering = (path: string | null, offer: string | null): Offering | null => {
-    if (offer === 'personal-agent' || offer === 'website' || path === 'individual' || path === 'personal') return '30';
-    if (offer === 'pipeline' || offer === 'delivery-team' || path === 'enterprise' || path === 'business') return 'fit';
+    if (
+        offer === 'personal-agent' || offer === 'website' ||
+        offer === 'pipeline' || offer === 'delivery-team' ||
+        path === 'individual' || path === 'personal' ||
+        path === 'enterprise' || path === 'business' || path === 'training'
+    ) return 'fit';
     return null;
 };
 
@@ -125,18 +128,14 @@ export const ConsultingPage: React.FC = () => {
             : ''
     );
     const [today, setToday] = useState('');
-    const [useful, setUseful] = useState('');
     const [name, setName] = useState('');
     const [email, setEmail] = useState('');
     const [company, setCompany] = useState('');
 
     // Buyer intent from landing (?path=&offer=), preserved into notes/preselect.
+    // A param-less entry starts null and is filled by the chat's own path fork.
     const [pathIntent, setPathIntent] = useState<string | null>(initialIntent.path);
     const offerIntent = initialIntent.offer; // never changes after mount
-    // Generic (param-less) entry opens with the business-vs-personal fork before
-    // the priced cards. Derived synchronously from the URL so a param'd entry
-    // never renders the chooser (no flash). Param-less entry keeps it as first render.
-    const [showFork, setShowFork] = useState<boolean>(() => !(initialIntent.path || initialIntent.offer));
 
     // Phase 2 — AI Brief Agent. Chat-first when a path is known; falls back to
     // the guided form on agent failure (progressive enhancement). `briefNotes`
@@ -151,9 +150,13 @@ export const ConsultingPage: React.FC = () => {
     const [selectedDate, setSelectedDate] = useState<string | null>(null);
     const [selectedTime, setSelectedTime] = useState<string | null>(null);
 
+    // Set by the chat handoff: book as soon as the lifted slot + contact validate.
+    const [autoBook, setAutoBook] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [freeConfirmed, setFreeConfirmed] = useState<{ slot: string; meetLink?: string | null } | null>(null);
+    const [freeConfirmed, setFreeConfirmed] = useState<{
+        slot: string; meetLink?: string | null; emailSent?: boolean;
+    } | null>(null);
     const [confirmationSessionId, setConfirmationSessionId] = useState<string | null>(null);
 
     // Stripe redirect confirmation (post-mount is fine — it swaps the whole view).
@@ -174,22 +177,26 @@ export const ConsultingPage: React.FC = () => {
 
     const emailValid = EMAIL_RE.test(email.trim());
     // In brief mode the rich context came from the chat, so only name + a valid
-    // email are still required; in form mode all three context fields are.
+    // email are still required; in form mode the two core questions are too.
+    // Company is always optional. Scheduling stays hidden until this holds.
     const contextValid = briefNotes
         ? !!(name.trim() && emailValid)
-        : !!(improve.trim() && today.trim() && useful.trim() && name.trim() && emailValid);
+        : !!(improve.trim() && today.trim() && name.trim() && emailValid);
     const canSubmit = !!(selected && contextValid && selectedTime);
 
-    // The chat interviews for 'business' | 'individual'; map the buyer path.
-    const chatPath: 'business' | 'individual' | null =
+    // Map landing aliases to the three intake paths.
+    const chatPath: 'business' | 'individual' | 'training' | null =
         pathIntent === 'business' || pathIntent === 'enterprise'
             ? 'business'
-            : pathIntent === 'individual' || pathIntent === 'personal'
-                ? 'individual'
-                : null;
-    // Show the chat when: a path is known, chat isn't disabled, no brief captured
-    // yet, and we're not on a confirmation screen.
-    const showChat = !!(chatPath && useChat && !briefNotes && !freeConfirmed && !confirmationSessionId);
+            : pathIntent === 'training'
+                ? 'training'
+                : pathIntent === 'individual' || pathIntent === 'personal'
+                    ? 'individual'
+                    : null;
+    // Show the chat whenever it isn't disabled, no brief is captured yet, and
+    // we're not on a confirmation screen. An unknown path is fine — the chat
+    // asks for it first (`chatPath` is null until then).
+    const showChat = !!(useChat && !briefNotes && !freeConfirmed && !confirmationSessionId);
 
     const formatSlotTime = (iso: string) => {
         try {
@@ -197,6 +204,19 @@ export const ConsultingPage: React.FC = () => {
                 hour: 'numeric',
                 minute: '2-digit',
                 timeZoneName: 'short',
+            }).format(new Date(iso));
+        } catch {
+            return iso;
+        }
+    };
+
+    // The confirmation needs the day too — the grid buttons don't, they sit under
+    // a date the visitor just clicked.
+    const formatSlotDateTime = (iso: string) => {
+        try {
+            return new Intl.DateTimeFormat('en-US', {
+                weekday: 'long', month: 'long', day: 'numeric',
+                hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
             }).format(new Date(iso));
         } catch {
             return iso;
@@ -221,24 +241,45 @@ export const ConsultingPage: React.FC = () => {
             `What are you trying to improve?\n${improve.trim()}`,
             '',
             `What happens today?\n${today.trim()}`,
-            '',
-            `What would make the conversation useful?\n${useful.trim()}`,
         ].filter((l) => l !== null);
         return lines.join('\n').slice(0, 1990);
     };
 
-    // Chat completed: attach the reviewed brief + its signed session (used to
-    // authorize persistence at book time), preselect the recommended step, and
-    // drop into the booking cards + scheduling. Persistence happens at book time
-    // (once name/email exist) so the stored row can carry contact + booking id.
-    const handleBriefReady = (notes: string, recommendedNextStep: string, brief: Brief, session: string | null) => {
+    // Chat completed: attach the reviewed brief + its signed session and preselect
+    // the universal free first call. Persistence happens at book time (once
+    // name/email exist) so the stored row can carry contact + booking id.
+    const handleBriefReady = (notes: string, _recommendedNextStep: string, brief: Brief, session: string | null) => {
         setBriefNotes(notes);
         setBriefObj(brief);
         setBriefSession(session);
-        if (recommendedNextStep === 'fit' || recommendedNextStep === '30' || recommendedNextStep === '60') {
-            setSelected(recommendedNextStep as Offering);
-        }
+        setSelected('fit');
         setUseChat(false);
+    };
+
+    // A2UI calendar handoff: every intake path is a free 30-minute first call.
+    // Attach the brief and flow the picked slot into the normal confirm step.
+    const handleCalendarPick = ({ date, time, notes, brief, session }: {
+        date: string; time: string; sessionType: 'fit' | '30' | '60';
+        notes: string; brief: Brief; session: string | null;
+    }) => {
+        setBriefNotes(notes);
+        setBriefObj(brief);
+        setBriefSession(session);
+        setSelected('fit');
+        setSelectedDate(date);
+        setSelectedTime(time);
+        setUseChat(false);
+        // The chat's CTA already reads "Book the free 30-min call", so the handoff
+        // must complete the booking — not park the prospect on a second button.
+        setAutoBook(true);
+    };
+
+    // A2UI contact handoff: the chat's contact block fills the page's own
+    // name/email/company state (same fields the guided form owns).
+    const handleContact = ({ name: n, email: e, company: c }: { name: string; email: string; company: string }) => {
+        if (n) setName(n);
+        if (e) setEmail(e);
+        if (c) setCompany(c);
     };
 
     // Chat/endpoint failure: switch to the guided form and carry over whatever
@@ -247,8 +288,6 @@ export const ConsultingPage: React.FC = () => {
         if (partial) {
             if (partial.desired_outcome && !improve.trim()) setImprove(partial.desired_outcome);
             if (partial.current_workflow && !today.trim()) setToday(partial.current_workflow);
-            const usefulSeed = partial.success_metric || partial.people_and_frequency;
-            if (usefulSeed && !useful.trim()) setUseful(usefulSeed);
         }
         setFallbackNotice(true);
         setUseChat(false);
@@ -291,7 +330,7 @@ export const ConsultingPage: React.FC = () => {
             const intakeBriefId = await persistBrief(backendUrl);
 
             if (selected === 'fit') {
-                // Free enterprise fit call — direct booking, no payment.
+                // Free first call — direct booking, no payment.
                 const res = await fetch(`${backendUrl}/api/booking/free`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -302,7 +341,13 @@ export const ConsultingPage: React.FC = () => {
                     throw new Error(data.detail || `Booking failed (${res.status})`);
                 }
                 const data = await res.json();
-                setFreeConfirmed({ slot: selectedTime, meetLink: data.meet_link });
+                setFreeConfirmed({
+                    slot: selectedTime,
+                    meetLink: data.meet_link,
+                    // Older responses have no notification_status; absent means
+                    // "unknown", which we treat as sent rather than alarming.
+                    emailSent: data.notification_status?.requestor_email !== 'failed',
+                });
             } else {
                 // Paid working session — Stripe checkout (guest, no sign-in).
                 const res = await fetch(`${backendUrl}/api/booking/checkout`, {
@@ -324,10 +369,18 @@ export const ConsultingPage: React.FC = () => {
         }
     };
 
+    // One-tap booking from the chat: the slot and contact details arrive in the
+    // same click, so wait for them to validate, then submit exactly once.
+    useEffect(() => {
+        if (!autoBook || isSubmitting || freeConfirmed || !canSubmit) return;
+        setAutoBook(false);
+        void handleBook();
+    }, [autoBook, canSubmit, isSubmitting, freeConfirmed]);
+
     const seo = useMemo(() => ({
-        title: 'Start an AI System Project | Yanqing Jiang',
+        title: 'Book an AI Agent System Call | Yanqing Jiang',
         description:
-            'Book the right conversation with Yanqing Jiang: a free enterprise fit call or a paid working session. Prices and availability are visible — no sign-in required.',
+            'Book a free 30-minute call with Yanqing Jiang, AI agent system builder — enterprise agent workflows, a personal agent OS, or hands-on training on the agentic stack. No sign-in required.',
     }), []);
 
     // Stripe redirect confirmation view
@@ -381,79 +434,37 @@ export const ConsultingPage: React.FC = () => {
                     Book the right conversation<span className="text-[#F04A32]">.</span>
                 </h1>
                 <p className="mt-6 max-w-[54ch] text-[18px] leading-[1.5] text-[#A8A096]">
-                    Choose a call, add the context first, and the time starts with your problem — not introductions.
+                    Answer 2 quick questions to book time with me — my intake agent handles the booking.
                 </p>
-                <p className="mt-4 text-[13px] text-[#A8A096]">No sign-in. Prices and availability are visible.</p>
             </section>
 
-            {/* Generic entry: business-workflow vs personal-system fork */}
-            {showFork && (
-                <section className="mx-auto max-w-[1080px] px-6 pb-4">
-                    <p className="mb-6 text-[15px] font-semibold text-[#F1EADF]">What are you trying to improve?</p>
-                    <div className="grid gap-5 sm:grid-cols-2">
-                        {[
-                            {
-                                key: 'enterprise', pick: 'fit' as Offering,
-                                label: 'A business workflow',
-                                blurb: 'Remove expensive work from an operating process and put a metric on it. Starts with a free fit call.',
-                            },
-                            {
-                                key: 'individual', pick: '30' as Offering,
-                                label: 'My personal system',
-                                blurb: 'A personal agent that remembers you, or a zero-maintenance site. Starts with a working session.',
-                            },
-                        ].map((f) => (
-                            <button
-                                key={f.key}
-                                onClick={() => {
-                                    setPathIntent(f.key);
-                                    setSelected(f.pick);
-                                    setSelectedTime(null);
-                                    setFreeConfirmed(null);
-                                    setShowFork(false);
-                                }}
-                                className="text-left rounded-[6px] border border-[#37332E] bg-[#191816]/40 p-7 transition-colors hover:border-[#F04A32]"
-                            >
-                                <h2 className="text-[24px] font-bold text-[#F1EADF]">{f.label}</h2>
-                                <p className="mt-3 text-[15px] leading-[1.5] text-[#A8A096]">{f.blurb}</p>
-                                <span className="mt-5 inline-flex items-center gap-2 text-[14px] font-semibold text-[#F1EADF]">
-                                    Choose <span className="text-[#F04A32]">→</span>
-                                </span>
-                            </button>
-                        ))}
-                    </div>
+            {/* AI Brief Agent — chat-first intake (Phase 2). The path fork lives
+                INSIDE the chat now: with no ?path= intent it opens by asking
+                "What are you trying to improve?" as tappable choices. */}
+            {showChat && (
+                <section className="mx-auto max-w-[1080px] px-6 pb-8">
+                    <IntakeChat
+                        path={chatPath}
+                        onComplete={handleBriefReady}
+                        onFallback={handleChatFallback}
+                        onPathSelect={(p) => { setPathIntent(p); setSelected('fit'); setSelectedTime(null); setFreeConfirmed(null); }}
+                        onCalendarPick={handleCalendarPick}
+                        onContact={handleContact}
+                    />
                     <p className="mt-6 text-[14px] text-[#A8A096]">
-                        Not sure?{' '}
-                        <button onClick={() => setShowFork(false)} className="font-semibold text-[#F1EADF] underline decoration-[#F04A32] decoration-2 underline-offset-4">
-                            See all three calls and prices →
+                        <button onClick={() => { setSelected(selected ?? 'fit'); setUseChat(false); }} className="font-semibold text-[#F1EADF] underline decoration-[#F04A32] decoration-2 underline-offset-4">
+                            Rather not chat? Use the quick form →
                         </button>
                     </p>
                 </section>
             )}
 
-            {/* AI Brief Agent — chat-first intake (Phase 2) */}
-            {showChat && chatPath && (
-                <section className="mx-auto max-w-[1080px] px-6 pb-8">
-                    <div className="mb-6">
-                        <h2 className="text-[22px] font-bold text-[#F1EADF]">Tell the agent what should work better.</h2>
-                        <p className="mt-2 max-w-[60ch] text-[15px] text-[#A8A096]">
-                            In a few minutes it will ask the questions Yanqing needs, build a brief you can edit, and route you to the right next step. No sign-in. Don't share confidential data or credentials.
-                        </p>
-                    </div>
-                    <IntakeChat
-                        path={chatPath}
-                        onComplete={handleBriefReady}
-                        onFallback={handleChatFallback}
-                    />
-                </section>
-            )}
-
             {/* Offering cards */}
-            {!showFork && !showChat && (
+            {!showChat && (
             <section className="mx-auto max-w-[1080px] px-6 pb-4">
                 {fallbackNotice && (
                     <p className="mb-6 inline-block rounded-[4px] border border-[#37332E] bg-[#191816] px-4 py-2 text-[13px] text-[#A8A096]">
-                        The intake agent is unavailable — use the quick form below. Anything you already told the agent is carried over.
+                        The intake agent is temporarily unavailable — use the quick form below. Anything you already told the agent is carried over.
                     </p>
                 )}
                 {briefNotes && (
@@ -549,26 +560,21 @@ export const ConsultingPage: React.FC = () => {
                                         Keep details high level. Do not include confidential data or credentials.
                                     </p>
                                 </div>
-                                <FormField label="What are you trying to improve?">
+                                <FormField label="What are you trying to improve?" required>
                                     <textarea rows={2} value={improve} onChange={(e) => setImprove(e.target.value)}
                                         maxLength={600} className={inputClass + ' resize-none'}
                                         placeholder="The process, system, or outcome you want to change" />
                                 </FormField>
-                                <FormField label="What happens today?">
+                                <FormField label="What happens today?" required>
                                     <textarea rows={2} value={today} onChange={(e) => setToday(e.target.value)}
                                         maxLength={600} className={inputClass + ' resize-none'}
                                         placeholder="How it works now, who does it, roughly how long it takes" />
                                 </FormField>
-                                <FormField label="What would make the conversation useful?">
-                                    <textarea rows={2} value={useful} onChange={(e) => setUseful(e.target.value)}
-                                        maxLength={600} className={inputClass + ' resize-none'}
-                                        placeholder="What you'd want to walk away with" />
-                                </FormField>
                                 <div className="grid gap-4 sm:grid-cols-2">
                                     <input type="text" value={name} onChange={(e) => setName(e.target.value)}
-                                        maxLength={100} className={inputClass} placeholder="Name" />
+                                        maxLength={100} className={inputClass} placeholder="Name *" aria-label="Name (required)" />
                                     <input type="email" value={email} onChange={(e) => setEmail(e.target.value)}
-                                        className={inputClass} placeholder="Email" />
+                                        className={inputClass} placeholder="Email *" aria-label="Email (required)" />
                                 </div>
                                 <input type="text" value={company} onChange={(e) => setCompany(e.target.value)}
                                     maxLength={120} className={inputClass} placeholder="Company (optional)" />
@@ -579,14 +585,21 @@ export const ConsultingPage: React.FC = () => {
                             <div className="space-y-6">
                                 <div>
                                     <h2 className="text-[22px] font-bold text-[#F1EADF]">Pick a time</h2>
-                                    <p className="mt-2 text-[13px] text-[#A8A096]">Mon–Fri 1–5pm PT · Sat–Sun 1–4:30pm PT</p>
+                                    <p className="mt-2 text-[13px] text-[#A8A096]">Mon–Fri 8am–4pm PT (selected windows) · Sat–Sun 1–4pm PT</p>
                                 </div>
-                                {!contextValid && (
-                                    <p className="text-[13px] text-[#A8A096]">
-                                        {briefNotes ? 'Add your name and email to unlock scheduling.' : 'Fill in the context on the left to unlock scheduling.'}
-                                    </p>
-                                )}
-                                <div className={contextValid ? '' : 'pointer-events-none opacity-40'}>
+                                {/* The calendar is not rendered at all until the
+                                    required fields are in — a dimmed-but-visible
+                                    picker invited clicks that silently did nothing. */}
+                                {!contextValid ? (
+                                    <div className="rounded-[6px] border border-dashed border-[#37332E] bg-[#191816]/30 p-6">
+                                        <p className="text-[13px] text-[#A8A096]">
+                                            {briefNotes
+                                                ? 'Add your name and email, then the calendar opens here.'
+                                                : 'Answer the two questions and add your name and email — the calendar opens here.'}
+                                        </p>
+                                    </div>
+                                ) : (
+                                <div>
                                     <CalendarPicker
                                         selectedDate={selectedDate}
                                         onSelectDate={(d) => { setSelectedDate(d); setSelectedTime(null); }}
@@ -624,6 +637,7 @@ export const ConsultingPage: React.FC = () => {
                                         </div>
                                     )}
                                 </div>
+                                )}
 
                                 {error && <p className="text-[14px] text-[#F04A32]">{error}</p>}
 
@@ -637,7 +651,7 @@ export const ConsultingPage: React.FC = () => {
                                             <Loader2 className="h-5 w-5 animate-spin" /> Processing…
                                         </span>
                                     ) : selected === 'fit' ? (
-                                        'Book the free fit call'
+                                        'Book the free 30-min call'
                                     ) : (
                                         `Confirm & pay ${activeOffering?.priceLabel}`
                                     )}
@@ -659,14 +673,22 @@ export const ConsultingPage: React.FC = () => {
                     <CheckCircle2 className="mx-auto h-12 w-12 text-[#F04A32]" />
                     <h2 className="mt-6 text-[28px] font-black tracking-[-0.02em] text-[#F1EADF]">You're booked.</h2>
                     <p className="mt-4 text-[16px] text-[#A8A096]">
-                        Your free enterprise fit call is confirmed for {formatSlotTime(freeConfirmed.slot)}. A
-                        confirmation email with the calendar invite{freeConfirmed.meetLink ? ' and Google Meet link' : ''} is on its way.
+                        Your free 30-minute call is confirmed for {formatSlotDateTime(freeConfirmed.slot)}.
+                        {freeConfirmed.emailSent === false
+                            ? ' The calendar invite is on your calendar, but we could not send the confirmation email — save the link below.'
+                            : ` A confirmation email with the calendar invite${freeConfirmed.meetLink ? ' and Google Meet link' : ''} is on its way.`}
                     </p>
-                    {freeConfirmed.meetLink && (
+                    {freeConfirmed.meetLink ? (
                         <a href={freeConfirmed.meetLink} target="_blank" rel="noopener noreferrer"
                             className="mt-6 inline-block font-semibold text-[#F04A32] hover:underline">
                             {freeConfirmed.meetLink}
                         </a>
+                    ) : (
+                        /* No Meet link means the room never provisioned; don't let the
+                           prospect leave thinking they have a joining link. */
+                        <p className="mt-6 text-[14px] text-[#A8A096]">
+                            The video link is still being created — it will appear on the calendar invite.
+                        </p>
                     )}
                     <div className="mt-8">
                         <Link to="/" className="text-[14px] text-[#A8A096] hover:text-[#F1EADF]">← Back to site</Link>
@@ -690,9 +712,11 @@ export const ConsultingPage: React.FC = () => {
     );
 };
 
-const FormField: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
+const FormField: React.FC<{ label: string; required?: boolean; children: React.ReactNode }> = ({ label, required, children }) => (
     <label className="block">
-        <span className="mb-2 block text-[13px] font-medium text-[#F1EADF]">{label}</span>
+        <span className="mb-2 block text-[13px] font-medium text-[#F1EADF]">
+            {label}{required && <span className="ml-1 text-[#F04A32]" aria-hidden="true">*</span>}
+        </span>
         {children}
     </label>
 );

@@ -566,7 +566,7 @@ class BookingCheckoutRequest(BaseModel):
 class IntakeMessageRequest(BaseModel):
     # The next user reply only. History is server-owned inside the signed
     # `session` token; the client cannot forge past turns or the turn count.
-    path: Literal["business", "individual"]
+    path: Literal["business", "individual", "training"]
     # Cap sits above the true max token size (see intake_agent.MAX_SESSION_TOKEN_CHARS);
     # the old 16 KB cap 422'd valid server-issued tokens once the transcript grew.
     session: Optional[str] = Field(None, max_length=MAX_SESSION_TOKEN_CHARS)
@@ -586,8 +586,8 @@ class IntakeBriefRequest(BaseModel):
 
 
 class FreeConsultRequest(BaseModel):
-    """Free enterprise fit-call booking (no payment). Mirrors the paid
-    checkout request but skips Stripe — the slot is confirmed directly."""
+    """Free first-call booking (no payment). Mirrors the paid checkout
+    request but skips Stripe — the 30-minute slot is confirmed directly."""
     slot_start: str  # ISO 8601 with timezone
     name: str = Field(..., min_length=1, max_length=100)
     email: EmailStr
@@ -1749,7 +1749,7 @@ async def _assert_slot_offered(slot_start: "_DateTime") -> None:
 
 @app.post("/api/booking/free")
 async def create_free_consult(req: FreeConsultRequest, request: Request):
-    """Book a FREE enterprise fit call (no payment).
+    """Book a FREE first 30-minute call (no payment).
 
     De-walled direct booking. The slot is server-side revalidated against the
     same availability source as the paid flow, rate-limited per IP, and only
@@ -1878,6 +1878,17 @@ async def create_free_consult(req: FreeConsultRequest, request: Request):
                     )
             except Exception:
                 pass
+        # A prospect reached the last click and got nothing. Without this the
+        # attempt is invisible — no booking row, no email, no Telegram.
+        try:
+            await send_admin_booking_alert(
+                name=req.name, email=req.email,
+                session_type="fit", slot_start=req.slot_start,
+                notes=req.notes, meet_link=None,
+                failure_reason=f"Calendar event creation failed: {exc}",
+            )
+        except Exception as alert_exc:
+            logger.error("[BOOKING] Failed-attempt alert also failed: %s", alert_exc)
         raise HTTPException(
             status_code=502,
             detail="We couldn't confirm that time on the calendar. Please pick another slot — you have not been booked.",
@@ -1913,8 +1924,12 @@ async def create_free_consult(req: FreeConsultRequest, request: Request):
     except Exception as exc:
         logger.error("[BOOKING] Telegram notification failed (non-blocking): %s", exc)
 
+    # Both senders return False instead of raising, so the return value is the
+    # ONLY signal that an email actually went out. Ignoring it made "confirmed"
+    # mean "the DB row was written", not "both parties were told".
+    owner_emailed = False
     try:
-        await send_admin_booking_alert(
+        owner_emailed = await send_admin_booking_alert(
             name=req.name, email=req.email,
             session_type="fit", slot_start=req.slot_start,
             notes=req.notes, meet_link=meet_link,
@@ -1922,8 +1937,9 @@ async def create_free_consult(req: FreeConsultRequest, request: Request):
     except Exception as exc:
         logger.error("[BOOKING] Admin email alert failed (non-blocking): %s", exc)
 
+    requestor_emailed = False
     try:
-        await send_booking_confirmation_email(
+        requestor_emailed = await send_booking_confirmation_email(
             name=req.name, email=req.email,
             session_type="30", slot_start=req.slot_start, meet_link=meet_link,
             notes=req.notes,
@@ -1931,11 +1947,25 @@ async def create_free_consult(req: FreeConsultRequest, request: Request):
     except Exception as exc:
         logger.error("[BOOKING] Confirmation email failed (non-blocking): %s", exc)
 
+    if not owner_emailed or not requestor_emailed:
+        logger.error(
+            "[BOOKING] Booking %s confirmed but notifications incomplete "
+            "(owner=%s requestor=%s meet_link=%s) — the event exists, tell "
+            "%s manually.",
+            booking_id, owner_emailed, requestor_emailed, bool(meet_link), req.email,
+        )
+
     return JSONResponse(content={
         "id": booking_id,
         "status": "confirmed",
         "meet_link": meet_link,
         "slot_start": req.slot_start,
+        # The UI promises "a confirmation email is on its way" — it may only say
+        # that when one actually was.
+        "notification_status": {
+            "owner_email": "sent" if owner_emailed else "failed",
+            "requestor_email": "sent" if requestor_emailed else "failed",
+        },
     })
 
 
@@ -2054,7 +2084,7 @@ async def intake_message(req: IntakeMessageRequest, request: Request):
             # Tampered or expired token — restart cleanly (client falls back or reseeds).
             raise HTTPException(status_code=400, detail="intake_session_invalid")
         # Path is fixed by the session, not the per-request field.
-        if state.get("path") not in ("business", "individual"):
+        if state.get("path") not in ("business", "individual", "training"):
             raise HTTPException(status_code=400, detail="intake_session_invalid")
         # Reject unbound legacy tokens (no sid/iat) outright — they'd bypass
         # expiry + the ledger. Then atomically reserve this turn BEFORE any model
@@ -2067,25 +2097,23 @@ async def intake_message(req: IntakeMessageRequest, request: Request):
         state = intake_new_state(req.path)
         reserved = None
 
-    # Server-enforced turn cap — cannot be bypassed by the client.
+    # Server-enforced turn cap — cannot be bypassed by the client. run_turn already
+    # ends the interview AT the last allowed answer, so reaching here means a client
+    # kept talking past that. Answer with the same terminal state (complete + the
+    # booking UI) rather than a dead end: the round budget is spent either way.
     if int(state.get("turns", 0)) >= MAX_USER_TURNS:
         brief = state.get("brief", {}) or {}
-        # Enforce the min-useful-brief invariant on the cap path too: a thin brief
-        # forced to the cap is NOT complete — the client hands off to the guided
-        # form (carrying the partial brief) rather than booking on one field.
-        capped_complete = intake_min_brief_ok(state.get("path"), brief)
-        reply = (
-            "I've got enough to prepare your brief. Review it on the right, correct anything I misread, then choose how to book below."
-            if capped_complete else
-            "We've covered a lot of ground. Let me hand you to a short form to capture the last details so Yanqing has what he needs."
-        )
         return JSONResponse(content={
-            "reply": reply,
+            "reply": "I've got enough to prepare your brief. Review it, correct anything I misread, then pick a time below.",
             "brief": brief,
             "quick_replies": [],
-            "complete": capped_complete,
-            "recommended_next_step": "fit" if state.get("path") == "business" else "30",
-            "session": intake_sign_session(intake_fit_session({**state, "complete": capped_complete})),
+            "complete": True,
+            "recommended_next_step": "fit",
+            "ui": [
+                {"kind": "calendar", "session_type": "fit"},
+                {"kind": "contact"},
+            ],
+            "session": intake_sign_session(intake_fit_session({**state, "complete": True})),
             "capped": True,
         })
 
@@ -2120,7 +2148,7 @@ async def intake_store_brief(req: IntakeBriefRequest, request: Request):
     if state is None:
         raise HTTPException(status_code=400, detail="intake_session_invalid")
     _require_bound_session(state)
-    path = state.get("path") if state.get("path") in ("business", "individual") else "unknown"
+    path = state.get("path") if state.get("path") in ("business", "individual", "training") else "unknown"
 
     # Re-validate + clamp the (client-edited) brief server-side.
     brief = intake_clamp_brief(req.brief)
@@ -2519,8 +2547,8 @@ async def cancel_booking(booking_id: str, req: CancelBookingRequest, auth: Parse
             slot_start=str(slot_start),
             status=f"CANCELLED ({new_status})",
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.error("[BOOKING] Cancellation notification failed: %s", exc)
 
     if refund_id:
         return CancelBookingResponse(
@@ -2662,8 +2690,8 @@ async def reschedule_booking(booking_id: str, req: RescheduleBookingRequest, aut
             slot_start=req.new_slot_start,
             status="RESCHEDULED",
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.error("[BOOKING] Reschedule notification failed: %s", exc)
 
     return RescheduleBookingResponse(
         success=True,

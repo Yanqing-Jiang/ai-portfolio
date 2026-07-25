@@ -22,6 +22,10 @@ export interface ServiceDefinition {
   serviceType?: string;
   keywords?: string[];
   areaServed?: string;
+  // Set only where a price is actually published on the site (the free intro
+  // call). Omitted => the Offer carries no price claim.
+  price?: string;
+  priceCurrency?: string;
 }
 
 export interface NavigationDefinition {
@@ -120,7 +124,7 @@ export const buildWebsiteSchema = (projects: Project[]) => {
 export const buildServiceCatalogSchema = (services: ServiceDefinition[] = LANDING_SERVICE_SUMMARY) => ({
   '@context': 'https://schema.org',
   '@type': 'OfferCatalog',
-  name: 'AI systems, analytics automation, and data services',
+  name: 'AI agent systems, workflow automation, and agentic-stack training',
   url: SITE_BASE_URL,
   provider: {
     '@type': 'Person',
@@ -129,6 +133,9 @@ export const buildServiceCatalogSchema = (services: ServiceDefinition[] = LANDIN
   itemListElement: services.map((service, index) => ({
     '@type': 'Offer',
     position: index + 1,
+    ...(service.price !== undefined
+      ? { price: service.price, priceCurrency: service.priceCurrency ?? 'USD', url: `${SITE_BASE_URL}/consult` }
+      : {}),
     itemOffered: {
       '@type': 'Service',
       name: sanitizeText(service.name),
@@ -212,7 +219,7 @@ export const buildPersonSchema = () => ({
   name: sanitizeText(LANDING_SEO.author),
   jobTitle: 'AI Agent System Builder',
   description:
-    'AI Agent System Builder. Designs and ships enterprise agentic pipelines, personal AI systems with durable memory, and zero-maintenance personal websites, backed by a five-person delivery team. Enterprise perspective from Advanced Analytics at P&G.',
+    'AI Agent System Builder. Builds enterprise agent workflows that cut up to 90% of the work time from database to delivered dashboard or deck, personal agent systems with durable memory, and hands-on training on the agentic stack (Claude Code, Codex, Copilot). Works with four full-time AI engineers. Enterprise perspective from Advanced Analytics at P&G.',
   url: SITE_BASE_URL,
   image: DEFAULT_OG_IMAGE,
   sameAs: LANDING_SEO.sameAs ?? DEFAULT_SAME_AS,
@@ -231,6 +238,9 @@ export const buildPersonSchema = () => ({
     'Enterprise Agentic Pipelines',
     'LangGraph Agent Orchestration',
     'Claude Agent SDK',
+    'Claude Code',
+    'OpenAI Codex',
+    'Agent Harness Training',
     'A2UI Protocol',
     'Generative UI',
     'Multi-Agent Workflows',

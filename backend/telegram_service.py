@@ -33,12 +33,18 @@ async def send_booking_notification(
     session_type: str,
     slot_start: str,
     notes: str | None = None,
+    status: str | None = None,
 ) -> bool:
     """Send Telegram message via Bot API. Fire-and-forget, errors are logged not raised.
 
     Uses TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID env vars. When `notes` are
     present (e.g. the AI intake brief that rode into the booking), they are
     included so Yanqing sees the brief on the Telegram ping too.
+
+    `status` re-labels the headline (e.g. "CANCELLED", "RESCHEDULED"). The
+    cancel and reschedule routes were already passing it; without the parameter
+    every one of those calls raised TypeError into a bare `except`, so neither
+    notification had ever been delivered.
 
     Returns True if sent, False on error.
     """
@@ -47,8 +53,13 @@ async def send_booking_notification(
         return False
 
     kind = "Enterprise fit call (free)" if session_type == "fit" else f"{session_type}min session"
+    headline = (
+        f"\U0001f5d3 Booking {_escape_html(status)}"
+        if status
+        else "\U0001f5d3 New consulting booking!"
+    )
     message = (
-        "\U0001f5d3 New consulting booking!\n"
+        f"{headline}\n"
         f"{_escape_html(name)} ({_escape_html(email)})\n"
         f"{kind} at {_escape_html(slot_start)}"
     )

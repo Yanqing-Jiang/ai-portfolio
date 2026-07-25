@@ -30,8 +30,6 @@ import HomerLitePage from './components/homer-lite/HomerLitePage';
 
 import { PROJECT_DATA } from './constants';
 import type { Project } from './types';
-import { ChevronLeftIcon } from './components/icons/ChevronLeftIcon';
-import { ChevronRightIcon } from './components/icons/ChevronRightIcon';
 import { supabase } from './services/auth';
 import { fortuneIntakeRoute, fortuneResultRoute } from './lib/fortuneRoutes';
 // @ts-ignore
@@ -170,61 +168,10 @@ const AuthCallback: React.FC = () => {
 
 // Function: Layout - shell used by AppRoutes to hold the sidebar, routing, and shared UI chrome; called from AppRoutes; invokes goHome/goProject for navigation; exists to keep router wiring in one place.
 const Layout: React.FC = () => {
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false); // Always default closed
-  const [isMobile, setIsMobile] = useState(false);
-  const [showSidebarHint, setShowSidebarHint] = useState(false);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const navigate = useNavigate();
   const location = useLocation();
   const mainContentRef = useRef<HTMLElement>(null);
-
-  // Check if screen is mobile size - but keep sidebar closed by default
-  useEffect(() => {
-    const checkMobile = () => {
-      setIsMobile(window.innerWidth < 768); // md breakpoint
-      // Keep sidebar closed by default on all sizes
-    };
-
-    checkMobile();
-    window.addEventListener('resize', checkMobile);
-    return () => window.removeEventListener('resize', checkMobile);
-  }, []);
-
-  // Show hint once on first visit (check localStorage). Skip entirely on
-  // marketing routes so a landing/consult visit doesn't silently consume the
-  // legacy sidebar's one-time hint before the user reaches a project route.
-  useEffect(() => {
-    const onMarketingRoute = location.pathname === '/' || location.pathname === '/consult';
-    if (onMarketingRoute) return;
-    const hasSeenHint = localStorage.getItem('sidebarHintSeen');
-    if (!hasSeenHint) {
-      // Show immediately on first visit
-      setShowSidebarHint(true);
-
-      // Auto-hide after 3 seconds
-      const timer = setTimeout(() => {
-        setShowSidebarHint(false);
-        localStorage.setItem('sidebarHintSeen', 'true');
-      }, 3000);
-      return () => clearTimeout(timer);
-    }
-  }, [location.pathname]);
-
-  // Also dismiss hint on scroll (backup)
-  useEffect(() => {
-    const mainEl = mainContentRef.current;
-    if (!mainEl || !showSidebarHint) return;
-
-    const handleScroll = () => {
-      if (showSidebarHint) {
-        setShowSidebarHint(false);
-        localStorage.setItem('sidebarHintSeen', 'true');
-      }
-    };
-
-    mainEl.addEventListener('scroll', handleScroll, { passive: true });
-    return () => mainEl.removeEventListener('scroll', handleScroll);
-  }, [showSidebarHint]);
 
   useEffect(() => {
     const frame = requestAnimationFrame(() => {
@@ -247,20 +194,18 @@ const Layout: React.FC = () => {
   }, [location.pathname]);
 
   // navigation helpers
-  // Function: goHome - triggered by sidebar brand/backdrop to return to landing; called from SidebarV2 on logo/backdrop click; clears active project state, closes sidebar on mobile; exists to reset layout from a project view.
+  // Function: goHome - triggered by the header brand button to return to landing; called from SidebarV2; clears active project state; exists to reset layout from a project view.
   const goHome = () => {
     navigate('/');
     setActiveProject(null);
-    if (isMobile) setIsSidebarOpen(false); // Close sidebar on mobile after navigation
   };
 
-  // Function: goProject - used by SidebarV2 and LandingPageFlow; navigates to the requested project, treats repeat clicks as a full refresh, and collapses the sidebar on mobile; exists to centralize project navigation semantics.
+  // Function: goProject - used by SidebarV2 and LandingPageFlow; navigates to the requested project and treats repeat clicks as a full refresh; exists to centralize project navigation semantics.
   // Honors `project.link` override so a project (e.g. Homer) can route to a custom path like `/homer`.
   const goProject = (p: Project) => {
     const targetPath = p.link ?? `/project/${p.id}`;
     const isCurrent = location.pathname === targetPath;
     setActiveProject(findProject(p.id) ?? p);
-    if (isMobile) setIsSidebarOpen(false); // Close sidebar on mobile after navigation
 
     if (isCurrent) {
       navigate(0); // force refresh when clicking the current project
@@ -270,15 +215,13 @@ const Layout: React.FC = () => {
     navigate(targetPath);
   };
 
-  // Marketing routes carry their own top nav (landing refactor Phase 1) — hide
-  // the legacy sidebar, floating toggle, and first-visit hint there.
-  const hideShellChrome = location.pathname === '/' || location.pathname === '/consult';
+  // /consult carries its own top nav — hide the shared header there.
+  const hideShellChrome = location.pathname === '/consult';
 
   return (
-    <div className="flex h-[100dvh] bg-[#010208] text-white font-sans overflow-hidden">
+    <div className="flex h-[100dvh] flex-col bg-[#010208] text-white font-sans overflow-hidden">
       {!hideShellChrome && (
         <Sidebar
-          isSidebarOpen={isSidebarOpen}
           projectData={PROJECT_DATA}
           selectedProject={activeProject}
           onSelectProject={goProject}
@@ -286,63 +229,12 @@ const Layout: React.FC = () => {
         />
       )}
 
-      <div className="relative flex-1 flex flex-col min-w-0 transition-all duration-500 ease-in-out">
-        {/* Sidebar toggle button */}
-        {!hideShellChrome && (
-        <button
-          onClick={() => {
-            setIsSidebarOpen(!isSidebarOpen);
-            if (showSidebarHint) {
-              setShowSidebarHint(false);
-              localStorage.setItem('sidebarHintSeen', 'true');
-            }
-          }}
-          className={`fixed top-6 z-[60] flex items-center justify-center w-8 h-8 md:w-10 md:h-10
-                     bg-slate-900/80 backdrop-blur-xl border border-sky-500/30 rounded-full
-                     text-sky-400 transition-all duration-500 shadow-[0_0_20px_rgba(14,165,233,0.2)]
-                     hover:bg-sky-500/20 hover:text-white hover:border-sky-400
-                     ${isSidebarOpen ? 'left-[19rem] sm:left-[23rem] md:left-[19rem]' : 'left-6'}`}
-        >
-          {isSidebarOpen ? <ChevronLeftIcon /> : <ChevronRightIcon />}
-        </button>
-        )}
-
-        {/* Sidebar hint tooltip with premium animated arrow - shows once */}
-        {!hideShellChrome && showSidebarHint && !isSidebarOpen && (
-          <div className="fixed top-4 left-[64px] z-50 flex items-center gap-4 animate-fade-in pointer-events-none">
-            {/* Premium Stylish Arrow */}
-            <div className="relative flex items-center animate-bounce-horizontal">
-              <svg
-                className="w-12 h-12 text-sky-400 filter drop-shadow-[0_0_8px_rgba(56,189,248,0.6)]"
-                viewBox="0 0 64 64"
-                fill="none"
-              >
-                <path
-                  d="M56 32H12M12 32L24 20M12 32L24 44"
-                  stroke="currentColor"
-                  strokeWidth="3"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-                <circle cx="56" cy="32" r="3" fill="currentColor" className="animate-pulse" />
-              </svg>
-            </div>
-
-            {/* Refined Tooltip Bubble */}
-            <div className="relative group">
-              <div className="absolute inset-0 bg-sky-500/20 blur-xl rounded-full" />
-              <div className="relative bg-slate-900/80 backdrop-blur-md border border-sky-500/30 text-sky-100 text-sm font-semibold tracking-wide px-6 py-2.5 rounded-full shadow-2xl">
-                Explore Yanqing's Projects
-              </div>
-            </div>
-          </div>
-        )}
-
+      <div className="relative flex-1 flex flex-col min-w-0 min-h-0">
         {/* Main content area with fluid dimensions */}
         <main
           ref={mainContentRef}
           id="site-main"
-          className="flex-1 overflow-y-auto"
+          className="flex-1 min-h-0 overflow-y-auto"
           aria-label="Primary content"
           tabIndex={-1}
         >

@@ -10,9 +10,11 @@ Purpose: Manage consulting session availability and booking confirmation.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import logging
 import os
+import random
 import uuid
 from datetime import date, datetime, timedelta
 from typing import Optional
@@ -29,14 +31,36 @@ GOOGLE_CALENDAR_ID = os.getenv("GOOGLE_CALENDAR_ID", "")
 GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "")
 
 # Business hours (in BOOKING_TIMEZONE)
-# Weekday (Mon-Fri): 1pm-5pm PT | Weekend (Sat-Sun): 1pm-4:30pm PT
-WEEKDAY_HOUR_START = 13   # 1 PM
-WEEKDAY_HOUR_END = 17     # 5 PM
+# Weekday (Mon-Fri): 8am-4pm PT, but only a few staggered windows are offered
+# (see _weekday_stagger) | Weekend (Sat-Sun): 1pm-4pm PT, fully open.
+WEEKDAY_HOUR_START = 8    # 8 AM
+WEEKDAY_HOUR_END = 16     # 4 PM
 WEEKEND_HOUR_START = 13   # 1 PM
-WEEKEND_HOUR_END_H = 16   # 4:30 PM (hour component)
-WEEKEND_HOUR_END_M = 30   # 4:30 PM (minute component)
+WEEKEND_HOUR_END_H = 16   # 4 PM (hour component)
+WEEKEND_HOUR_END_M = 0    # 4 PM (minute component)
 BUFFER_MINUTES = 15       # buffer between sessions
 SLOT_DURATION_MINUTES = 30  # base slot size
+
+# Weekday stagger: how much of the 8am-4pm grid to actually publish.
+WEEKDAY_OPEN_WINDOWS = 3    # contiguous windows offered per weekday
+WEEKDAY_WINDOW_SLOTS = 2    # 30-min slots per window (2 => a bookable 60-min pair)
+# Changing the salt reshuffles every future weekday. Keep it stable in prod.
+SLOT_STAGGER_SALT = os.getenv("BOOKING_SLOT_SALT", "yj-booking-v1")
+
+# Meet rooms are sometimes provisioned asynchronously; re-read the event until
+# the link appears (total worst case ~6s) before giving up on it.
+MEET_POLL_ATTEMPTS = 3
+MEET_POLL_DELAY_S = 1.0
+
+# Workspace domain-wide delegation: the service account acts AS this user, which
+# is what lets Google email the invitation to an external attendee. Left empty,
+# the service account books as itself and attendee invites are unreliable.
+GOOGLE_CALENDAR_IMPERSONATE_USER = os.getenv("GOOGLE_CALENDAR_IMPERSONATE_USER", "")
+
+# Don't publish a slot that starts within this many minutes — weekday hours now
+# open at 8am, so without a lead time the afternoon visitor is shown morning
+# slots that the booking endpoint would reject as being in the past.
+MIN_LEAD_MINUTES = 30
 
 # Session durations
 SESSION_DURATIONS = {
@@ -83,6 +107,19 @@ def _get_calendar_service():
             ],
         )
 
+        if GOOGLE_CALENDAR_IMPERSONATE_USER:
+            credentials = credentials.with_subject(GOOGLE_CALENDAR_IMPERSONATE_USER)
+            logger.info(
+                "[CALENDAR] Impersonating %s (domain-wide delegation)",
+                GOOGLE_CALENDAR_IMPERSONATE_USER,
+            )
+        else:
+            logger.warning(
+                "[CALENDAR] GOOGLE_CALENDAR_IMPERSONATE_USER not set — the service "
+                "account books as itself; Google may not email the invitation to "
+                "the attendee. Set it to the calendar owner for reliable invites."
+            )
+
         _calendar_service = build("calendar", "v3", credentials=credentials)
         _calendar_configured = True
         logger.info("[CALENDAR] Google Calendar API client initialized")
@@ -98,11 +135,60 @@ def _get_calendar_service():
 # Slot generation helpers
 # ---------------------------------------------------------------------------
 
+def _stagger_rng(target_date: date) -> random.Random:
+    """A PRNG seeded only by the date, so the same day always staggers the same way.
+
+    Uses sha256 rather than hash() — str hashing is salted per process, which
+    would give each backend worker (and each restart) a different day.
+    """
+    digest = hashlib.sha256(f"{SLOT_STAGGER_SALT}:{target_date.isoformat()}".encode()).digest()
+    return random.Random(int.from_bytes(digest[:8], "big"))
+
+
+def _weekday_stagger(
+    target_date: date,
+    slots: list[tuple[datetime, datetime]],
+) -> list[tuple[datetime, datetime]]:
+    """Publish only a few windows of the weekday grid, in date-dependent positions.
+
+    Mon-Fri spans a whole workday (8am-4pm = 16 slots); offering all of it reads
+    as a calendar with nothing in it. Instead open WEEKDAY_OPEN_WINDOWS contiguous
+    windows, each WEEKDAY_WINDOW_SLOTS long, placed by _stagger_rng — so the day
+    looks partly taken and the open times move from day to day. Windows stay
+    contiguous so a 60-min session still has consecutive free slots to land on.
+
+    Deterministic by necessity, not convenience: this function is also the
+    revalidation source for booking (main._assert_slot_offered), so a given date
+    must always produce the same offer. A live random.random() would reject the
+    very slot it had just advertised.
+    """
+    n_buckets = WEEKDAY_OPEN_WINDOWS + 1  # one bucket stays dark, and which one moves
+    # Each bucket needs room for its window plus a closing slot (see below).
+    if len(slots) < n_buckets * (WEEKDAY_WINDOW_SLOTS + 1):
+        return slots  # too short to thin out — offer it whole
+
+    edges = [round(i * len(slots) / n_buckets) for i in range(n_buckets + 1)]
+    rng = _stagger_rng(target_date)
+    keep: set[int] = set()
+    for bucket in rng.sample(range(n_buckets), WEEKDAY_OPEN_WINDOWS):
+        lo, hi = edges[bucket], edges[bucket + 1]
+        # Leave the bucket's last slot closed, so a window at the end of one
+        # bucket can't butt up against a window at the start of the next and
+        # silently merge into a single long block. The final bucket has nothing
+        # after it, so it may run to the end of the day.
+        last_start = hi - WEEKDAY_WINDOW_SLOTS - (0 if bucket == n_buckets - 1 else 1)
+        start = rng.randrange(lo, last_start + 1)
+        keep.update(range(start, start + WEEKDAY_WINDOW_SLOTS))
+
+    return [slots[i] for i in sorted(keep)]
+
+
 def _generate_slot_boundaries(target_date: date, tz: ZoneInfo) -> list[tuple[datetime, datetime]]:
-    """Generate all possible 30-minute slot boundaries within business hours for a given date.
+    """Generate the offered 30-minute slot boundaries for a given date.
 
     Returns a list of (start, end) tuples in the configured timezone.
-    Mon-Fri: 1pm-5pm PT | Sat-Sun: 1pm-4:30pm PT.
+    Mon-Fri: staggered windows inside 8am-4pm PT | Sat-Sun: 1pm-4pm PT, all open.
+    Slots starting within MIN_LEAD_MINUTES are dropped.
     """
     is_weekend = target_date.weekday() >= 5  # 5=Sat, 6=Sun
 
@@ -131,7 +217,19 @@ def _generate_slot_boundaries(target_date: date, tz: ZoneInfo) -> list[tuple[dat
         slots.append((current, slot_end))
         current = slot_end
 
-    return slots
+    if not is_weekend:
+        slots = _weekday_stagger(target_date, slots)
+
+    cutoff = datetime.now(tz) + timedelta(minutes=MIN_LEAD_MINUTES)
+    return [s for s in slots if s[0] >= cutoff]
+
+
+def _extract_meet_link(event: dict) -> str:
+    """Pull the video entry point (the Meet URL) out of an event's conferenceData."""
+    for ep in event.get("conferenceData", {}).get("entryPoints", []) or []:
+        if ep.get("entryPointType") == "video" and ep.get("uri"):
+            return ep["uri"]
+    return ""
 
 
 def _overlaps(busy_start: datetime, busy_end: datetime, slot_start: datetime, slot_end: datetime) -> bool:
@@ -159,13 +257,13 @@ def _mock_available_slots(target_date: date, session_type: str = "30") -> list[d
 
     available = []
     if duration == 60:
-        # 60-min: need two consecutive free slots
-        for i, (start, _end) in enumerate(all_slots):
-            if i + 1 < len(all_slots):
-                mock_end = start + timedelta(minutes=60)
+        # 60-min: need two ADJACENT slots. Index adjacency is not enough — the
+        # weekday grid is staggered, so slots[i+1] may be hours after slots[i].
+        for i, (start, end) in enumerate(all_slots):
+            if i + 1 < len(all_slots) and all_slots[i + 1][0] == end:
                 available.append({
                     "start": start.isoformat(),
-                    "end": mock_end.isoformat(),
+                    "end": (start + timedelta(minutes=60)).isoformat(),
                 })
     else:
         for start, end in all_slots:
@@ -184,9 +282,9 @@ def _mock_available_slots(target_date: date, session_type: str = "30") -> list[d
 async def get_available_slots(target_date: date, session_type: str = "30") -> list[dict]:
     """Query Google Calendar freebusy API, return available slot boundaries.
 
-    Business hours: 9AM-5PM in BOOKING_TIMEZONE. Mon-Fri only.
-    Excludes busy slots. Adds 15-min buffer between sessions.
-    For 60-min sessions: only return slots where the next slot is also free.
+    Offered hours (BOOKING_TIMEZONE): Mon-Fri staggered windows inside 8am-4pm,
+    Sat-Sun 1pm-4pm. Excludes busy slots. Adds 15-min buffer between sessions.
+    For 60-min sessions: only return slots where the adjacent slot is also free.
 
     Returns: [{"start": "ISO8601 with offset", "end": "ISO8601 with offset"}]
     """
@@ -255,14 +353,14 @@ async def get_available_slots(target_date: date, session_type: str = "30") -> li
 
     available = []
     if duration == 60:
-        # 60-min: need two consecutive free slots
+        # 60-min: need two ADJACENT free slots. The staggered weekday grid has
+        # gaps, so index i+1 being free does not mean it starts at i's end.
         for i in free_slot_indices:
-            if (i + 1) in free_set:
-                start = all_slots[i][0]
-                end = start + timedelta(minutes=60)
+            start, end = all_slots[i]
+            if (i + 1) in free_set and all_slots[i + 1][0] == end:
                 available.append({
                     "start": start.isoformat(),
-                    "end": end.isoformat(),
+                    "end": (start + timedelta(minutes=60)).isoformat(),
                 })
     else:
         # 30-min: each free slot is available
@@ -352,15 +450,45 @@ async def create_booking_event(
         )
 
         event_id = created_event.get("id", "")
-        meet_link = ""
 
-        # Extract Meet link from conference data
-        conference_data = created_event.get("conferenceData", {})
-        entry_points = conference_data.get("entryPoints", [])
-        for ep in entry_points:
-            if ep.get("entryPointType") == "video":
-                meet_link = ep.get("uri", "")
+        # Google may still be provisioning the Meet room when insert() returns
+        # (createRequest.status = 'pending'). The link is what both confirmation
+        # emails are built around, so re-read the event a few times rather than
+        # mailing "a link will follow" — nothing ever follows.
+        meet_link = _extract_meet_link(created_event)
+        for attempt in range(MEET_POLL_ATTEMPTS):
+            if meet_link:
                 break
+            status = (
+                created_event.get("conferenceData", {})
+                .get("createRequest", {})
+                .get("status", {})
+                .get("statusCode")
+            )
+            if status == "failure":
+                logger.error("[CALENDAR] Meet creation failed for event %s", event_id)
+                break
+            await asyncio.sleep(MEET_POLL_DELAY_S * (attempt + 1))
+            try:
+                created_event = await loop.run_in_executor(
+                    None,
+                    lambda: service.events().get(
+                        calendarId=GOOGLE_CALENDAR_ID,
+                        eventId=event_id,
+                        conferenceDataVersion=1,
+                    ).execute(),
+                )
+            except Exception as poll_exc:
+                # The event exists; only the link lookup failed. Keep the booking.
+                logger.warning("[CALENDAR] Meet link poll failed: %s", poll_exc)
+                break
+            meet_link = _extract_meet_link(created_event)
+
+        if not meet_link:
+            logger.error(
+                "[CALENDAR] Event %s created without a Meet link — attendees get "
+                "a calendar invite but no video link", event_id,
+            )
 
         logger.info(
             "[CALENDAR] Event created: id=%s meet=%s for %s",

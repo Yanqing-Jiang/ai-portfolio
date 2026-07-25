@@ -64,33 +64,36 @@ const ProjectView: React.FC<ProjectViewProps> = ({ project }) => {
           initial={false}
           animate={isHeaderCollapsed ? { height: 60 } : { height: 'auto' }}
           transition={{ duration: 0.3, ease: 'easeInOut' }}
-          className="flex-shrink-0 border-b border-gray-800 bg-gray-900 overflow-hidden"
+          className="flex-shrink-0 border-b border-[#37332E] bg-[#12110F] overflow-hidden"
         >
         {isHeaderCollapsed ? (
-          <div className="h-full flex items-center justify-between px-4 md:px-6 lg:px-8">
+          <div
+            className="h-full flex items-center justify-between px-4 md:px-6 lg:px-8 cursor-pointer"
+            onClick={() => setIsHeaderCollapsed(false)}
+          >
             <div className="flex items-center gap-3 min-w-0 flex-1">
-              <h1 id={`project-title-${project.id}`} className="text-lg md:text-xl font-bold text-white truncate">
-                {project.title}
+              <h1 id={`project-title-${project.id}`} className="text-lg md:text-xl font-black tracking-[-0.03em] text-[#F1EADF] truncate">
+                {project.title}<span className="text-[#F04A32]">.</span>
               </h1>
               <div className="hidden sm:flex gap-2">
                 {project.technologies.slice(0, 3).map(tech => (
                   <span
                     key={tech}
-                    className="px-2 py-0.5 rounded-full bg-gray-700 text-gray-200 text-xs border border-gray-600"
+                    className="px-2 py-0.5 rounded-[4px] border border-[#37332E] bg-[#191816] font-mono text-[10px] uppercase tracking-[0.08em] text-[#A8A096]"
                   >
                     {tech}
                   </span>
                 ))}
                 {project.technologies.length > 3 && (
-                  <span className="px-2 py-0.5 rounded-full bg-gray-700 text-gray-200 text-xs border border-gray-600">
+                  <span className="px-2 py-0.5 rounded-[4px] border border-[#37332E] bg-[#191816] font-mono text-[10px] uppercase tracking-[0.08em] text-[#A8A096]">
                     +{project.technologies.length - 3}
                   </span>
                 )}
               </div>
             </div>
             <button
-              onClick={() => setIsHeaderCollapsed(!isHeaderCollapsed)}
-              className="p-2 hover:bg-gray-700 rounded-lg transition-colors text-gray-400 hover:text-white shrink-0"
+              onClick={(e) => { e.stopPropagation(); setIsHeaderCollapsed(false); }}
+              className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-[4px] transition-colors text-[#A8A096] hover:bg-[#191816] hover:text-[#F1EADF] shrink-0"
               title="Expand header"
               aria-label="Expand project header"
               aria-expanded={!isHeaderCollapsed}
@@ -101,16 +104,16 @@ const ProjectView: React.FC<ProjectViewProps> = ({ project }) => {
             </button>
           </div>
         ) : (
-          <div className="p-3 sm:p-4 md:p-6 lg:p-8 relative">
+          <div className="p-4 sm:p-5 md:p-6 lg:p-8 relative">
             <div className="flex flex-col md:flex-row gap-4 sm:gap-6 md:gap-8">
               <div className="flex-1 flex flex-col justify-center min-w-0">
                 <h1
                   id={`project-title-${project.id}`}
-                  className="text-xl sm:text-2xl md:text-3xl lg:text-4xl xl:text-5xl font-bold text-white mb-2 sm:mb-3 md:mb-4 leading-tight"
+                  className="text-xl sm:text-2xl md:text-3xl lg:text-4xl xl:text-5xl font-black tracking-[-0.03em] text-[#F1EADF] mb-2 sm:mb-3 md:mb-4 leading-tight"
                 >
-                  {project.title}
+                  {project.title}<span className="text-[#F04A32]">.</span>
                 </h1>
-                <div className="text-gray-400 text-sm sm:text-base md:text-base lg:text-lg max-w-none md:max-w-3xl mb-3 sm:mb-4 md:mb-6 space-y-2 sm:space-y-3 overflow-y-auto flex-1 md:flex-none">
+                <div className="text-[#A8A096] text-sm sm:text-base lg:text-lg max-w-none md:max-w-3xl mb-3 sm:mb-4 md:mb-6 space-y-2 sm:space-y-3 max-h-40 sm:max-h-52 md:max-h-none overflow-y-auto md:overflow-visible overscroll-contain">
                   {project.description.split('\n').map((line, idx) => {
                     const trimmed = line.trim();
                     if (trimmed.startsWith('http')) {
@@ -121,7 +124,7 @@ const ProjectView: React.FC<ProjectViewProps> = ({ project }) => {
                               href={trimmed}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="flex items-center gap-2 text-gray-300 hover:text-white transition-colors group"
+                              className="flex items-center gap-2 text-[#F1EADF] hover:text-white transition-colors group"
                             >
                               <img
                                 src="https://yanqinghot.blob.core.windows.net/public-access/Medium_logo_Monogram.svg.png"
@@ -139,7 +142,7 @@ const ProjectView: React.FC<ProjectViewProps> = ({ project }) => {
                             href={trimmed}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="text-blue-400 hover:underline break-all"
+                            className="text-[#F04A32] hover:text-[#D63B27] hover:underline break-all"
                           >
                             {trimmed}
                           </a>
@@ -149,11 +152,11 @@ const ProjectView: React.FC<ProjectViewProps> = ({ project }) => {
                     return <p key={idx} className="leading-relaxed">{line}</p>;
                   })}
                 </div>
-                <div className="flex gap-1.5 sm:gap-2 flex-wrap mt-auto">
+                <div className="flex gap-1.5 sm:gap-2 flex-wrap mt-auto pr-12 md:pr-0">
                   {project.technologies.map(tech => (
                     <span
                       key={tech}
-                      className="bg-gray-700 text-gray-300 text-xs sm:text-sm font-medium px-2 sm:px-3 py-1 sm:py-1.5 rounded-full whitespace-nowrap"
+                      className="border border-[#37332E] bg-[#191816] text-[#A8A096] font-mono text-[10px] sm:text-xs uppercase tracking-[0.08em] px-2 sm:px-3 py-1 sm:py-1.5 rounded-[4px] whitespace-nowrap"
                     >
                       {tech}
                     </span>
@@ -161,7 +164,7 @@ const ProjectView: React.FC<ProjectViewProps> = ({ project }) => {
                 </div>
               </div>
               {(project.videoUrl || project.gifUrl || project.imageUrl) && (
-                <div className="hidden md:block md:w-1/3 lg:w-2/5 rounded-xl overflow-hidden shadow-2xl">
+                <div className="hidden md:block md:w-1/3 lg:w-2/5 shrink-0 self-center aspect-video rounded-[6px] border border-[#37332E] overflow-hidden">
                   <ProjectMedia
                     src={project.gifUrl ?? project.imageUrl ?? ''}
                     videoUrl={project.videoUrl}
@@ -174,7 +177,7 @@ const ProjectView: React.FC<ProjectViewProps> = ({ project }) => {
             </div>
             <button
               onClick={() => setIsHeaderCollapsed(!isHeaderCollapsed)}
-              className="absolute bottom-2 right-2 p-2 hover:bg-gray-700 rounded-lg transition-colors text-gray-400 hover:text-white"
+              className="absolute bottom-2 right-2 flex min-h-[44px] min-w-[44px] items-center justify-center rounded-[4px] transition-colors text-[#A8A096] hover:bg-[#191816] hover:text-[#F1EADF]"
               title="Collapse header"
               aria-label="Collapse project header"
               aria-expanded={!isHeaderCollapsed}

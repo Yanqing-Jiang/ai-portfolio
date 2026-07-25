@@ -364,6 +364,7 @@ async def send_admin_booking_alert(
     slot_start: str,
     notes: Optional[str] = None,
     meet_link: Optional[str] = None,
+    failure_reason: Optional[str] = None,
 ) -> bool:
     """Email an internal alert to ADMIN_ALERT_EMAIL when a booking is confirmed.
 
@@ -371,6 +372,10 @@ async def send_admin_booking_alert(
     INTERNAL notification — it includes the client's email and notes, so it is
     sent only to the admin address, never to the client. Fire-and-forget:
     returns True on success, False otherwise; never raises.
+
+    `failure_reason` flips this into a FAILED-ATTEMPT alert: someone reached the
+    booking click and was turned away, which is worth knowing about immediately
+    since nothing else records it.
     """
     recipients = _admin_alert_recipients()
     if not recipients:
@@ -385,10 +390,16 @@ async def send_admin_booking_alert(
         is_free = session_type == "fit"
         duration = "30" if is_free else ("60" if session_type == "60" else "30")
         kind = "Enterprise fit call (FREE)" if is_free else f"{duration}-min session"
-        subject = f"New consult booking — {name or 'unknown'} ({kind})"
+        subject = (
+            f"ACTION NEEDED — booking FAILED for {name or 'unknown'} ({kind})"
+            if failure_reason
+            else f"New consult booking — {name or 'unknown'} ({kind})"
+        )
 
         lines = [
-            "New consult booking confirmed on yanqing.app/consult",
+            "A booking attempt on yanqing.app/consult could NOT be confirmed."
+            if failure_reason
+            else "New consult booking confirmed on yanqing.app/consult",
             "",
             f"Type:     {kind}",
             f"Name:     {name or '(none)'}",
@@ -400,6 +411,14 @@ async def send_admin_booking_alert(
             lines.append(f"Notes:    {notes}")
         if meet_link:
             lines.append(f"Meet:     {meet_link}")
+        if failure_reason:
+            lines += [
+                "",
+                f"Reason:   {failure_reason}",
+                "",
+                "They were shown an error and are NOT booked. Reach out directly",
+                "if you want to save this one.",
+            ]
         plain_text = "\n".join(lines) + "\n"
 
         mime_msg = MIMEText(plain_text, "plain", "utf-8")
