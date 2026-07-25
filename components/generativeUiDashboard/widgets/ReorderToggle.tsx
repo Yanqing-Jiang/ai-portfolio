@@ -2,7 +2,7 @@
  * ReorderToggle - Mode toggle button for drag-and-drop reordering.
  *
  * Component: ReorderToggle
- * Called from: DashboardViewer, GenerativeUIPage
+ * Called from: GenerativeUIPage
  * Invokes: useLayoutPreferences()
  * Why: Enables/disables reorder mode, essential for mobile-friendly interaction.
  */

@@ -21,18 +21,15 @@ import CTA from './sections/CTA';
 //   Architecture (interactive — Memory schema lives inside) →
 //   Why (three Before/After couplets) → Lessons → Roadmap → CTA (consulting)
 //
-// Metrics section removed 2026-05-13 — placeholder tiles were never wired to
-// real ECharts panels and the page reads cleaner without them. File kept at
-// sections/Metrics.tsx in case we revive it.
-//
-// ProofStrip retired 2026-05-13 — its four credibility one-liners were
-// expressed in the Hero terminal boot block itself (memory layer, token
-// usage, scheduler, executors, voice, mcp). File kept at sections/ProofStrip.tsx
-// for easy revert.
-//
-// MorningRoutineVideo retired 2026-07-06 — the missing WebM probe could be
-// answered by the SPA fallback as 200-with-HTML, producing an empty video box
-// in production. File kept at sections/MorningRoutineVideo.tsx for easy revert.
+// Sections retired over time, and why — the files were deleted 2026-07-25 after
+// sitting unimported for months; recover from git history if any is revived:
+//   Metrics (2026-05-13) — placeholder tiles were never wired to real ECharts
+//     panels and the page reads cleaner without them.
+//   ProofStrip (2026-05-13) — its four credibility one-liners are expressed in
+//     the Hero terminal boot block itself.
+//   MorningRoutineVideo (2026-07-06) — a missing WebM probe could be answered by
+//     the SPA fallback as 200-with-HTML, producing an empty video box in prod.
+//   MemorySchema, OssCard, RollingNumber — superseded by the sections above.
 //
 // Hero redesigned 2026-05-13 — replaced the static `$ homer --status` block
 // with a character-by-character typewriter boot sequence (ported from

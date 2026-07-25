@@ -1,6 +1,7 @@
 /**
  * Function: ProcessPanel — Agent thinking process visualization panel with dynamic steps display
- * Called from: ConversationalAnalyticsPage header (replaces "Connected" status and ThinkingProcessBar)
+ * Called from: ConversationalAnalyticsPage header. Replaced the "Connected"
+ * status line and the old ThinkingProcessBar, both since deleted.
  * Invokes: Renders flowchart-style diagram with expandable nodes including Skill section
  * Purpose: Shows real-time agent decision flow via compact header chip and expandable full-screen canvas
  * 
@@ -247,7 +248,7 @@ const FlowConnector: React.FC<{
   return null;
 };
 
-// Skill Details Panel Component (moved from ThinkingProcessBar)
+// Skill Details Panel Component (moved here from the deleted ThinkingProcessBar)
 const SkillDetailsPanel: React.FC<{
   skill: SkillInfo;
   isExpanded: boolean;

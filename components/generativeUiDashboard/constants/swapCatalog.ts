@@ -234,13 +234,6 @@ export function getSwapOptionsFromCatalog(componentType: string): SwapTarget[] {
 }
 
 /**
- * Get catalog entry for a component type.
- */
-export function getCatalogEntry(componentType: string): SwapCatalogEntry | null {
-    return SWAP_CATALOG[componentType] || null;
-}
-
-/**
  * Check if a swap requires backend transformation.
  */
 export function requiresServerSwap(fromType: string, toType: string): boolean {
@@ -254,13 +247,6 @@ export function requiresServerSwap(fromType: string, toType: string): boolean {
  */
 export function canSplit(componentType: string): boolean {
     return SWAP_CATALOG[componentType]?.canSplit ?? false;
-}
-
-/**
- * Get the component types a component can be split into.
- */
-export function getSplitTargets(componentType: string): string[] {
-    return SWAP_CATALOG[componentType]?.splitInto || [];
 }
 
 /**

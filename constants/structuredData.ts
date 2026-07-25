@@ -423,34 +423,3 @@ export const buildLandingSchemas = (
   ];
 };
 
-export const toNavigationFromProjects = (projects: Project[]): NavigationDefinition[] => {
-  const uniqueProjectsMap = new Map<string, NavigationDefinition>();
-  projects.forEach((project) => {
-    const slug = project.canonicalId ?? project.id;
-    if (uniqueProjectsMap.has(slug)) {
-      return;
-    }
-    uniqueProjectsMap.set(slug, {
-      name: sanitizeText(project.title),
-      url: `${SITE_BASE_URL}/project/${slug}`,
-    });
-  });
-
-  return [
-    { name: 'Home', url: SITE_BASE_URL },
-    ...Array.from(uniqueProjectsMap.values()),
-  ];
-};
-
-export const buildAiFactsPayload = (projects: Project[]) =>
-  projects.map((project) => ({
-    id: project.id,
-    title: sanitizeText(project.seoTitle ?? project.title),
-    description: sanitizeText(ensureDescription(project)),
-    url: `${SITE_BASE_URL}/project/${project.canonicalId ?? project.id}`,
-    technologies: project.technologies,
-    serviceTags: sanitizeStringList(project.serviceTags),
-    statHighlights: sanitizeStringList(project.statHighlights),
-    defaultPrompts: project.defaultPrompts,
-    primaryMetricValue: project.primaryMetricValue,
-  }));

@@ -18,8 +18,8 @@ import { HOMER_THEME } from '../theme';
 // Copy is the user's voice; sequence is deliberately memory-first: bookmarks,
 // remembered preferences, and phone escalation.
 //
-// Replaces the prior "Most agent demos die in the demo" + RollingNumber
-// section. RollingNumber and the eyebrow subtitle are intentionally gone;
+// Replaces the prior "Most agent demos die in the demo" + rolling-number
+// section. That animated counter and the eyebrow subtitle are intentionally gone;
 // the closing italic "I'm asleep. Homer isn't." carries the close instead.
 
 // Highlighter yellow for the underline marker — distinct from the page's

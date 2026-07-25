@@ -88,7 +88,8 @@ const theme = {
 };
 
 // ============================================================================
-// Skill Metadata (embedded from SkillSection)
+// Skill Metadata (inlined here; the old SkillSection widget it came from was
+// deleted 2026-07-25 once this became the only renderer)
 // ============================================================================
 
 const SKILL_METADATA: Record<string, {

@@ -77,11 +77,6 @@ export function getPostBySlug(slug: string): BlogPost | undefined {
   return allPosts.find((p) => p.slug === slug);
 }
 
-/** Posts filtered by a single tag, newest first. */
-export function getPostsByTag(tag: BlogTag): BlogPost[] {
-  return allPosts.filter((p) => p.frontmatter.tags.includes(tag));
-}
-
 /** Up to N related posts, ranked by tag overlap, excluding the current slug. */
 export function getRelatedPosts(currentSlug: string, limit = 3): BlogPost[] {
   const current = getPostBySlug(currentSlug);

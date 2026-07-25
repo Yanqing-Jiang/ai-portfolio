@@ -143,16 +143,3 @@ class ApiService {
 }
 
 export const apiService = new ApiService()
-
-// Helper function to show auth modal when needed
-export const handleApiError = (
-  error: ApiResponse,
-  showAuthModal: () => void
-): string => {
-  if (error.needsAuth) {
-    showAuthModal()
-    return error.error || 'Authentication required'
-  }
-  
-  return error.error || 'An error occurred'
-}

@@ -4,7 +4,8 @@
  * Invokes: useStreamingText hook for typewriter effect
  * Purpose: Shows factors, citations, and narrative explanation with skill-inspired design
  * 
- * Design Pattern: Modeled after SkillModal.tsx from conversational_analytics for
+ * Design Pattern: Modeled after the former conversationalAnalytics SkillModal
+ * (deleted 2026-07-25; see git history) for
  * consistent visual language across the portfolio
  */
 

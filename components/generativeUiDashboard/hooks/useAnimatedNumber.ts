@@ -2,7 +2,7 @@
  * useAnimatedNumber - Animate numeric values with reduced-motion support.
  *
  * Hook: useAnimatedNumber
- * Called from: KpiCard, ComparisonKpiCard, MetricChart
+ * Called from: KpiCard, MetricChart
  * Invokes: useEffect, requestAnimationFrame
  * Why: Provides smooth number transitions for KPIs and metrics.
  *      Respects user's prefers-reduced-motion preference.
