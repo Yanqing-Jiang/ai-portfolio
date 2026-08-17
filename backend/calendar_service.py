@@ -32,6 +32,13 @@ BOOKING_TIMEZONE = os.getenv("BOOKING_TIMEZONE", "America/Los_Angeles")
 # authenticating as the owner. Only the service-account path needs an explicit ID.
 GOOGLE_CALENDAR_ID = os.getenv("GOOGLE_CALENDAR_ID", "")
 
+# Extra calendars whose busy time also blocks the public offer — comma-separated
+# calendar IDs the booking account can at least see free/busy on (e.g. the owner's
+# personal-account calendar carrying synced work events, shared to the booking
+# account with "see only free/busy"). Read-only here: bookings are still written
+# to GOOGLE_CALENDAR_ID/primary only.
+BOOKING_FREEBUSY_CALENDAR_IDS = os.getenv("BOOKING_FREEBUSY_CALENDAR_IDS", "")
+
 # Preferred auth: the owner's own OAuth token — the same file Gmail uses, so one
 # `authorize_google.py` run configures both. See google_oauth for why a service
 # account cannot invite external attendees on a consumer Gmail calendar.
@@ -108,6 +115,21 @@ def _calendar_id() -> str:
     at a different calendar on the same account.
     """
     return GOOGLE_CALENDAR_ID or "primary"
+
+
+def _freebusy_calendar_ids() -> list[str]:
+    """Every calendar whose busy time blocks the offer.
+
+    The write calendar always counts; BOOKING_FREEBUSY_CALENDAR_IDS appends
+    read-only extras. Order is stable and duplicates are dropped so the freebusy
+    request never asks Google about the same calendar twice.
+    """
+    ids = [_calendar_id()]
+    for extra in BOOKING_FREEBUSY_CALENDAR_IDS.split(","):
+        extra = extra.strip()
+        if extra and extra not in ids:
+            ids.append(extra)
+    return ids
 
 
 def _oauth_user_credentials():
@@ -363,8 +385,8 @@ async def get_available_slots(target_date: date, session_type: str = "30") -> li
         logger.info("[CALENDAR] No calendar connected — offering the published hours")
         return _project_sessions(all_slots, list(range(len(all_slots))), duration)
 
-    # Query freebusy for the entire business day
-    cal_id = _calendar_id()
+    # Query freebusy for the entire business day, across every blocking calendar
+    cal_ids = _freebusy_calendar_ids()
     time_min = all_slots[0][0].isoformat()
     time_max = (all_slots[-1][1] + timedelta(minutes=BUFFER_MINUTES)).isoformat()
 
@@ -373,7 +395,7 @@ async def get_available_slots(target_date: date, session_type: str = "30") -> li
             "timeMin": time_min,
             "timeMax": time_max,
             "timeZone": BOOKING_TIMEZONE,
-            "items": [{"id": cal_id}],
+            "items": [{"id": c} for c in cal_ids],
         }
 
         # Google API client is synchronous — call in thread
@@ -385,36 +407,46 @@ async def get_available_slots(target_date: date, session_type: str = "30") -> li
         )
 
         calendars = result.get("calendars", {})
-        # Keyed by the id we asked for; fall back to the sole entry so an alias
-        # ("primary" resolving to the address) cannot silently read as all-free.
-        entry = calendars.get(cal_id)
-        if entry is None and len(calendars) == 1:
-            entry = next(iter(calendars.values()))
-        if entry is None:
-            raise RuntimeError(f"freebusy returned no data for calendar {cal_id!r}")
+        # Response entries not keyed by an id we asked for: "primary" comes back
+        # keyed by the account's email address, so one alias entry is expected.
+        unmatched = {k: v for k, v in calendars.items() if k not in cal_ids}
 
-        # Google answers HTTP 200 with a per-calendar `errors` array for
-        # notFound/internalError. Reading `busy` off that would report an empty
-        # busy list — i.e. the whole day free — and let a booking land on top of
-        # a real event. Treat it as unknown, not as free.
-        if entry.get("errors"):
-            raise RuntimeError(
-                f"freebusy errors for calendar {cal_id!r}: {entry['errors']}"
-            )
-        # Same reasoning for a malformed response: absent `busy` is unknown, not
-        # empty. An explicit empty list is legitimate and means genuinely free.
-        busy_periods = entry.get("busy")
-        if not isinstance(busy_periods, list):
-            raise RuntimeError(
-                f"freebusy returned no busy list for calendar {cal_id!r}"
-            )
-
-        # Parse busy periods into timezone-aware datetimes
         busy_ranges = []
-        for period in busy_periods:
-            busy_start = datetime.fromisoformat(period["start"])
-            busy_end = datetime.fromisoformat(period["end"])
-            busy_ranges.append((busy_start, busy_end))
+        for cal_id in cal_ids:
+            entry = calendars.get(cal_id)
+            if entry is None and cal_id == "primary" and len(unmatched) == 1:
+                # The sole alias must be primary's — every other requested id
+                # (an explicit GOOGLE_CALENDAR_ID included) is literal, and only
+                # the literal "primary" request documents the alias behavior.
+                # Accepting a stray key for an explicit id would let unrelated
+                # response data stand in for a calendar that actually failed.
+                entry = unmatched.pop(next(iter(unmatched)))
+            if entry is None:
+                raise RuntimeError(f"freebusy returned no data for calendar {cal_id!r}")
+
+            # Google answers HTTP 200 with a per-calendar `errors` array for
+            # notFound/internalError. Reading `busy` off that would report an
+            # empty busy list — i.e. the whole day free — and let a booking land
+            # on top of a real event. Treat it as unknown, not as free. An extra
+            # calendar whose free/busy share was revoked lands here too, taking
+            # the offer down rather than silently un-blocking the work hours.
+            if entry.get("errors"):
+                raise RuntimeError(
+                    f"freebusy errors for calendar {cal_id!r}: {entry['errors']}"
+                )
+            # Same reasoning for a malformed response: absent `busy` is unknown,
+            # not empty. An explicit empty list is legitimate and means free.
+            busy_periods = entry.get("busy")
+            if not isinstance(busy_periods, list):
+                raise RuntimeError(
+                    f"freebusy returned no busy list for calendar {cal_id!r}"
+                )
+
+            # Parse busy periods into timezone-aware datetimes
+            for period in busy_periods:
+                busy_start = datetime.fromisoformat(period["start"])
+                busy_end = datetime.fromisoformat(period["end"])
+                busy_ranges.append((busy_start, busy_end))
 
     except Exception as exc:
         logger.error("[CALENDAR] Freebusy query failed: %s", exc)

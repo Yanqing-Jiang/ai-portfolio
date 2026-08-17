@@ -153,3 +153,96 @@ async def test_mock_60_min_never_spans_a_stagger_gap(monkeypatch):
         # Both halves of the hour have to be published slots.
         assert slot["start"] in grid
         assert (start + timedelta(minutes=30)).isoformat() in grid
+
+
+# --- Freebusy across multiple calendars --------------------------------------
+
+def _fake_service(calendars: dict, captured: dict):
+    """The minimal surface get_available_slots touches: freebusy().query().execute()."""
+    class _Execute:
+        def __init__(self, body):
+            captured["body"] = body
+        def execute(self):
+            return {"calendars": calendars}
+
+    class _Freebusy:
+        def query(self, body):
+            return _Execute(body)
+
+    class _Service:
+        def freebusy(self):
+            return _Freebusy()
+
+    return _Service()
+
+
+@pytest.mark.asyncio
+async def test_busy_time_on_an_extra_freebusy_calendar_blocks_the_slot(monkeypatch):
+    day = SATURDAY  # weekend grid is deterministic: 1pm-4pm, all six slots
+    work_id = "work-sync@group.calendar.google.com"
+    busy_start = datetime(day.year, day.month, day.day, 13, 0, tzinfo=TZ)
+    busy_end = busy_start + timedelta(minutes=30)
+    captured: dict = {}
+    monkeypatch.setattr(cs, "BOOKING_FREEBUSY_CALENDAR_IDS", work_id)
+    monkeypatch.setattr(cs, "_get_calendar_service", lambda: _fake_service({
+        # primary comes back keyed by the account address, not "primary"
+        "owner@example.com": {"busy": []},
+        work_id: {"busy": [{"start": busy_start.isoformat(), "end": busy_end.isoformat()}]},
+    }, captured))
+
+    slots = await cs.get_available_slots(day, "30")
+
+    assert [i["id"] for i in captured["body"]["items"]] == ["primary", work_id]
+    starts = {datetime.fromisoformat(s["start"]) for s in slots}
+    assert busy_start not in starts
+    # Pins the CURRENT one-sided buffer policy: BUFFER_MINUTES protects the time
+    # after a consultation (a slot ending <15min before a busy start is blocked),
+    # but a slot may start the minute a busy block ends. Tightening to a
+    # two-sided buffer is a product decision; this assertion must flip with it.
+    assert busy_end in starts
+
+
+@pytest.mark.asyncio
+async def test_missing_extra_calendar_fails_closed(monkeypatch):
+    """A revoked/typo'd extra calendar must take the offer down, not read as free."""
+    day = SATURDAY
+    work_id = "work-sync@group.calendar.google.com"
+    monkeypatch.setattr(cs, "BOOKING_FREEBUSY_CALENDAR_IDS", work_id)
+    monkeypatch.setattr(cs, "_get_calendar_service", lambda: _fake_service({
+        "owner@example.com": {"busy": []},
+        # work calendar absent from the response entirely
+    }, {}))
+
+    with pytest.raises(RuntimeError, match="calendar_freebusy_unavailable"):
+        await cs.get_available_slots(day, "30")
+
+
+@pytest.mark.asyncio
+async def test_extra_calendar_error_entry_fails_closed(monkeypatch):
+    day = SATURDAY
+    work_id = "work-sync@group.calendar.google.com"
+    monkeypatch.setattr(cs, "BOOKING_FREEBUSY_CALENDAR_IDS", work_id)
+    monkeypatch.setattr(cs, "_get_calendar_service", lambda: _fake_service({
+        "owner@example.com": {"busy": []},
+        work_id: {"errors": [{"reason": "notFound"}], "busy": []},
+    }, {}))
+
+    with pytest.raises(RuntimeError, match="calendar_freebusy_unavailable"):
+        await cs.get_available_slots(day, "30")
+
+
+@pytest.mark.asyncio
+async def test_explicit_calendar_id_never_accepts_an_alias_entry(monkeypatch):
+    """The alias fallback is for the literal "primary" request only. With an
+    explicit GOOGLE_CALENDAR_ID, a response keyed by some other address means
+    the requested calendar is missing — unrelated data must not stand in for it."""
+    day = SATURDAY
+    monkeypatch.setattr(cs, "GOOGLE_CALENDAR_ID", "configured-write@example.com")
+    monkeypatch.setattr(cs, "BOOKING_FREEBUSY_CALENDAR_IDS", "work-sync@group.calendar.google.com")
+    monkeypatch.setattr(cs, "_get_calendar_service", lambda: _fake_service({
+        "unexpected@example.com": {"busy": []},
+        "work-sync@group.calendar.google.com": {"busy": []},
+    }, {}))
+
+    with pytest.raises(RuntimeError, match="calendar_freebusy_unavailable"):
+        await cs.get_available_slots(day, "30")
