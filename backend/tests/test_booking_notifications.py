@@ -136,6 +136,34 @@ def test_calendar_failure_still_alerts_the_owner(monkeypatch, slot):
 
 # --- Meet link resolution ----------------------------------------------------
 
+@pytest.mark.parametrize("uri", [
+    "http://meet.google.com/abc-defg-hij",
+    "https://evil.example/abc-defg-hij",
+    "https://meet.google.com.evil.example/abc-defg-hij",
+    "https://meet.google.com/",
+])
+def test_invalid_meet_video_urls_are_rejected(uri):
+    event = {
+        "conferenceData": {
+            "entryPoints": [{"entryPointType": "video", "uri": uri}],
+        },
+    }
+
+    assert cs._extract_meet_link(event) == ""
+
+
+def test_canonical_google_meet_video_url_is_accepted():
+    event = {
+        "conferenceData": {
+            "entryPoints": [{
+                "entryPointType": "video",
+                "uri": "https://meet.google.com/abc-defg-hij",
+            }],
+        },
+    }
+
+    assert cs._extract_meet_link(event) == "https://meet.google.com/abc-defg-hij"
+
 class _FakeEvents:
     """Mimics the Google client: insert() returns a pending conference, and the
     Meet link only shows up on a later events.get()."""

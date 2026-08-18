@@ -17,6 +17,7 @@ import random
 import uuid
 from datetime import date, datetime, timedelta
 from typing import Optional
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 from google_oauth import load_user_credentials, resolve_credentials_path
@@ -292,8 +293,13 @@ def _generate_slot_boundaries(target_date: date, tz: ZoneInfo) -> list[tuple[dat
 def _extract_meet_link(event: dict) -> str:
     """Pull the video entry point (the Meet URL) out of an event's conferenceData."""
     for ep in event.get("conferenceData", {}).get("entryPoints", []) or []:
-        if ep.get("entryPointType") == "video" and ep.get("uri"):
-            return ep["uri"]
+        uri = ep.get("uri", "").strip()
+        if ep.get("entryPointType") != "video" or not uri:
+            continue
+        parsed = urlparse(uri)
+        if parsed.scheme == "https" and parsed.hostname == "meet.google.com" and parsed.path.strip("/"):
+            return uri
+        logger.warning("[CALENDAR] Ignoring invalid Meet video URL from Google: %r", uri)
     return ""
 
 

@@ -142,7 +142,7 @@ export const MeetPage: React.FC = () => {
                     {/* Hero */}
                     <section className="mx-auto max-w-[1080px] px-6 pt-16 pb-10 sm:pt-24">
                         <h1 className="font-black tracking-[-0.045em] text-[#F1EADF]" style={{ fontSize: 'clamp(40px, 8vw, 84px)' }}>
-                            Grab 30 minutes<span className="text-[#F04A32]">.</span>
+                            Grab 30 minutes with Yanqing<span className="text-[#F04A32]">.</span>
                         </h1>
                         <p className="mt-6 max-w-[54ch] text-[18px] leading-[1.5] text-[#A8A096]">
                             Pick any open slot — it's synced with my real calendar. You'll get a
@@ -182,7 +182,6 @@ export const MeetPage: React.FC = () => {
                             <div className="space-y-6">
                                 <div>
                                     <h2 className="text-[22px] font-bold text-[#F1EADF]">Pick a time</h2>
-                                    <p className="mt-2 text-[13px] text-[#A8A096]">Mon–Fri 9am–4pm PT (selected windows) · Sat–Sun 1–4pm PT · times shown in your timezone</p>
                                 </div>
                                 {/* The calendar is not rendered at all until the
                                     required fields are in — a dimmed-but-visible
@@ -262,9 +261,6 @@ export const MeetPage: React.FC = () => {
                                         'Book the call'
                                     )}
                                 </button>
-                                <p className="text-center text-[12px] text-[#A8A096]">
-                                    Confirmed instantly — no payment, no sign-in. Need to reschedule? Just reply to the confirmation email.
-                                </p>
                             </div>
                         </div>
                     </section>
