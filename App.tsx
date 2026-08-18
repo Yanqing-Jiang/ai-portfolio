@@ -24,6 +24,7 @@ import { FortuneAgentCustomWish } from './components/generativeUiDashboard/Fortu
 import { FortuneResultShell } from './components/generativeUiDashboard/FortuneResultShell';
 import { AskDemoPage } from './components/generativeUiDashboard/fortune/AskDemoPage';
 import { ConsultingPage } from './components/consulting/ConsultingPage';
+import { MeetPage } from './components/consulting/MeetPage';
 import BlogIndexPage from './components/blog/BlogIndexPage';
 import BlogPostPage from './components/blog/BlogPostPage';
 import HomerLitePage from './components/homer-lite/HomerLitePage';
@@ -215,8 +216,8 @@ const Layout: React.FC = () => {
     navigate(targetPath);
   };
 
-  // /consult carries its own top nav — hide the shared header there.
-  const hideShellChrome = location.pathname === '/consult';
+  // /consult and /meet carry their own top nav — hide the shared header there.
+  const hideShellChrome = location.pathname === '/consult' || location.pathname === '/meet';
 
   return (
     <div className="flex h-[100dvh] flex-col bg-[#010208] text-white font-sans overflow-hidden">
@@ -279,6 +280,9 @@ const Layout: React.FC = () => {
 
             <Route path="/project/:projectId" element={<ProjectRoute />} />
             <Route path="/consult" element={<ConsultingPage />} />
+            {/* Unlisted direct-scheduling page (share by link; noindex, not in
+                the sitemap or prerender list — served by the SPA fallback). */}
+            <Route path="/meet" element={<MeetPage />} />
 
             {/* Blog (Phase 1) */}
             <Route path="/blog" element={<BlogIndexPage />} />
