@@ -183,21 +183,19 @@ export const MeetPage: React.FC = () => {
                                 <div>
                                     <h2 className="text-[22px] font-bold text-[#F1EADF]">Pick a time</h2>
                                 </div>
-                                {/* The calendar is not rendered at all until the
-                                    required fields are in — a dimmed-but-visible
-                                    picker invites clicks that silently do nothing. */}
-                                {!contextValid ? (
-                                    <div className="rounded-[6px] border border-dashed border-[#37332E] bg-[#191816]/30 p-6">
-                                        <p className="text-[13px] text-[#A8A096]">
-                                            Fill in your details on the left — the calendar opens here.
-                                        </p>
-                                    </div>
-                                ) : (
                                 <div>
-                                    <CalendarPicker
-                                        selectedDate={selectedDate}
-                                        onSelectDate={(d) => { setSelectedDate(d); setSelectedTime(null); }}
-                                    />
+                                    {!contextValid && (
+                                        <p className="text-[13px] text-[#A8A096]">
+                                            Fill in your details — then choose a date and time.
+                                        </p>
+                                    )}
+                                    <div className={!contextValid ? 'mt-3 opacity-60' : undefined}>
+                                        <CalendarPicker
+                                            selectedDate={selectedDate}
+                                            onSelectDate={(d) => { setSelectedDate(d); setSelectedTime(null); }}
+                                            disabled={!contextValid}
+                                        />
+                                    </div>
                                     {selectedDate && (
                                         <div className="mt-6 space-y-3">
                                             <h3 className="flex items-center gap-2 text-[15px] font-semibold text-[#F1EADF]">
@@ -244,7 +242,6 @@ export const MeetPage: React.FC = () => {
                                         </div>
                                     )}
                                 </div>
-                                )}
 
                                 {error && <p className="text-[14px] text-[#F04A32]">{error}</p>}
 

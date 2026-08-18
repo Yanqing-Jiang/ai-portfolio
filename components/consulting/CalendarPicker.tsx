@@ -5,11 +5,12 @@ import { ChevronLeft, ChevronRight } from 'lucide-react';
 interface CalendarPickerProps {
   selectedDate: string | null;
   onSelectDate: (date: string) => void; // YYYY-MM-DD
+  disabled?: boolean;
 }
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-export const CalendarPicker: React.FC<CalendarPickerProps> = ({ selectedDate, onSelectDate }) => {
+export const CalendarPicker: React.FC<CalendarPickerProps> = ({ selectedDate, onSelectDate, disabled = false }) => {
   const [viewMonth, setViewMonth] = useState(() => {
     const now = new Date();
     return { year: now.getFullYear(), month: now.getMonth() };
@@ -93,12 +94,12 @@ export const CalendarPicker: React.FC<CalendarPickerProps> = ({ selectedDate, on
           cell ? (
             <motion.button
               key={cell.date}
-              disabled={cell.disabled}
-              onClick={() => !cell.disabled && onSelectDate(cell.date)}
-              whileTap={cell.disabled ? undefined : { scale: 0.9 }}
+              disabled={cell.disabled || disabled}
+              onClick={() => !cell.disabled && !disabled && onSelectDate(cell.date)}
+              whileTap={cell.disabled || disabled ? undefined : { scale: 0.9 }}
               className={`
                 min-h-[44px] rounded-[4px] text-sm font-medium transition-all
-                ${cell.disabled
+                ${cell.disabled || disabled
                   ? 'text-[#565049] cursor-not-allowed'
                   : cell.date === selectedDate
                     ? 'bg-[#F04A32] text-[#12110F] font-semibold'
