@@ -353,6 +353,8 @@ export const Architecture: React.FC = () => {
 
   const activeSub = LIVE_SUBSYSTEMS.find((s) => s.id === activeId) || LIVE_SUBSYSTEMS[0];
   const play = PLAY[activeSub.id as PlayTab]!;
+  const allLive = LIVE_SUBSYSTEMS.length === SUBSYSTEMS.length;
+  const liveNote = allLive ? '' : ` ${LIVE_SUBSYSTEMS.length} of ${SUBSYSTEMS.length} are live; the rest come online as their sandboxes ship.`;
   const ActiveViz = activeSub.viz;
   const ActiveIcon = activeSub.icon;
 
@@ -397,7 +399,7 @@ export const Architecture: React.FC = () => {
       id="architecture"
       eyebrow="architecture"
       title="Five subsystems, one loop."
-      subtitle={`You can try it out too. Every tab below is a real subsystem in production — tap a chip, then type in the box.${LIVE_SUBSYSTEMS.length < SUBSYSTEMS.length ? ` ${LIVE_SUBSYSTEMS.length} of ${SUBSYSTEMS.length} are live; the rest come online as their sandboxes ship.` : }`}
+      subtitle={`You can try it out too. Every tab below is a real subsystem in production — tap a chip, then type in the box.${liveNote}`}
     >
       {/* Sticky chip strip — thumb-reachable on mobile, horizontal on desktop.
           Sticks within the section (not page-global) so the long scroll past
