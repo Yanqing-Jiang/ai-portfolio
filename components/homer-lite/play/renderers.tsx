@@ -1,12 +1,16 @@
 import React from 'react';
 import { HOMER_THEME } from '../theme';
 import type {
+  McpCallData,
+  McpListData,
   MemoryExtractData,
   MemorySearchData,
   PlayEnvelope,
   SchedulerData,
+  VoiceData,
   WebActivityData,
 } from './types';
+import { AudioClip } from './AudioClip';
 
 // Result renderers for the phase-1 tabs. Each takes the full envelope so it
 // can show receipts (source, observed_at) alongside `data`.
@@ -183,6 +187,69 @@ export const renderWeb = (env: PlayEnvelope<WebActivityData>) => {
         </Row>
       </div>
       <Receipt items={['aggregate counts only', 'no message content', 'zero cost']} />
+    </div>
+  );
+};
+
+// --- MCP ------------------------------------------------------------------
+const Code: React.FC<{ children: string }> = ({ children }) => (
+  <pre
+    className="mt-2 rounded-md px-3 py-2.5 text-[12px] overflow-x-auto"
+    style={{ fontFamily: HOMER_THEME.fontMono, color: HOMER_THEME.text, background: '#0a0908', border: `1px solid ${HOMER_THEME.divider}` }}
+  >
+    {children}
+  </pre>
+);
+
+export const renderMcp = (env: PlayEnvelope<McpListData | McpCallData>) => {
+  if (env.action === 'list_tools') {
+    const d = env.data as McpListData;
+    return (
+      <div>
+        <p className="mb-2">
+          <span style={{ fontFamily: HOMER_THEME.fontMono, color: HOMER_THEME.accent }}>tools/list</span> → {d.tools.length} tools exposed publicly. Call one with{' '}
+          <span style={{ fontFamily: HOMER_THEME.fontMono, color: HOMER_THEME.textMuted }}>/call &lt;name&gt; {'{...}'}</span>.
+        </p>
+        <div className="grid gap-1.5">
+          {d.tools.map((t) => (
+            <Row key={t.name} pill={t.side_effect_class === 'none' ? 'read' : t.side_effect_class} pillColor={OK} right={t.data_source.replace(/_/g, ' ')}>
+              <b className="font-medium">{t.name}</b> · {t.description}
+              {Array.isArray((t.input_schema as { required?: string[] }).required) && (
+                <span style={{ color: HOMER_THEME.textMuted }}> · needs {((t.input_schema as { required?: string[] }).required ?? []).join(', ')}</span>
+              )}
+            </Row>
+          ))}
+        </div>
+        <Receipt items={['same protocol as the private server', 'read-only allowlist', 'no side effects']} />
+      </div>
+    );
+  }
+  const d = env.data as McpCallData;
+  const text = d.content.map((c) => c.text ?? '').filter(Boolean).join('\n');
+  return (
+    <div>
+      <p className="mb-1">
+        <span style={{ fontFamily: HOMER_THEME.fontMono, color: HOMER_THEME.accent }}>tools/call</span> → <b className="font-medium">{d.tool}</b>
+        {d.is_error && <span style={{ color: BAD }}> · error</span>}
+      </p>
+      {text && <div className="text-sm whitespace-pre-wrap" style={{ color: HOMER_THEME.text }}>{text}</div>}
+      {d.structured_content && <Code>{JSON.stringify(d.structured_content, null, 2).slice(0, 2400)}</Code>}
+      <KV items={[['allowlist', String(d.trace.allowlist_match)], ['handler', d.trace.handler]]} />
+      <Receipt items={['real MCP frame', 'allowlisted tool', 'nothing written']} />
+    </div>
+  );
+};
+
+// --- Voice ----------------------------------------------------------------
+export const renderVoice = (env: PlayEnvelope<VoiceData>) => {
+  const d = env.data;
+  const src = `data:${d.audio.mime_type};base64,${d.audio.data}`;
+  return (
+    <div>
+      <p className="mb-2">Synthesised with Homer's real TTS stack — the same cloned voice as Goggins GPT.</p>
+      <AudioClip src={src} label={d.text} autoPlay durationMs={d.audio.duration_ms} />
+      <KV items={[['chars billed', d.characters_billed], ['bytes', d.audio.bytes], ['voice', d.voice.class.replace(/_/g, ' ')]]} />
+      <Receipt items={['no outbound call', 'audio not stored']} />
     </div>
   );
 };

@@ -9,7 +9,7 @@
 //   - Scheduler / Executors / MCP / Voice / Web UI bullets stay locked to the
 //     ground-truth phase mapping (don't let copy drift re-introduce the old
 //     "intelligence briefs / Slack triggers / native FS access" variants).
-//   - SectionShell title "Six subsystems, one loop." stays canonical.
+//   - SectionShell title "Five subsystems, one loop." (Executors tab removed 2026-08-29 per Yanqing).
 //
 // What changed vs. concept-B.html:
 //   - Mobile-first sticky position lives inside the section (not page-global),
@@ -22,11 +22,11 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
-import { Brain, Calendar, Cpu, Plug, Phone, Globe, Database, Terminal, MessageSquare, Zap, AlertCircle, RefreshCw, Shield, Mic, FileText, Smartphone, Lock } from 'lucide-react';
+import { Brain, Calendar, Plug, Phone, Globe, Database, Terminal, MessageSquare, Zap, AlertCircle, RefreshCw, Shield, Mic, FileText, Smartphone, Lock } from 'lucide-react';
 import { SectionShell } from '../SectionShell';
 import { HOMER_THEME } from '../theme';
 import { PlayConsole } from '../play/PlayConsole';
-import { renderMemory, renderScheduler, renderWeb } from '../play/renderers';
+import { renderMemory, renderMcp, renderScheduler, renderVoice, renderWeb } from '../play/renderers';
 import type { PlayEnvelope, PlayTab } from '../play/types';
 
 export const META = {
@@ -123,27 +123,6 @@ const SchedulerViz = ({ phase }: { phase: number }) => (
   </VizFrame>
 );
 
-const ExecutorsViz = ({ phase }: { phase: number }) => (
-  <VizFrame>
-    <div className="flex items-center gap-8">
-      <motion.div animate={{ x: phase === 0 ? 0 : phase === 1 ? 10 : 20 }} className="p-4 rounded-xl border z-10" style={{ borderColor: HOMER_THEME.divider, backgroundColor: HOMER_THEME.bg }}>
-        <Cpu size={32} style={{ color: HOMER_THEME.text }} />
-      </motion.div>
-      <div className="flex flex-col gap-4">
-        <motion.div animate={{ opacity: phase === 0 ? 1 : 0.2, borderColor: phase === 0 ? HOMER_THEME.accent : HOMER_THEME.divider }} className="px-4 md:px-6 py-2 border rounded font-mono text-sm flex items-center gap-2">
-          Fast <Zap size={14} style={{ color: HOMER_THEME.accent }}/>
-        </motion.div>
-        <motion.div animate={{ opacity: phase === 1 ? 1 : 0.2, borderColor: phase === 1 ? '#ef4444' : HOMER_THEME.divider }} className="px-4 md:px-6 py-2 border rounded font-mono text-sm flex items-center gap-2">
-          Primary <AlertCircle size={14} style={{ color: '#ef4444' }}/>
-        </motion.div>
-        <motion.div animate={{ opacity: phase === 2 ? 1 : 0.2, borderColor: phase === 2 ? HOMER_THEME.accent : HOMER_THEME.divider }} className="px-4 md:px-6 py-2 border rounded font-mono text-sm flex items-center gap-2">
-          Fallback <RefreshCw size={14} style={{ color: HOMER_THEME.accent }}/>
-        </motion.div>
-      </div>
-    </div>
-  </VizFrame>
-);
-
 const McpViz = ({ phase }: { phase: number }) => (
   <VizFrame>
     <div className="relative flex items-center justify-center w-full h-full">
@@ -219,7 +198,7 @@ const WebUiViz = ({ phase }: { phase: number }) => (
 // Each live subsystem embeds a PlayConsole wired to POST /api/homer/play.
 // Phase 1 = memory / scheduler / web. Chips for subsystems without a `play`
 // entry are hidden until their phase ships (Yanqing: "hide those chips until
-// live") — the "Six subsystems" headline stays; the subtitle says how many
+// live") — the headline stays; the subtitle says how many
 // are live.
 //
 // The old "Built for me / Deployed for your team" bullets were removed — they
@@ -232,6 +211,8 @@ interface PlayConfig {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   render: (env: PlayEnvelope<any>) => React.ReactNode;
   maxLength?: number;
+  /** Voice only: static pre-recorded lines the visitor can play without spending a try. */
+  recordingsManifest?: string;
 }
 
 // Memory: a statement (past tense, "prefers", "decided", "moved", …) goes to
@@ -277,6 +258,37 @@ const PLAY: Partial<Record<PlayTab, PlayConfig>> = {
     }),
     render: renderWeb,
   },
+  mcp: {
+    label: 'list the public tools, then call one',
+    placeholder: '/tools   or   /call memory_search {"query":"conflict"}   or just type a question',
+    suggestions: ['/tools', '/call memory_search {"query":"memory conflict"}', '/call preference_query {"topic":"sqlite"}', '/call todo_list'],
+    route: (m) => {
+      const t = m.trim();
+      if (/^\/tools\b/i.test(t)) return { action: 'list_tools', input: {} };
+      const call = t.match(/^\/call\s+([a-z_]+)\s*(\{[\s\S]*\})?\s*$/i);
+      if (call) {
+        let args: Record<string, unknown> = {};
+        try {
+          args = call[2] ? (JSON.parse(call[2]) as Record<string, unknown>) : {};
+        } catch {
+          args = {};
+        }
+        return { action: 'call_tool', input: { tool: call[1].toLowerCase(), arguments: args } };
+      }
+      // Plain text → memory_search, the tool a real agent would reach for first.
+      return { action: 'call_tool', input: { tool: 'memory_search', arguments: { query: t, limit: 3 } } };
+    },
+    render: renderMcp,
+  },
+  voice: {
+    label: 'type a line and Homer says it in the Goggins voice (80 chars max)',
+    placeholder: 'something short for Homer to say…',
+    suggestions: ['Stay hard. Homer never sleeps.', 'Three jobs failed overnight. Fix them.'],
+    route: () => ({ action: 'synthesize', input: { format: 'mp3' } }),
+    render: renderVoice,
+    maxLength: 80,
+    recordingsManifest: '/homer/voice/manifest.json',
+  },
 };
 
 // --- SUBSYSTEM DATA ---
@@ -296,14 +308,6 @@ const SUBSYSTEMS = [
     headline: 'Works while you sleep.',
     viz: SchedulerViz,
     receipts: ['48 daily tasks', '46K+ traced executions']
-  },
-  {
-    id: 'executors',
-    label: 'Executors',
-    icon: Cpu,
-    headline: 'Right model. Every time.',
-    viz: ExecutorsViz,
-    receipts: ['5 executors', '99.4% success rate']
   },
   {
     id: 'mcp',
@@ -392,8 +396,8 @@ export const Architecture: React.FC = () => {
     <SectionShell
       id="architecture"
       eyebrow="architecture"
-      title="Six subsystems, one loop."
-      subtitle={`You can try it out too. Every tab below is a real subsystem in production — tap a chip, then type in the box. ${LIVE_SUBSYSTEMS.length} of ${SUBSYSTEMS.length} are live; the rest come online as their sandboxes ship.`}
+      title="Five subsystems, one loop."
+      subtitle={`You can try it out too. Every tab below is a real subsystem in production — tap a chip, then type in the box.${LIVE_SUBSYSTEMS.length < SUBSYSTEMS.length ? ` ${LIVE_SUBSYSTEMS.length} of ${SUBSYSTEMS.length} are live; the rest come online as their sandboxes ship.` : }`}
     >
       {/* Sticky chip strip — thumb-reachable on mobile, horizontal on desktop.
           Sticks within the section (not page-global) so the long scroll past
@@ -524,6 +528,7 @@ export const Architecture: React.FC = () => {
             route={play.route}
             render={play.render}
             maxLength={play.maxLength}
+            recordingsManifest={play.recordingsManifest}
           />
         </div>
       </motion.div>

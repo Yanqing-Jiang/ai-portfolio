@@ -86,7 +86,7 @@ class McpCallInput(StrictModel):
 
 class McpMemorySearchArguments(StrictModel):
     query: str = Field(min_length=1, max_length=200)
-    limit: int = Field(default=3, ge=1, le=4)
+    limit: int = Field(default=4, ge=1, le=4)
 
     @field_validator("query")
     @classmethod
@@ -94,26 +94,39 @@ class McpMemorySearchArguments(StrictModel):
         return normalize_message(value)
 
 
-class McpScheduleStatusArguments(StrictModel):
-    status: Literal["all", "success", "failed", "running"] = "all"
-    since_hours: Literal[1, 24, 168] = 24
-    include_next_run: bool = False
+class McpMemoryContextArguments(StrictModel):
+    target: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=64,
+        pattern=r"^[a-z][a-z0-9_-]*$",
+    )
+    limit: int = Field(default=6, ge=1, le=6)
 
 
-class McpRuntimeStatusArguments(StrictModel):
-    window: Literal["1h", "24h", "7d"] = "24h"
-    view: Literal["overview", "threads", "runs", "events"] = "overview"
+class McpPreferenceQueryArguments(StrictModel):
+    topic: str = Field(min_length=1, max_length=200)
+
+    @field_validator("topic")
+    @classmethod
+    def _normalize_topic(cls, value: str) -> str:
+        return normalize_message(value)
+
+
+class McpTodoListArguments(StrictModel):
+    status: Literal["open"] = "open"
 
 
 MCP_ARGUMENT_MODEL_BY_TOOL: dict[str, type[StrictModel]] = {
     "memory_search": McpMemorySearchArguments,
-    "public_schedule_status": McpScheduleStatusArguments,
-    "public_runtime_status": McpRuntimeStatusArguments,
+    "memory_context": McpMemoryContextArguments,
+    "preference_query": McpPreferenceQueryArguments,
+    "todo_list": McpTodoListArguments,
 }
 
 
 class VoiceInput(StrictModel):
-    format: Literal["ogg_opus"] = "ogg_opus"
+    format: Literal["mp3"] = "mp3"
 
 
 class WebActivityInput(StrictModel):
@@ -161,6 +174,13 @@ class VoiceRequest(CommonRequest):
     action: Literal["synthesize"]
     message: str = Field(min_length=1, max_length=80)
     input: VoiceInput
+
+    @field_validator("message", mode="before")
+    @classmethod
+    def _normalize_voice_message(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        return re.sub(r"\s+", " ", normalize_message(value))
 
 
 class WebActivityRequest(CommonRequest):
@@ -228,6 +248,74 @@ class MemorySearchData(StrictModel):
     vector_leg: Literal["available", "unavailable"]
     results: list[SearchResult] = Field(max_length=4)
     meta: SearchMeta
+
+
+class McpPublicClaim(StrictModel):
+    id: str
+    content: str
+    target: str
+    status: Literal["approved"]
+    created_at: str
+
+
+class McpClaimGroup(StrictModel):
+    claim_type: str
+    claims: list[McpPublicClaim] = Field(max_length=6)
+
+
+class McpMemoryContextMeta(StrictModel):
+    claims_returned: int = Field(ge=0, le=6)
+    corpus_size: int = Field(ge=0)
+
+
+class McpMemoryContextData(StrictModel):
+    target: str | None
+    groups: list[McpClaimGroup]
+    meta: McpMemoryContextMeta
+
+
+class McpPreferenceHit(StrictModel):
+    id: str
+    content: str
+    target: str
+    status: Literal["approved"]
+    created_at: str
+    bm25_score: float = Field(ge=0)
+
+
+class McpPreferenceMeta(StrictModel):
+    preference_claims_scanned: int = Field(ge=0)
+    matches_returned: int = Field(ge=0, le=6)
+
+
+class McpPreferenceData(StrictModel):
+    topic: str
+    preferences: list[McpPreferenceHit] = Field(max_length=6)
+    meta: McpPreferenceMeta
+
+
+class McpTodoPriorityCounts(StrictModel):
+    P1: int = Field(ge=0)
+    P2: int = Field(ge=0)
+    P3: int = Field(ge=0)
+
+
+class McpTodoCategoryCounts(StrictModel):
+    W: int = Field(ge=0)
+    L: int = Field(ge=0)
+
+
+class McpTodoOpenSummary(StrictModel):
+    total: int = Field(ge=0)
+    by_priority: McpTodoPriorityCounts
+    by_category: McpTodoCategoryCounts
+    oldest_open_age_bucket: Literal["none", "<1d", "1-7d", "8-30d", "31-90d", "90d+"]
+
+
+class McpTodoSummaryData(StrictModel):
+    status: Literal["open"]
+    open: McpTodoOpenSummary
+    done_last_7_days: int = Field(ge=0)
 
 
 class ExtractorInfo(StrictModel):
@@ -357,7 +445,7 @@ class ExecutorData(StrictModel):
 
 
 class McpTool(StrictModel):
-    name: Literal["memory_search", "public_schedule_status", "public_runtime_status"]
+    name: Literal["memory_search", "memory_context", "preference_query", "todo_list"]
     description: str
     input_schema: dict[str, Any]
     data_source: Literal["public_corpus", "live_bridge"]
@@ -382,7 +470,7 @@ class McpTrace(StrictModel):
 
 class McpCallData(StrictModel):
     protocol: Literal["mcp"]
-    tool: Literal["memory_search", "public_schedule_status", "public_runtime_status"]
+    tool: Literal["memory_search", "memory_context", "preference_query", "todo_list"]
     content: list[McpContent]
     structured_content: dict[str, Any]
     is_error: bool
@@ -390,16 +478,17 @@ class McpCallData(StrictModel):
 
 
 class VoiceAudio(StrictModel):
-    mime_type: Literal["audio/ogg; codecs=opus"]
+    mime_type: Literal["audio/mpeg"]
     encoding: Literal["base64"]
     data: str
     bytes: int = Field(ge=0)
     duration_ms: int = Field(ge=0)
+    duration_estimated: Literal[True]
 
 
 class VoiceInfo(StrictModel):
     provider: Literal["elevenlabs"]
-    class_: Literal["licensed_stock_public_demo"] = Field(alias="class")
+    class_: Literal["portfolio_goggins_persona"] = Field(alias="class")
     model: str
 
 
@@ -407,7 +496,7 @@ class VoiceData(StrictModel):
     text: str
     audio: VoiceAudio
     voice: VoiceInfo
-    characters_billed: int = Field(ge=0, le=80)
+    characters_billed: int = Field(ge=0)
 
 
 class ProviderShare(StrictModel):
@@ -475,6 +564,7 @@ class Degraded(StrictModel):
     reason: Literal[
         "not_yet_enabled",
         "daily_spend_cap",
+        "voice_daily_cap",
         "rate_backend_unavailable",
         "bridge_unavailable",
         "provider_unavailable",

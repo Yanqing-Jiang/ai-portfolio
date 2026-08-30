@@ -1,8 +1,9 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Loader2, Send } from 'lucide-react';
 import { HOMER_THEME } from '../theme';
 import { configService } from '../../../services/config';
-import type { PlayEnvelope, PlayError, PlayRequest, PlayTab } from './types';
+import type { PlayEnvelope, PlayError, PlayRequest, PlayTab, VoiceRecording } from './types';
+import { AudioClip } from './AudioClip';
 
 // PlayConsole — the shared "try it" chatbox embedded in every Architecture tab.
 //
@@ -34,6 +35,8 @@ export interface PlayConsoleProps<T = unknown> {
   /** Render the `data` of a successful envelope. */
   render: (envelope: PlayEnvelope<T>) => React.ReactNode;
   maxLength?: number;
+  /** URL of a static manifest of pre-recorded lines; rendered as click-to-play chips (no API call). */
+  recordingsManifest?: string;
 }
 
 const CREAM = '#f3ecdd';
@@ -66,12 +69,29 @@ export function PlayConsole<T = unknown>({
   route,
   render,
   maxLength = 500,
+  recordingsManifest,
 }: PlayConsoleProps<T>) {
   const [value, setValue] = useState('');
   const [turns, setTurns] = useState<PlayTurn<T>[]>([]);
   const [remaining, setRemaining] = useState<number | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const busy = turns.some((t) => t.state === 'loading');
+  const [recordings, setRecordings] = useState<VoiceRecording[]>([]);
+  const [activeRecording, setActiveRecording] = useState<VoiceRecording | null>(null);
+
+  useEffect(() => {
+    if (!recordingsManifest) return;
+    let cancelled = false;
+    fetch(recordingsManifest)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((list: VoiceRecording[]) => {
+        if (!cancelled && Array.isArray(list)) setRecordings(list);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [recordingsManifest]);
 
   const send = async (raw: string) => {
     const message = raw.trim().slice(0, maxLength);
@@ -145,6 +165,37 @@ export function PlayConsole<T = unknown>({
           )}
         </div>
       </div>
+
+      {recordings.length > 0 && (
+        <div className="flex flex-col gap-2">
+          <div className="text-[10px] tracking-[0.18em] uppercase" style={{ fontFamily: HOMER_THEME.fontMono, color: HOMER_THEME.textMuted }}>
+            Listen first — recorded lines, no try spent
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {recordings.map((r) => (
+              <button
+                key={r.id}
+                type="button"
+                onClick={() => setActiveRecording(r)}
+                className="px-2.5 py-1.5 rounded-md text-[12px] text-left transition-colors hover:bg-white/[0.04]"
+                style={{
+                  fontFamily: HOMER_THEME.fontMono,
+                  color: activeRecording?.id === r.id ? HOMER_THEME.text : HOMER_THEME.accent,
+                  border: `1px solid ${activeRecording?.id === r.id ? HOMER_THEME.accent : 'rgba(212, 160, 86, 0.45)'}`,
+                  background: activeRecording?.id === r.id ? HOMER_THEME.accentSoft : 'transparent',
+                }}
+              >
+                ▶ {r.text.length > 48 ? `${r.text.slice(0, 46)}…` : r.text}
+              </button>
+            ))}
+          </div>
+          {activeRecording && (
+            <div className="rounded-lg px-3.5 py-3" style={{ background: HOMER_THEME.bg, border: `1px solid ${HOMER_THEME.divider}` }}>
+              <AudioClip key={activeRecording.id} src={activeRecording.file} label={activeRecording.text} autoPlay durationMs={activeRecording.duration_ms} />
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="flex flex-wrap gap-2">
         {suggestions.map((s) => (

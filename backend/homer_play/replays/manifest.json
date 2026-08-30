@@ -57,7 +57,7 @@
       "captured_at": "2026-08-20T19:00:00Z",
       "generator_build": "phase1-synthetic-v1",
       "source_fixture": "mcp/list_tools.json",
-      "content_sha256": "25df81a99e442a95b2547ded5c72bf0fe35bf1f43ff5208f54a627010487262a",
+      "content_sha256": "ca12e6a54404e40bac61d2c99d5e58f45672323d7aada7e57ddd5dfebe0a1098",
       "public_reviewed_by": "phase1-public-safety-review",
       "public_reviewed_at": "2026-08-29T20:00:00Z"
     },
@@ -74,16 +74,16 @@
       "public_reviewed_at": "2026-08-29T20:00:00Z"
     },
     {
-      "replay_id": "voice.synthesize.v1.stock",
+      "replay_id": "voice.synthesize.v1.goggins-line1",
       "tab": "voice",
       "action": "synthesize",
       "schema_version": "1",
-      "captured_at": "2026-08-20T19:00:00Z",
-      "generator_build": "phase1-synthetic-v1",
+      "captured_at": "2026-08-30T06:45:00Z",
+      "generator_build": "phase23-partB-static-v1",
       "source_fixture": "voice/synthesize.json",
-      "content_sha256": "fbbfa709cc277ced18d0e9dd77b1d9c74289dde489190f8e5cc8cddf77d8c37f",
-      "public_reviewed_by": "phase1-public-safety-review",
-      "public_reviewed_at": "2026-08-29T20:00:00Z"
+      "content_sha256": "aef5c8100372bd6404c7fbde916a5ac5c34408691984086ed7f076e26c12a092",
+      "public_reviewed_by": "phase23-partB-public-safety-review",
+      "public_reviewed_at": "2026-08-30T06:45:00Z"
     },
     {
       "replay_id": "web.activity.v1.overview",

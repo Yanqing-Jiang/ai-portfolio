@@ -116,3 +116,30 @@ export interface WebActivityData {
   };
   freshness: { db_observed_at: string; cache_age_seconds: number };
 }
+
+// --- MCP ------------------------------------------------------------------
+export interface McpTool {
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+  data_source: string;
+  side_effect_class: string;
+}
+export interface McpListData { protocol: string; tools: McpTool[]; hidden_tool_count: number }
+export interface McpCallData {
+  protocol: string;
+  tool: string;
+  content: { type: string; text?: string }[];
+  structured_content: Record<string, unknown> | null;
+  is_error: boolean;
+  trace: { allowlist_match: boolean; handler: string };
+}
+
+// --- Voice ----------------------------------------------------------------
+export interface VoiceData {
+  text: string;
+  audio: { mime_type: string; encoding: string; data: string; bytes: number; duration_ms: number | null };
+  voice: { provider: string; class: string; model: string };
+  characters_billed: number;
+}
+export interface VoiceRecording { id: string; text: string; file: string; bytes?: number; duration_ms?: number }

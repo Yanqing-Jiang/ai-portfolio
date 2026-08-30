@@ -1,0 +1,23 @@
+[
+  {
+    "id": "line1",
+    "text": "Your agent sleeps when you close the laptop. Mine ran forty-eight jobs while you were dreaming. Stay hard.",
+    "file": "line1.mp3",
+    "bytes": 86980,
+    "duration_ms": 5436
+  },
+  {
+    "id": "line2",
+    "text": "You pasted the same prompt five times today. Homer remembered it the first time. Who's gonna carry the boats?",
+    "file": "line2.mp3",
+    "bytes": 94921,
+    "duration_ms": 5933
+  },
+  {
+    "id": "line3",
+    "text": "Critical alert at 3 AM? Homer doesn't send an email. Homer calls you. Pick up.",
+    "file": "line3.mp3",
+    "bytes": 71098,
+    "duration_ms": 4444
+  }
+]

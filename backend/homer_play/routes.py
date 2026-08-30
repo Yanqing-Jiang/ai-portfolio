@@ -19,7 +19,16 @@ except ImportError:  # pragma: no cover
     from .. import rate_limiter as shared_rate_limiter  # type: ignore
 
 from .bridge import BridgeClient, BridgeFailure
-from .handlers import run_extract, run_scheduler_query, run_search, run_web_activity
+from .handlers import (
+    list_public_tools,
+    run_extract,
+    run_mcp_call,
+    run_scheduler_query,
+    run_search,
+    run_voice,
+    run_web_activity,
+)
+from .handlers.mcp import PUBLIC_MCP_TOOL_NAMES
 from .models import (
     ErrorResponse,
     ExecutorRouteRequest,
@@ -50,10 +59,16 @@ from .spend import (
 logger = logging.getLogger(__name__)
 
 BODY_LIMIT_BYTES = 8 * 1024
-PUBLIC_MCP_TOOLS = frozenset({"memory_search", "public_schedule_status", "public_runtime_status"})
+PUBLIC_MCP_TOOLS = PUBLIC_MCP_TOOL_NAMES
 VOICE_UNSAFE_RE = re.compile(
-    r"(?:https?://|www\.|[\w.+-]+@[\w.-]+\.[a-z]{2,}|\+?\d[\d\s().-]{7,}\d|"
+    r"(?:\b(?:https?://|www\.)\S+|\b[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+    r"(?:\.[a-z]{2,})(?:/\S*)?\b|[\w.+-]+@[\w.-]+\.[a-z]{2,}|\+?\d[\d\s().-]{7,}\d|"
     r"</?[a-z][^>]*>|\b(?:ssn|social security|credit card|impersonate|authenticate|authorize payment)\b)",
+    re.IGNORECASE,
+)
+VOICE_PROFANITY_RE = re.compile(
+    r"\b(?:asshole|bastard|bitch(?:es)?|cunt|fuck(?:ed|er|ers|ing|s)?|motherfucker|"
+    r"shit(?:head|s|ty)?|nigg(?:a|as|er|ers)|fag(?:got|gots|s)?|chink|spic|retard(?:ed|s)?)\b",
     re.IGNORECASE,
 )
 
@@ -276,20 +291,29 @@ def _validate_mcp_call(payload: McpCallRequest, request_id: str) -> JSONResponse
 
 
 def _validate_voice(payload: VoiceRequest, request_id: str) -> JSONResponse | None:
-    if "\n" in payload.message or "\r" in payload.message or VOICE_UNSAFE_RE.search(payload.message):
+    if VOICE_UNSAFE_RE.search(payload.message) or VOICE_PROFANITY_RE.search(payload.message):
         return _error_response(
             request_id,
             status_code=400,
             code="unsafe_voice_text",
-            message="Voice text must be a short, single-line public-safe phrase without contact, payment, markup, or impersonation content.",
+            message="Voice text must be a short public-safe phrase without profanity, contact details, payment, markup, or impersonation content.",
             retryable=False,
             fields={"message": "unsafe voice text"},
         )
     return None
 
 
-async def _reserve(payload: PlayRequest, request_id: str) -> SpendReservation:
-    return await spend_ledger.reserve(f"{payload.tab}.{payload.action}", request_id)
+async def _reserve(
+    payload: PlayRequest,
+    request_id: str,
+    *,
+    max_micro_usd: int | None = None,
+) -> SpendReservation:
+    return await spend_ledger.reserve(
+        f"{payload.tab}.{payload.action}",
+        request_id,
+        max_micro_usd=max_micro_usd,
+    )
 
 
 def _reservation_failure(
@@ -337,11 +361,97 @@ async def homer_play(payload: PlayRequest, request: Request):
             headers={"Retry-After": str(rate.retry_after)},
         )
 
-    if isinstance(payload, (ExecutorRouteRequest, McpListRequest, McpCallRequest, VoiceRequest)):
+    if isinstance(payload, ExecutorRouteRequest):
         return _degraded_response(payload, request_id, rate, reason="not_yet_enabled")
 
     if os.getenv("ENVIRONMENT", "development").lower() == "production" and not rate.redis_available:
         return _degraded_response(payload, request_id, rate, reason="rate_backend_unavailable")
+
+    if isinstance(payload, McpListRequest):
+        return _success_response(
+            payload,
+            request_id,
+            rate,
+            data=list_public_tools(),
+            reply="The public read-only MCP facade exposes exactly four tools.",
+            source="homer_code",
+            reserved_micro=0,
+            charged_micro=0,
+        )
+
+    if isinstance(payload, McpCallRequest):
+        maximum = RESERVATION_MICROS["memory.search"] if payload.input.tool == "memory_search" else 0
+        reservation = await _reserve(payload, request_id, max_micro_usd=maximum)
+        if not reservation.allowed:
+            return _reservation_failure(payload, request_id, rate, reservation)
+        try:
+            result = await run_mcp_call(payload, bridge_client, request_id=request_id)
+            charged = await spend_ledger.finalize(reservation, result.charged_micro_usd)
+            return _success_response(
+                payload,
+                request_id,
+                rate,
+                data=result.data,
+                reply=result.reply,
+                source=result.source,
+                reserved_micro=reservation.reserved_micro_usd,
+                charged_micro=charged,
+            )
+        except BridgeFailure as exc:
+            charged = await spend_ledger.finalize(
+                reservation, None if exc.reason == "live_timeout" else 0
+            )
+            return _degraded_response(
+                payload,
+                request_id,
+                rate,
+                reason=exc.reason,
+                reserved_micro=reservation.reserved_micro_usd,
+                charged_micro=charged,
+            )
+        except (ValidationError, ValueError):
+            charged = await spend_ledger.finalize(reservation, None)
+            return _degraded_response(
+                payload,
+                request_id,
+                rate,
+                reason="provider_unavailable",
+                reserved_micro=reservation.reserved_micro_usd,
+                charged_micro=charged,
+            )
+
+    if isinstance(payload, VoiceRequest):
+        reservation = await _reserve(payload, request_id)
+        if not reservation.allowed:
+            return _reservation_failure(payload, request_id, rate, reservation)
+        try:
+            result = await run_voice(payload)
+            charged = await spend_ledger.finalize(reservation, result.charged_micro_usd)
+            return _success_response(
+                payload,
+                request_id,
+                rate,
+                data=result.data,
+                reply="Homer synthesized the phrase with the portfolio Goggins voice.",
+                source="elevenlabs",
+                reserved_micro=reservation.reserved_micro_usd,
+                charged_micro=charged,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Homer play voice synthesis failed request_id=%s error=%s",
+                request_id,
+                type(exc).__name__,
+            )
+            charged = await spend_ledger.finalize(reservation, None)
+            return _degraded_response(
+                payload,
+                request_id,
+                rate,
+                reason="provider_unavailable",
+                reserved_micro=reservation.reserved_micro_usd,
+                charged_micro=charged,
+            )
 
     if isinstance(payload, MemorySearchRequest):
         reservation = await _reserve(payload, request_id)

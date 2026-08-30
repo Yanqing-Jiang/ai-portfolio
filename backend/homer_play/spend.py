@@ -24,7 +24,7 @@ RESERVATION_MICROS = {
     "executors.route_and_answer": 0,
     "mcp.list_tools": 0,
     "mcp.call_tool": 0,
-    "voice.synthesize": 0,
+    "voice.synthesize": 25_000,
 }
 
 RESERVE_SCRIPT = """
@@ -48,6 +48,32 @@ redis.call('EXPIRE', KEYS[1], ARGV[3])
 return {1, updated, maximum, 0}
 """
 
+VOICE_RESERVE_SCRIPT = """
+local existing = redis.call('GET', KEYS[2])
+if existing then
+  local state, maximum, action = string.match(existing, '([^:]+):(%d+):([^:]+)')
+  if (state == 'reserved' or state == 'finalized') and action == ARGV[5] and tonumber(maximum) == tonumber(ARGV[1]) then
+    return {1, tonumber(redis.call('GET', KEYS[1]) or '0'), tonumber(maximum), 1, tonumber(redis.call('GET', KEYS[3]) or '0')}
+  end
+  return {0, tonumber(redis.call('GET', KEYS[1]) or '0'), 0, 2, tonumber(redis.call('GET', KEYS[3]) or '0')}
+end
+local current = tonumber(redis.call('GET', KEYS[1]) or '0')
+local voice_current = tonumber(redis.call('GET', KEYS[3]) or '0')
+local maximum = tonumber(ARGV[1])
+if current + maximum > tonumber(ARGV[2]) then
+  return {0, current, 0, 0, voice_current}
+end
+if voice_current + maximum > tonumber(ARGV[3]) then
+  return {0, current, 0, 3, voice_current}
+end
+redis.call('SET', KEYS[2], 'reserved:' .. maximum .. ':' .. ARGV[5], 'EX', ARGV[4], 'NX')
+local updated = redis.call('INCRBY', KEYS[1], maximum)
+local voice_updated = redis.call('INCRBY', KEYS[3], maximum)
+redis.call('EXPIRE', KEYS[1], ARGV[4])
+redis.call('EXPIRE', KEYS[3], ARGV[4])
+return {1, updated, maximum, 0, voice_updated}
+"""
+
 FINALIZE_SCRIPT = """
 local existing = redis.call('GET', KEYS[2])
 if not existing then
@@ -63,6 +89,31 @@ local actual = math.min(tonumber(ARGV[1]), maximum)
 local refund = maximum - actual
 if refund > 0 then redis.call('DECRBY', KEYS[1], refund) end
 redis.call('EXPIRE', KEYS[1], ARGV[2])
+redis.call('INCRBY', KEYS[3], actual)
+redis.call('EXPIRE', KEYS[3], ARGV[2])
+redis.call('SET', KEYS[2], 'finalized:' .. maximum .. ':' .. tab .. ':' .. actual, 'EX', ARGV[2])
+return {1, tonumber(redis.call('GET', KEYS[1]) or '0'), actual}
+"""
+
+VOICE_FINALIZE_SCRIPT = """
+local existing = redis.call('GET', KEYS[2])
+if not existing then
+  return {0, tonumber(redis.call('GET', KEYS[1]) or '0'), 0}
+end
+local state, maximum, tab = string.match(existing, '([^:]+):(%d+):(.+)')
+maximum = tonumber(maximum)
+if state == 'finalized' then
+  local actual = tonumber(string.match(existing, '^finalized:%d+:[^:]+:(%d+)$') or maximum)
+  return {1, tonumber(redis.call('GET', KEYS[1]) or '0'), actual}
+end
+local actual = math.min(tonumber(ARGV[1]), maximum)
+local refund = maximum - actual
+if refund > 0 then
+  redis.call('DECRBY', KEYS[1], refund)
+  redis.call('DECRBY', KEYS[4], refund)
+end
+redis.call('EXPIRE', KEYS[1], ARGV[2])
+redis.call('EXPIRE', KEYS[4], ARGV[2])
 redis.call('INCRBY', KEYS[3], actual)
 redis.call('EXPIRE', KEYS[3], ARGV[2])
 redis.call('SET', KEYS[2], 'finalized:' .. maximum .. ':' .. tab .. ':' .. actual, 'EX', ARGV[2])
@@ -102,6 +153,13 @@ def daily_cap_micro() -> int:
     return value
 
 
+def voice_daily_cap_micro() -> int:
+    value = usd_to_micro(os.getenv("HOMER_PLAY_VOICE_DAILY_CAP_USD", "1.20"))
+    if value <= 0:
+        raise ValueError("HOMER_PLAY_VOICE_DAILY_CAP_USD must be positive")
+    return value
+
+
 def _day_and_ttl(now: datetime | None = None) -> tuple[str, int]:
     now = now or datetime.now(timezone.utc)
     local = now.astimezone(PACIFIC)
@@ -121,6 +179,7 @@ class SpendLedger:
         )
         self._lock = asyncio.Lock()
         self._totals: dict[str, int] = {}
+        self._voice_totals: dict[str, int] = {}
         self._reservations: dict[tuple[str, str], dict[str, Any]] = {}
         self._warned: dict[str, set[int]] = {}
 
@@ -132,6 +191,10 @@ class SpendLedger:
             f"homer-play:spend-reservation:v1:{day}:{request_id}",
             f"homer-play:spend-actual:v1:{day}:{tab}",
         )
+
+    @staticmethod
+    def _voice_key(day: str) -> str:
+        return f"homer-play:spend-voice:v1:{day}"
 
     def _warn_thresholds(self, day: str, previous: int, current: int, cap: int) -> None:
         warned = self._warned.setdefault(day, set())
@@ -152,29 +215,50 @@ class SpendLedger:
         maximum = RESERVATION_MICROS[action] if max_micro_usd is None else max_micro_usd
         day, ttl = _day_and_ttl(now)
         cap = daily_cap_micro()
+        is_voice = action == "voice.synthesize"
         if maximum <= 0:
             return SpendReservation(True, request_id, action, day, 0, 0)
 
         if self.redis_client is not None:
             keys = self._keys(day, request_id, action)
             try:
-                result = await self.redis_client.eval(
-                    RESERVE_SCRIPT,
-                    2,
-                    keys[0],
-                    keys[1],
-                    maximum,
-                    cap,
-                    ttl,
-                    action,
-                )
-                allowed, total, reserved, idempotency_state = (int(item) for item in result)
+                if is_voice:
+                    result = await self.redis_client.eval(
+                        VOICE_RESERVE_SCRIPT,
+                        3,
+                        keys[0],
+                        keys[1],
+                        self._voice_key(day),
+                        maximum,
+                        cap,
+                        voice_daily_cap_micro(),
+                        ttl,
+                        action,
+                    )
+                else:
+                    result = await self.redis_client.eval(
+                        RESERVE_SCRIPT,
+                        2,
+                        keys[0],
+                        keys[1],
+                        maximum,
+                        cap,
+                        ttl,
+                        action,
+                    )
+                allowed, total, reserved, idempotency_state = (int(item) for item in result[:4])
                 previous = max(0, total - reserved)
                 if allowed:
                     self._warn_thresholds(day, previous, total, cap)
                 return SpendReservation(
                     bool(allowed), request_id, action, day, reserved, total,
-                    None if allowed else ("reservation_conflict" if idempotency_state == 2 else "daily_spend_cap"),
+                    None if allowed else (
+                        "reservation_conflict"
+                        if idempotency_state == 2
+                        else "voice_daily_cap"
+                        if idempotency_state == 3
+                        else "daily_spend_cap"
+                    ),
                 )
             except Exception as exc:
                 logger.warning("Homer play spend ledger Redis unavailable: %s", type(exc).__name__)
@@ -203,8 +287,12 @@ class SpendLedger:
             previous = self._totals.get(day, 0)
             if previous + maximum > cap:
                 return SpendReservation(False, request_id, action, day, 0, previous, "daily_spend_cap")
+            if is_voice and self._voice_totals.get(day, 0) + maximum > voice_daily_cap_micro():
+                return SpendReservation(False, request_id, action, day, 0, previous, "voice_daily_cap")
             current = previous + maximum
             self._totals[day] = current
+            if is_voice:
+                self._voice_totals[day] = self._voice_totals.get(day, 0) + maximum
             self._reservations[key] = {"maximum": maximum, "action": action, "actual": None}
             self._warn_thresholds(day, previous, current, cap)
             return SpendReservation(True, request_id, action, day, maximum, current)
@@ -225,15 +313,27 @@ class SpendLedger:
         if self.redis_client is not None:
             keys = self._keys(reservation.date, reservation.request_id, reservation.action)
             try:
-                result = await self.redis_client.eval(
-                    FINALIZE_SCRIPT,
-                    3,
-                    keys[0],
-                    keys[1],
-                    keys[2],
-                    actual,
-                    ttl,
-                )
+                if reservation.action == "voice.synthesize":
+                    result = await self.redis_client.eval(
+                        VOICE_FINALIZE_SCRIPT,
+                        4,
+                        keys[0],
+                        keys[1],
+                        keys[2],
+                        self._voice_key(reservation.date),
+                        actual,
+                        ttl,
+                    )
+                else:
+                    result = await self.redis_client.eval(
+                        FINALIZE_SCRIPT,
+                        3,
+                        keys[0],
+                        keys[1],
+                        keys[2],
+                        actual,
+                        ttl,
+                    )
                 return int(result[2])
             except Exception as exc:
                 logger.warning("Homer play spend finalization Redis unavailable: %s", type(exc).__name__)
@@ -250,6 +350,11 @@ class SpendLedger:
             maximum = int(existing["maximum"])
             actual = min(actual, maximum)
             self._totals[reservation.date] = max(0, self._totals.get(reservation.date, 0) - (maximum - actual))
+            if reservation.action == "voice.synthesize":
+                self._voice_totals[reservation.date] = max(
+                    0,
+                    self._voice_totals.get(reservation.date, 0) - (maximum - actual),
+                )
             existing["actual"] = actual
             return actual
 
@@ -262,3 +367,9 @@ def estimate_gemini_micro(input_tokens: int, output_tokens: int, maximum: int) -
 
 def estimate_tokens(text: str) -> int:
     return max(1, math.ceil(len(text) / 4))
+
+
+def estimate_voice_micro(characters: int) -> int:
+    if characters < 0:
+        raise ValueError("character count cannot be negative")
+    return characters * 300

@@ -13,7 +13,7 @@ from typing import Any, Literal
 import httpx
 
 
-BridgeCommand = Literal["memory.extract_dry_run", "scheduler.query", "web.activity"]
+BridgeCommand = Literal["memory.extract_dry_run", "scheduler.query", "web.activity", "todo.summary"]
 
 
 logger = logging.getLogger(__name__)

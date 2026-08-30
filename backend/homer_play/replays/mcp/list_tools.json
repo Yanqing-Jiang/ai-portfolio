@@ -9,9 +9,34 @@
   "data": {
     "protocol": "mcp",
     "tools": [
-      {"name": "memory_search", "description": "Search the public Homer architecture corpus.", "input_schema": {"type": "object", "required": ["query"]}, "data_source": "public_corpus", "side_effect_class": "none"},
-      {"name": "public_schedule_status", "description": "Read sanitized scheduler status.", "input_schema": {"type": "object"}, "data_source": "live_bridge", "side_effect_class": "none"},
-      {"name": "public_runtime_status", "description": "Read aggregate runtime status.", "input_schema": {"type": "object"}, "data_source": "live_bridge", "side_effect_class": "none"}
+      {
+        "name": "memory_search",
+        "description": "Recall from the public Homer architecture corpus with ranked lexical and vector search. Returns approved public claims and retrieval trace data.",
+        "input_schema": {"type": "object", "properties": {"query": {"type": "string"}, "limit": {"type": "integer", "minimum": 1, "maximum": 4, "default": 4}}, "required": ["query"], "additionalProperties": false},
+        "data_source": "public_corpus",
+        "side_effect_class": "none"
+      },
+      {
+        "name": "memory_context",
+        "description": "Returns top approved public claims for a target, grouped by claim type. No LLM call; pure in-process public-corpus read.",
+        "input_schema": {"type": "object", "properties": {"target": {"type": "string"}, "limit": {"type": "integer", "minimum": 1, "maximum": 6, "default": 6}}, "additionalProperties": false},
+        "data_source": "public_corpus",
+        "side_effect_class": "none"
+      },
+      {
+        "name": "preference_query",
+        "description": "Query the public architecture preference model for learned preferences. Returns top matching public preferences with lexical scores.",
+        "input_schema": {"type": "object", "properties": {"topic": {"type": "string"}}, "required": ["topic"], "additionalProperties": false},
+        "data_source": "public_corpus",
+        "side_effect_class": "none"
+      },
+      {
+        "name": "todo_list",
+        "description": "List a public-safe aggregate of open To-Dos, grouped by priority and category. Returns no titles, notes, identifiers, or checklist content.",
+        "input_schema": {"type": "object", "properties": {"status": {"type": "string", "enum": ["open"], "default": "open"}}, "additionalProperties": false},
+        "data_source": "live_bridge",
+        "side_effect_class": "none"
+      }
     ],
     "hidden_tool_count": 0
   },
