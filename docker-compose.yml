@@ -40,6 +40,12 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379/0
       - ENVIRONMENT=production
+      # Homer playable-architecture bridge lives on the Mac host (127.0.0.1:3012).
+      # Secrets (HOMER_PUBLIC_BRIDGE_SECRET, HOMER_PLAY_IP_SECRET) come from
+      # .env.production, never from this file.
+      - HOMER_PUBLIC_BRIDGE_URL=http://host.docker.internal:3012
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./public:/public:ro
       - ./.claude/skills:/.claude/skills:ro

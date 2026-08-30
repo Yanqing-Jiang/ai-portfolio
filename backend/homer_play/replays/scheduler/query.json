@@ -1,0 +1,33 @@
+{
+  "ok": true,
+  "version": "1",
+  "request_id": "00000000-0000-4000-8000-000000000003",
+  "tab": "scheduler",
+  "action": "query",
+  "mode": "degraded",
+  "reply": "Live mode is unavailable; here is a recorded example of sanitized scheduler status.",
+  "data": {
+    "interpreted_query": {"status": "failed", "since_hours": 168, "job_ids": [], "include_next_run": true},
+    "jobs": [
+      {
+        "id": "memory-reindex",
+        "name": "Memory Search Reindex",
+        "kind": "internal",
+        "cadence": "hourly",
+        "enabled": true,
+        "running": false,
+        "next_run_at": "2026-08-20T20:00:00Z",
+        "last_success_at": "2026-08-20T18:00:00Z",
+        "consecutive_failures_bucket": "1",
+        "recent_runs": [
+          {"started_at": "2026-08-20T19:00:00Z", "outcome": "failed", "duration_ms_bucket": "10-60s"}
+        ]
+      }
+    ],
+    "meta": {"public_jobs_scanned": 6, "runs_scanned": 18}
+  },
+  "receipt": {"source": "live_bridge", "observed_at": "2026-08-20T19:00:00Z", "read_only": true, "persisted": false},
+  "limits": {"remaining_this_hour": 9, "reset_at": "2026-08-20T20:00:00Z"},
+  "spend": {"reserved_usd": 0.0005, "charged_usd": 0.00016, "daily_cap_usd": 2.0},
+  "degraded": {"active": true, "reason": "bridge_unavailable", "replay_id": "scheduler.query.v1.failed-week", "captured_at": "2026-08-20T19:00:00Z", "live_data_age_seconds": null}
+}

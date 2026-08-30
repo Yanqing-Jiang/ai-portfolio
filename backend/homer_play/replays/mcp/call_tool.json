@@ -1,0 +1,21 @@
+{
+  "ok": true,
+  "version": "1",
+  "request_id": "00000000-0000-4000-8000-000000000006",
+  "tab": "mcp",
+  "action": "call_tool",
+  "mode": "degraded",
+  "reply": "Live mode is unavailable; here is a recorded public MCP tool result.",
+  "data": {
+    "protocol": "mcp",
+    "tool": "memory_search",
+    "content": [{"type": "text", "text": "A recorded public-corpus search returned one architecture claim."}],
+    "structured_content": {"results": [{"id": "hc_public_sqlite", "content": "Homer uses SQLite for durable local state."}]},
+    "is_error": false,
+    "trace": {"allowlist_match": true, "handler": "public_memory_search"}
+  },
+  "receipt": {"source": "homer_code", "observed_at": "2026-08-20T19:00:00Z", "read_only": true, "persisted": false},
+  "limits": {"remaining_this_hour": 9, "reset_at": "2026-08-20T20:00:00Z"},
+  "spend": {"reserved_usd": 0.0, "charged_usd": 0.0, "daily_cap_usd": 2.0},
+  "degraded": {"active": true, "reason": "not_yet_enabled", "replay_id": "mcp.call.v1.memory-search", "captured_at": "2026-08-20T19:00:00Z", "live_data_age_seconds": null}
+}

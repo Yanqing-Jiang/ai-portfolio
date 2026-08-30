@@ -1,0 +1,54 @@
+{
+  "ok": true,
+  "version": "1",
+  "request_id": "00000000-0000-4000-8000-000000000001",
+  "tab": "memory",
+  "action": "search",
+  "mode": "degraded",
+  "reply": "Live mode is unavailable; here is a recorded example of public-memory hybrid retrieval.",
+  "data": {
+    "query": "why sqlite for memory",
+    "vector_leg": "available",
+    "results": [
+      {
+        "id": "hc_public_sqlite",
+        "content": "Homer uses SQLite for durable local state and combines lexical and vector retrieval over a reviewed public corpus.",
+        "claim_type": "architecture",
+        "target": "memory",
+        "status": "approved",
+        "created_at": "2026-08-20",
+        "trace": {
+          "bm25_rank": 1,
+          "bm25_score": 3.12,
+          "vector_rank": 2,
+          "cosine": 0.81,
+          "rrf_score": 0.093,
+          "tier_multiplier": 1.02,
+          "recency_multiplier": 0.98,
+          "final_score": 0.092
+        }
+      }
+    ],
+    "meta": {
+      "legs_used": ["bm25", "vector"],
+      "corpus_size": 24,
+      "fused_candidates": 6,
+      "query_embedding_ms": 42
+    }
+  },
+  "receipt": {
+    "source": "public_corpus",
+    "observed_at": "2026-08-20T19:00:00Z",
+    "read_only": true,
+    "persisted": false
+  },
+  "limits": {"remaining_this_hour": 9, "reset_at": "2026-08-20T20:00:00Z"},
+  "spend": {"reserved_usd": 0.00002, "charged_usd": 0.00002, "daily_cap_usd": 2.0},
+  "degraded": {
+    "active": true,
+    "reason": "bridge_unavailable",
+    "replay_id": "memory.search.v1.sqlite",
+    "captured_at": "2026-08-20T19:00:00Z",
+    "live_data_age_seconds": null
+  }
+}

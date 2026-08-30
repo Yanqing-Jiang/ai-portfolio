@@ -25,6 +25,9 @@ import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { Brain, Calendar, Cpu, Plug, Phone, Globe, Database, Terminal, MessageSquare, Zap, AlertCircle, RefreshCw, Shield, Mic, FileText, Smartphone, Lock } from 'lucide-react';
 import { SectionShell } from '../SectionShell';
 import { HOMER_THEME } from '../theme';
+import { PlayConsole } from '../play/PlayConsole';
+import { renderMemory, renderScheduler, renderWeb } from '../play/renderers';
+import type { PlayEnvelope, PlayTab } from '../play/types';
 
 export const META = {
   slug: 'operator-console',
@@ -212,6 +215,70 @@ const WebUiViz = ({ phase }: { phase: number }) => (
   </VizFrame>
 );
 
+// --- PLAY CONFIG (2026-08-29) ---
+// Each live subsystem embeds a PlayConsole wired to POST /api/homer/play.
+// Phase 1 = memory / scheduler / web. Chips for subsystems without a `play`
+// entry are hidden until their phase ships (Yanqing: "hide those chips until
+// live") — the "Six subsystems" headline stays; the subtitle says how many
+// are live.
+//
+// The old "Built for me / Deployed for your team" bullets were removed — they
+// didn't explain anything; the console does the explaining now.
+interface PlayConfig {
+  label: string;
+  placeholder: string;
+  suggestions: readonly string[];
+  route: (message: string) => { action: string; input?: Record<string, unknown> };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  render: (env: PlayEnvelope<any>) => React.ReactNode;
+  maxLength?: number;
+}
+
+// Memory: a statement (past tense, "prefers", "decided", "moved", …) goes to
+// the extractor; anything else is a search. Visitors can force either with a
+// leading "search:" / "remember:".
+const looksLikeStatement = (m: string) =>
+  /\b(moved|prefers?|decided|switched|cancell?ed|will|now|instead|no longer|from now on|changed)\b/i.test(m) ||
+  /^[A-Z][^?]*\.$/.test(m.trim());
+
+const PLAY: Partial<Record<PlayTab, PlayConfig>> = {
+  memory: {
+    label: 'search it, or tell it something and watch the extractor',
+    placeholder: 'ask about Homer, or tell it something new…',
+    suggestions: [
+      'why sqlite instead of a vector db',
+      'what happens when two memories conflict',
+      'Yanqing moved the weekly review to Friday mornings.',
+    ],
+    route: (m) => {
+      const lower = m.toLowerCase();
+      if (lower.startsWith('search:')) return { action: 'search', input: { limit: 4 } };
+      if (lower.startsWith('remember:')) return { action: 'extract_dry_run', input: { target: 'architecture' } };
+      return looksLikeStatement(m)
+        ? { action: 'extract_dry_run', input: { target: 'architecture' } }
+        : { action: 'search', input: { limit: 4 } };
+    },
+    render: renderMemory,
+  },
+  scheduler: {
+    label: 'ask about the job table',
+    placeholder: 'e.g. what failed this week? what runs next?',
+    suggestions: ['what runs in the next hour', 'anything failed this week?', 'how often does memory reindex run'],
+    route: () => ({ action: 'query', input: { max_jobs: 8, max_runs_per_job: 3 } }),
+    render: renderScheduler,
+  },
+  web: {
+    label: 'ask what Homer has been doing',
+    placeholder: 'what has Homer been doing today?',
+    suggestions: ['what has Homer been doing today?', 'how busy was the last 7 days', 'which model did most of the work'],
+    route: (m) => ({
+      action: 'activity',
+      input: { window: /7 ?d|week/i.test(m) ? '7d' : /hour|1h|last 60/i.test(m) ? '1h' : '24h' },
+    }),
+    render: renderWeb,
+  },
+};
+
 // --- SUBSYSTEM DATA ---
 const SUBSYSTEMS = [
   {
@@ -220,8 +287,6 @@ const SUBSYSTEMS = [
     icon: Brain,
     headline: 'Perfect recall.',
     viz: MemoryViz,
-    me: ["Skip re-explaining the stack.", "Shared state across surfaces.", "Recall a 6-week-old decision."],
-    team: ["Perfect customer-history recall.", "End re-pasting context.", "Immutable AI audit trail."],
     receipts: ['12,481 claims stored', '90 days retention']
   },
   {
@@ -230,10 +295,6 @@ const SUBSYSTEMS = [
     icon: Calendar,
     headline: 'Works while you sleep.',
     viz: SchedulerViz,
-    // FIXED: original drifted ("intelligence briefs / retry APIs / Slack triggers")
-    // — restored to ground-truth phase mapping.
-    me: ['3 AM memory consolidate.', 'Survives sleep / wake.', 'Loud failure → page me.'],
-    team: ["Run nightly jobs without DevOps.", "Succeed or escalate to a human.", "Kill fragile single-process loops."],
     receipts: ['48 daily tasks', '46K+ traced executions']
   },
   {
@@ -242,10 +303,6 @@ const SUBSYSTEMS = [
     icon: Cpu,
     headline: 'Right model. Every time.',
     viz: ExecutorsViz,
-    // FIXED: original P0/P1/P2 drifted; restored ground-truth order
-    // (cycle keys / cheap-fast vs deep / reroute on hang).
-    me: ['Cycle keys past quotas.', 'Cheap fast vs deep slow.', 'Reroute on provider hang.'],
-    team: ["Cheapest capable model, automatic.", "No vendor lock-in.", "Survive provider outages."],
     receipts: ['5 executors', '99.4% success rate']
   },
   {
@@ -254,10 +311,6 @@ const SUBSYSTEMS = [
     icon: Plug,
     headline: 'One toolkit. Every agent.',
     viz: McpViz,
-    // FIXED: original P1 was "Native filesystem access" (fabricated capability,
-    // not in ground truth) — restored to centralized perms/logs.
-    me: ['Write tool once, used everywhere.', 'Centralized perms + logs.', 'Upgrade once, every CLI gains.'],
-    team: ["Secure gateway for scattered prototypes.", "Stop rewriting integrations.", "Centralized rate limit + auth."],
     receipts: ['~40 unified tools', '100% capability parity']
   },
   {
@@ -266,10 +319,6 @@ const SUBSYSTEMS = [
     icon: Phone,
     headline: 'A phone for your agents.',
     viz: VoiceViz,
-    // FIXED: original P1/P2 drifted; restored ground-truth phase mapping
-    // (dictate while driving / proactive call on critical fail / spoken nuance).
-    me: ['Dictate while driving.', 'Calls me on critical fail.', 'Capture nuance, no laptop.'],
-    team: ["Hands-free field tech access.", "On-call calls with full context.", "Replace IVR with memory-backed agents."],
     receipts: ['380ms first audio out', 'Full-duplex barge-in']
   },
   {
@@ -278,10 +327,6 @@ const SUBSYSTEMS = [
     icon: Globe,
     headline: 'Window into the mind.',
     viz: WebUiViz,
-    // FIXED: original P2 was "Rich Markdown and PDF views" — that's P1 in
-    // ground truth. Restored P0=phone watch, P1=render PDFs, P2=CLI sync.
-    me: ['Watch agents from a phone.', 'Render PDFs and transcripts.', 'Same backend as the CLI.'],
-    team: ["Visual prototyping, no backend build.", "Stakeholder visibility into agent decisions.", "Secure global memory dashboard."],
     receipts: ['JWT authenticated', 'Cloudflare tunneled']
   }
 ] as const;
@@ -294,13 +339,16 @@ const SUBSYSTEMS = [
 // <motion.div> is enough: React unmounts the old, mounts the new, and
 // `initial → animate` plays the fade-in. (Carried over from the prior variant
 // — re-introducing AnimatePresence here will reproduce the freeze bug.)
+const LIVE_SUBSYSTEMS = SUBSYSTEMS.filter((s) => PLAY[s.id as PlayTab]);
+
 export const Architecture: React.FC = () => {
-  const [activeId, setActiveId] = useState<string>(SUBSYSTEMS[0].id);
+  const [activeId, setActiveId] = useState<string>(LIVE_SUBSYSTEMS[0].id);
   const phase = usePhase(2000);
   const chipStripRef = useRef<HTMLDivElement>(null);
   const shouldReduceMotion = useReducedMotion();
 
-  const activeSub = SUBSYSTEMS.find(s => s.id === activeId) || SUBSYSTEMS[0];
+  const activeSub = LIVE_SUBSYSTEMS.find((s) => s.id === activeId) || LIVE_SUBSYSTEMS[0];
+  const play = PLAY[activeSub.id as PlayTab]!;
   const ActiveViz = activeSub.viz;
   const ActiveIcon = activeSub.icon;
 
@@ -345,7 +393,7 @@ export const Architecture: React.FC = () => {
       id="architecture"
       eyebrow="architecture"
       title="Six subsystems, one loop."
-      subtitle="Each panel is a real subsystem in production. Tap a chip to see its actual telemetry."
+      subtitle={`You can try it out too. Every tab below is a real subsystem in production — tap a chip, then type in the box. ${LIVE_SUBSYSTEMS.length} of ${SUBSYSTEMS.length} are live; the rest come online as their sandboxes ship.`}
     >
       {/* Sticky chip strip — thumb-reachable on mobile, horizontal on desktop.
           Sticks within the section (not page-global) so the long scroll past
@@ -384,7 +432,7 @@ export const Architecture: React.FC = () => {
           // global rule for a single animation used only here.
         >
           <style>{`@keyframes homer-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }`}</style>
-          {SUBSYSTEMS.map((sub) => {
+          {LIVE_SUBSYSTEMS.map((sub) => {
             const isActive = sub.id === activeId;
             return (
               <button
@@ -418,11 +466,8 @@ export const Architecture: React.FC = () => {
         className="rounded-2xl border overflow-hidden flex flex-col md:flex-row"
         style={{ background: HOMER_THEME.bgSoft, borderColor: HOMER_THEME.divider }}
       >
-        <div className="md:w-2/5 md:border-r" style={{ borderColor: HOMER_THEME.divider }}>
-          <ActiveViz phase={phase} />
-        </div>
-
-        <div className="md:w-3/5 p-6 md:p-8 flex flex-col gap-6">
+        {/* Left: identity + viz + receipts. Right: the console. */}
+        <div className="md:w-[38%] md:border-r p-6 md:p-7 flex flex-col gap-4" style={{ borderColor: HOMER_THEME.divider }}>
           <div>
             <div className="flex items-center gap-3 mb-1">
               <div
@@ -446,65 +491,15 @@ export const Architecture: React.FC = () => {
             </p>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-            <div>
-              <h4
-                className="font-mono text-[10px] tracking-[0.18em] uppercase mb-3 pb-2 border-b"
-                style={{ color: HOMER_THEME.textMuted, borderColor: HOMER_THEME.divider }}
-              >
-                Built for me
-              </h4>
-              <ul className="space-y-2.5">
-                {activeSub.me.map((b, i) => (
-                  <li
-                    key={i}
-                    className="flex items-start gap-2 text-sm transition-opacity duration-300"
-                    style={{ color: HOMER_THEME.text, opacity: phase === i ? 1 : 0.45 }}
-                  >
-                    <span
-                      className="mt-1.5 w-1.5 h-1.5 rounded-full shrink-0"
-                      style={{ backgroundColor: phase === i ? HOMER_THEME.accent : HOMER_THEME.divider }}
-                    />
-                    {b}
-                  </li>
-                ))}
-              </ul>
-            </div>
-            <div>
-              <h4
-                className="font-mono text-[10px] tracking-[0.18em] uppercase mb-3 pb-2 border-b"
-                style={{ color: HOMER_THEME.textMuted, borderColor: HOMER_THEME.divider }}
-              >
-                Deployed for your team
-              </h4>
-              <ul className="space-y-2.5">
-                {activeSub.team.map((b, i) => (
-                  <li
-                    key={i}
-                    className="flex items-start gap-2 text-sm transition-opacity duration-300"
-                    style={{ color: HOMER_THEME.text, opacity: phase === i ? 1 : 0.45 }}
-                  >
-                    <span
-                      className="mt-1.5 w-1.5 h-1.5 rounded-full shrink-0"
-                      style={{ backgroundColor: phase === i ? HOMER_THEME.accent : HOMER_THEME.divider }}
-                    />
-                    {b}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          </div>
+          <ActiveViz phase={phase} />
 
-          <div
-            className="flex flex-wrap gap-2 pt-4 mt-auto border-t"
-            style={{ borderColor: HOMER_THEME.divider }}
-          >
+          <div className="flex flex-wrap gap-2 mt-auto">
             {activeSub.receipts.map((r, i) => (
               <div
                 key={i}
-                className="px-2.5 py-1 rounded text-[11px] font-mono whitespace-nowrap"
+                className="px-2.5 py-1 rounded text-[11px] whitespace-nowrap"
                 style={{
-                  background: HOMER_THEME.bgSoft,
+                  background: HOMER_THEME.bg,
                   color: HOMER_THEME.accent,
                   border: `1px solid ${HOMER_THEME.accentSoft}`,
                   fontFamily: HOMER_THEME.fontMono,
@@ -514,6 +509,22 @@ export const Architecture: React.FC = () => {
               </div>
             ))}
           </div>
+        </div>
+
+        <div
+          className="md:w-[62%] p-6 md:p-7"
+          style={{ background: 'linear-gradient(180deg, rgba(212,160,86,0.05), transparent 40%)' }}
+        >
+          <PlayConsole
+            key={activeSub.id}
+            tab={activeSub.id as PlayTab}
+            label={play.label}
+            placeholder={play.placeholder}
+            suggestions={play.suggestions}
+            route={play.route}
+            render={play.render}
+            maxLength={play.maxLength}
+          />
         </div>
       </motion.div>
     </SectionShell>

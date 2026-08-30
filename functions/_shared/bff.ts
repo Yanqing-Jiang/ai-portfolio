@@ -20,6 +20,9 @@ export interface BffEnv {
   FORTUNE_RATE_LIMIT?: {
     limit: (opts: { key: string }) => Promise<{ success: boolean }>;
   };
+  HOMER_PLAY_RATE_LIMIT?: {
+    limit: (opts: { key: string }) => Promise<{ success: boolean }>;
+  };
 }
 
 // Minimal shape of the Pages Function context. Kept inline so this file
@@ -38,6 +41,12 @@ export interface ForwardOptions {
   bucket: string;
   /** Upstream path to call on the backend, starting with `/api/...`. */
   upstreamPath: string;
+  /** Purpose-named Workers Rate Limiting binding. Defaults to Fortune. */
+  rateLimitBinding?: "FORTUNE_RATE_LIMIT" | "HOMER_PLAY_RATE_LIMIT";
+  /** Optional edge body cap; the actual bytes are checked even without Content-Length. */
+  maxBodyBytes?: number;
+  /** Preserve legacy errors unless a route opts into the Homer play envelope. */
+  errorProfile?: "default" | "homer_play";
 }
 
 export async function forwardPost(
@@ -48,13 +57,36 @@ export async function forwardPost(
   const ip = request.headers.get("cf-connecting-ip") || "0.0.0.0";
   const requestId = crypto.randomUUID();
 
+  const declaredLength = Number(request.headers.get("content-length"));
+  if (
+    opts.maxBodyBytes !== undefined &&
+    Number.isFinite(declaredLength) &&
+    declaredLength > opts.maxBodyBytes
+  ) {
+    return payloadTooLarge(requestId, opts.maxBodyBytes);
+  }
+
+  // Read the body as bytes so the edge can enforce the real size and forward
+  // exactly those bytes without logging or JSON-parsing visitor content.
+  const body = request.method === "GET" || request.method === "HEAD"
+    ? undefined
+    : await request.arrayBuffer();
+  if (opts.maxBodyBytes !== undefined && body && body.byteLength > opts.maxBodyBytes) {
+    return payloadTooLarge(requestId, opts.maxBodyBytes);
+  }
+
   // Coarse IP rate limit — no-op when the binding isn't configured yet.
-  if (env.FORTUNE_RATE_LIMIT) {
+  const rateLimitBinding = opts.rateLimitBinding || "FORTUNE_RATE_LIMIT";
+  const rateLimiter = env[rateLimitBinding];
+  if (rateLimiter) {
     try {
-      const { success } = await env.FORTUNE_RATE_LIMIT.limit({
+      const { success } = await rateLimiter.limit({
         key: `${opts.bucket}:${ip}`,
       });
       if (!success) {
+        if (opts.errorProfile === "homer_play") {
+          return homerPlayRateLimited(requestId);
+        }
         return Response.json(
           {
             error: "rate_limited",
@@ -80,12 +112,6 @@ export async function forwardPost(
 
   const backend = (env.BACKEND_ORIGIN || DEFAULT_BACKEND_ORIGIN).replace(/\/$/, "");
   const upstreamUrl = backend + opts.upstreamPath;
-
-  // Read the body as bytes so we can pass through arbitrary content types
-  // without accidentally JSON-parsing (useful if ask ever accepts multipart).
-  const body = request.method === "GET" || request.method === "HEAD"
-    ? undefined
-    : await request.arrayBuffer();
 
   const upstreamHeaders: Record<string, string> = {
     "content-type": request.headers.get("content-type") || "application/json",
@@ -117,6 +143,9 @@ export async function forwardPost(
     });
   } catch (err) {
     console.error("[BFF] upstream fetch failed", err);
+    if (opts.errorProfile === "homer_play") {
+      return homerPlayServiceUnavailable(requestId);
+    }
     return Response.json(
       {
         error: "bad_gateway",
@@ -140,4 +169,76 @@ export async function forwardPost(
     statusText: upstreamResp.statusText,
     headers: outHeaders,
   });
+}
+
+function payloadTooLarge(requestId: string, maxBodyBytes: number): Response {
+  return Response.json(
+    {
+      ok: false,
+      request_id: requestId,
+      error: {
+        code: "payload_too_large",
+        message: "Request body exceeds the 8 KiB public limit.",
+        retryable: false,
+        fields: { body: `maximum ${maxBodyBytes} bytes` },
+      },
+    },
+    {
+      status: 413,
+      headers: {
+        "x-request-id": requestId,
+        "cache-control": "no-store, private",
+        "x-content-type-options": "nosniff",
+      },
+    },
+  );
+}
+
+function homerPlayRateLimited(requestId: string): Response {
+  const now = Date.now();
+  const resetMs = (Math.floor(now / 3_600_000) + 1) * 3_600_000;
+  const retryAfter = Math.max(1, Math.ceil((resetMs - now) / 1000));
+  return Response.json(
+    {
+      ok: false,
+      request_id: requestId,
+      error: {
+        code: "rate_limited",
+        message: "Too many Homer play requests from this IP. Try again after the hourly window resets.",
+        retryable: true,
+      },
+      limits: { remaining_this_hour: 0, reset_at: new Date(resetMs).toISOString() },
+    },
+    {
+      status: 429,
+      headers: {
+        "retry-after": String(retryAfter),
+        "x-request-id": requestId,
+        "cache-control": "no-store, private",
+        "x-content-type-options": "nosniff",
+      },
+    },
+  );
+}
+
+function homerPlayServiceUnavailable(requestId: string): Response {
+  return Response.json(
+    {
+      ok: false,
+      request_id: requestId,
+      error: {
+        code: "service_unavailable",
+        message: "Homer play and its recorded fallback are temporarily unavailable.",
+        retryable: true,
+      },
+    },
+    {
+      status: 503,
+      headers: {
+        "x-request-id": requestId,
+        "cache-control": "no-store, private",
+        "x-content-type-options": "nosniff",
+      },
+    },
+  );
 }

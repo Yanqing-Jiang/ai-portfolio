@@ -4,8 +4,7 @@ import { HOMER_THEME } from './theme';
 
 // Function: SectionShell — wraps every Homer Lite section with a consistent
 // IntersectionObserver-based fade-up reveal + max-width container. Called from
-// Hero / Why / Architecture / TryHomer / MemorySearchDemo / MemoryLifecycleDemo
-// / MorningRoutineCast / Lessons / Roadmap / CTA. Exists so individual section
+// Hero / Why / Architecture / Lessons / Roadmap / CTA. Exists so individual section
 // files stay content-only and inherit the page's scroll choreography.
 //
 // `eyebrow` renders as a small monospace label above the title — matches the

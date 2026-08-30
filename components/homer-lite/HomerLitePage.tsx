@@ -6,10 +6,6 @@ import { HOMER_THEME } from './theme';
 import Hero from './sections/Hero';
 import Why from './sections/Why';
 import Architecture from './sections/Architecture';
-import TryHomer from './sections/TryHomer';
-import MemorySearchDemo from './sections/MemorySearchDemo';
-import MemoryLifecycleDemo from './sections/MemoryLifecycleDemo';
-import MorningRoutineCast from './sections/MorningRoutineCast';
 import Lessons from './sections/Lessons';
 import Roadmap from './sections/Roadmap';
 import CTA from './sections/CTA';
@@ -17,9 +13,17 @@ import CTA from './sections/CTA';
 // Function: HomerLitePage — entry point for the /homer route.
 // Section flow (live-product framing, not case study):
 //   Hero (typewriter boot sequence + fixed LIVE pill) →
-//   TryHomer (telemetry trace) → MemorySearchDemo → MorningRoutineCast →
-//   Architecture (interactive — Memory schema lives inside) →
-//   Why (three Before/After couplets) → Lessons → Roadmap → CTA (consulting)
+//   Why ("1000s of agents, this one works for ME" — three Before/After couplets) →
+//   Architecture (six subsystems, each tab has a live sandboxed chatbox) →
+//   Lessons → Roadmap → CTA (consulting)
+//
+// Retired 2026-08-29 (Yanqing: "too busy, audience couldn't tell what it does"):
+//   TryHomer ("Not a chat interface" telemetry traces), MemorySearchDemo
+//   ("Interrogate Homer's memory" — live search moved into the Architecture
+//   Memory tab), MemoryLifecycleDemo (Ava scenario + fake extractor — replaced
+//   by a real extractor dry-run in the Memory tab), MorningRoutineCast.
+//   Files kept under sections/ until the playable Architecture ships; the
+//   MemorySearchDemo fetch/trace code is the reference for the Memory tab.
 //
 // Sections retired over time, and why — the files were deleted 2026-07-25 after
 // sitting unimported for months; recover from git history if any is revived:
@@ -182,12 +186,8 @@ const HomerLitePage: React.FC = () => {
       >
         <div className="relative z-10">
           <Hero />
-          <TryHomer />
-          <MemorySearchDemo />
-          <MemoryLifecycleDemo />
-          <MorningRoutineCast />
-          <Architecture />
           <Why />
+          <Architecture />
           <Lessons />
           <Roadmap />
           <CTA />

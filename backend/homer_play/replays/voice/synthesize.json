@@ -1,0 +1,19 @@
+{
+  "ok": true,
+  "version": "1",
+  "request_id": "00000000-0000-4000-8000-000000000007",
+  "tab": "voice",
+  "action": "synthesize",
+  "mode": "degraded",
+  "reply": "Live mode is unavailable; here is a recorded stock-voice example.",
+  "data": {
+    "text": "Homer routes each job to the cheapest capable model.",
+    "audio": {"mime_type": "audio/ogg; codecs=opus", "encoding": "base64", "data": "T2dnUw==", "bytes": 4, "duration_ms": 800},
+    "voice": {"provider": "elevenlabs", "class": "licensed_stock_public_demo", "model": "configured turbo allowlist model"},
+    "characters_billed": 53
+  },
+  "receipt": {"source": "elevenlabs", "observed_at": "2026-08-20T19:00:00Z", "read_only": true, "persisted": false},
+  "limits": {"remaining_this_hour": 9, "reset_at": "2026-08-20T20:00:00Z"},
+  "spend": {"reserved_usd": 0.0, "charged_usd": 0.0, "daily_cap_usd": 2.0},
+  "degraded": {"active": true, "reason": "not_yet_enabled", "replay_id": "voice.synthesize.v1.stock", "captured_at": "2026-08-20T19:00:00Z", "live_data_age_seconds": null}
+}

@@ -1,0 +1,32 @@
+{
+  "ok": true,
+  "version": "1",
+  "request_id": "00000000-0000-4000-8000-000000000004",
+  "tab": "executors",
+  "action": "route_and_answer",
+  "mode": "degraded",
+  "reply": "Live mode is unavailable; here is a recorded example of executor routing.",
+  "data": {
+    "classification": {"task_type": "verification", "urgency": "immediate", "estimated_tokens_bucket": "short"},
+    "routing": {
+      "logic": "makeRoutingDecision",
+      "chosen_executor": "codex",
+      "chosen_model_family": "codex-class",
+      "tier": "deep_verification",
+      "reason": "Verification routes to a deep-reasoning executor.",
+      "fallback_chain": ["opencode", "kimi", "gemini"],
+      "would_execute_chosen_route": false
+    },
+    "demo_execution": {
+      "executor": "gemini-api",
+      "model": "configured flash allowlist model",
+      "answer": "Check shared state transitions, idempotency boundaries, and cleanup paths for races.",
+      "input_tokens": 34,
+      "output_tokens": 19
+    }
+  },
+  "receipt": {"source": "homer_code", "observed_at": "2026-08-20T19:00:00Z", "read_only": true, "persisted": false},
+  "limits": {"remaining_this_hour": 9, "reset_at": "2026-08-20T20:00:00Z"},
+  "spend": {"reserved_usd": 0.0, "charged_usd": 0.0, "daily_cap_usd": 2.0},
+  "degraded": {"active": true, "reason": "not_yet_enabled", "replay_id": "executors.route.v1.verification", "captured_at": "2026-08-20T19:00:00Z", "live_data_age_seconds": null}
+}

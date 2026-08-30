@@ -18,11 +18,6 @@ const STATUS_COLOR: Record<Status, { bg: string; text: string; label: string }> 
 
 const ITEMS: { title: string; body: string; status: Status }[] = [
   {
-    title: 'Public Try-Homer console',
-    body: 'A sandboxed terminal on this page so visitors can run real Homer commands (status, memory_search, schedule) against a public-safe view of the system. Same MCP tools, sanitized data.',
-    status: 'in-progress',
-  },
-  {
     title: 'Voice agent v2 — interruption + barge-in',
     body: 'Upgrade the ElevenLabs Managed Agent flow with full-duplex barge-in so I can interrupt mid-sentence. Re-tunes the call routing layer in src/voice/.',
     status: 'in-progress',

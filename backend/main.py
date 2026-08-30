@@ -295,6 +295,14 @@ try:
 except ImportError as e:
     logger.warning("[STARTUP] Homer memory search not available: %s", e)
 
+# Homer playable architecture (public policy/orchestration boundary)
+try:
+    from homer_play import router as homer_play_router
+    app.include_router(homer_play_router)
+    logger.info("[STARTUP] Mounted Homer play router at /api/homer/play")
+except ImportError as e:
+    logger.warning("[STARTUP] Homer play not available: %s", e)
+
 
 @app.get("/health")
 async def health():
@@ -2913,4 +2921,3 @@ async def reschedule_booking(booking_id: str, req: RescheduleBookingRequest, aut
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
-

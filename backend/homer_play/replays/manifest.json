@@ -1,0 +1,101 @@
+{
+  "schema_version": "1",
+  "fixtures": [
+    {
+      "replay_id": "memory.search.v1.sqlite",
+      "tab": "memory",
+      "action": "search",
+      "schema_version": "1",
+      "captured_at": "2026-08-20T19:00:00Z",
+      "generator_build": "phase1-synthetic-v1",
+      "source_fixture": "memory/search.json",
+      "content_sha256": "205008412bc9c0ed6beb59146b50753f053aa7964e7376a0a4b544d0a1aa8020",
+      "public_reviewed_by": "phase1-public-safety-review",
+      "public_reviewed_at": "2026-08-29T20:00:00Z"
+    },
+    {
+      "replay_id": "memory.extract.v1.sqlite-conflict",
+      "tab": "memory",
+      "action": "extract_dry_run",
+      "schema_version": "1",
+      "captured_at": "2026-08-20T19:00:00Z",
+      "generator_build": "phase1-synthetic-v1",
+      "source_fixture": "memory/extract_dry_run.json",
+      "content_sha256": "864f42febd537116d6349e8e1ae62da48cddf46c979f2f506c83822d06bc3b6d",
+      "public_reviewed_by": "phase1-public-safety-review",
+      "public_reviewed_at": "2026-08-29T20:00:00Z"
+    },
+    {
+      "replay_id": "scheduler.query.v1.failed-week",
+      "tab": "scheduler",
+      "action": "query",
+      "schema_version": "1",
+      "captured_at": "2026-08-20T19:00:00Z",
+      "generator_build": "phase1-synthetic-v1",
+      "source_fixture": "scheduler/query.json",
+      "content_sha256": "9596fddea06c2e78bccca89f5598e5e4fd8eb86d43f5ab49c6aad8596df37214",
+      "public_reviewed_by": "phase1-public-safety-review",
+      "public_reviewed_at": "2026-08-29T20:00:00Z"
+    },
+    {
+      "replay_id": "executors.route.v1.verification",
+      "tab": "executors",
+      "action": "route_and_answer",
+      "schema_version": "1",
+      "captured_at": "2026-08-20T19:00:00Z",
+      "generator_build": "phase1-synthetic-v1",
+      "source_fixture": "executors/route_and_answer.json",
+      "content_sha256": "f75346ece445faa51240aaf5c864af0ac1303175ebee0f01cc72f96922515d72",
+      "public_reviewed_by": "phase1-public-safety-review",
+      "public_reviewed_at": "2026-08-29T20:00:00Z"
+    },
+    {
+      "replay_id": "mcp.list.v1.public-tools",
+      "tab": "mcp",
+      "action": "list_tools",
+      "schema_version": "1",
+      "captured_at": "2026-08-20T19:00:00Z",
+      "generator_build": "phase1-synthetic-v1",
+      "source_fixture": "mcp/list_tools.json",
+      "content_sha256": "25df81a99e442a95b2547ded5c72bf0fe35bf1f43ff5208f54a627010487262a",
+      "public_reviewed_by": "phase1-public-safety-review",
+      "public_reviewed_at": "2026-08-29T20:00:00Z"
+    },
+    {
+      "replay_id": "mcp.call.v1.memory-search",
+      "tab": "mcp",
+      "action": "call_tool",
+      "schema_version": "1",
+      "captured_at": "2026-08-20T19:00:00Z",
+      "generator_build": "phase1-synthetic-v1",
+      "source_fixture": "mcp/call_tool.json",
+      "content_sha256": "3817b53e559b78826156920a0ea69bb8aabdb3c79ad0dd02ccece0b5f18c6c2d",
+      "public_reviewed_by": "phase1-public-safety-review",
+      "public_reviewed_at": "2026-08-29T20:00:00Z"
+    },
+    {
+      "replay_id": "voice.synthesize.v1.stock",
+      "tab": "voice",
+      "action": "synthesize",
+      "schema_version": "1",
+      "captured_at": "2026-08-20T19:00:00Z",
+      "generator_build": "phase1-synthetic-v1",
+      "source_fixture": "voice/synthesize.json",
+      "content_sha256": "fbbfa709cc277ced18d0e9dd77b1d9c74289dde489190f8e5cc8cddf77d8c37f",
+      "public_reviewed_by": "phase1-public-safety-review",
+      "public_reviewed_at": "2026-08-29T20:00:00Z"
+    },
+    {
+      "replay_id": "web.activity.v1.overview",
+      "tab": "web",
+      "action": "activity",
+      "schema_version": "1",
+      "captured_at": "2026-08-20T19:00:00Z",
+      "generator_build": "phase1-synthetic-v1",
+      "source_fixture": "web/activity.json",
+      "content_sha256": "309ea37be3cdb32610b4ff16d5e718b76cfbf0a44d12b0de053d68f96976f50d",
+      "public_reviewed_by": "phase1-public-safety-review",
+      "public_reviewed_at": "2026-08-29T20:00:00Z"
+    }
+  ]
+}

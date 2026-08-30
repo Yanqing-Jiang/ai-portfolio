@@ -1,0 +1,22 @@
+{
+  "ok": true,
+  "version": "1",
+  "request_id": "00000000-0000-4000-8000-000000000005",
+  "tab": "mcp",
+  "action": "list_tools",
+  "mode": "degraded",
+  "reply": "Live mode is unavailable; here is the recorded public MCP facade catalog.",
+  "data": {
+    "protocol": "mcp",
+    "tools": [
+      {"name": "memory_search", "description": "Search the public Homer architecture corpus.", "input_schema": {"type": "object", "required": ["query"]}, "data_source": "public_corpus", "side_effect_class": "none"},
+      {"name": "public_schedule_status", "description": "Read sanitized scheduler status.", "input_schema": {"type": "object"}, "data_source": "live_bridge", "side_effect_class": "none"},
+      {"name": "public_runtime_status", "description": "Read aggregate runtime status.", "input_schema": {"type": "object"}, "data_source": "live_bridge", "side_effect_class": "none"}
+    ],
+    "hidden_tool_count": 0
+  },
+  "receipt": {"source": "homer_code", "observed_at": "2026-08-20T19:00:00Z", "read_only": true, "persisted": false},
+  "limits": {"remaining_this_hour": 9, "reset_at": "2026-08-20T20:00:00Z"},
+  "spend": {"reserved_usd": 0.0, "charged_usd": 0.0, "daily_cap_usd": 2.0},
+  "degraded": {"active": true, "reason": "not_yet_enabled", "replay_id": "mcp.list.v1.public-tools", "captured_at": "2026-08-20T19:00:00Z", "live_data_age_seconds": null}
+}

@@ -1,0 +1,51 @@
+{
+  "ok": true,
+  "version": "1",
+  "request_id": "00000000-0000-4000-8000-000000000002",
+  "tab": "memory",
+  "action": "extract_dry_run",
+  "mode": "degraded",
+  "reply": "Live mode is unavailable; here is a recorded example of a non-persisting extraction dry run.",
+  "data": {
+    "extractor": {"name": "public-claim-extractor", "version": "phase1-fixture"},
+    "candidates": [
+      {
+        "candidate_id": "ephemeral_1",
+        "content": "The public demo uses SQLite for reviewed architecture memory.",
+        "claim_type": "decision",
+        "confidence": 0.88,
+        "provenance": "public_visitor_untrusted",
+        "route": {
+          "tier": "passive",
+          "decision": "possible_supersede",
+          "reason": "Model-inferred public visitor input can never enter active memory.",
+          "would_persist": false
+        },
+        "matches": [
+          {
+            "public_claim_id": "hc_public_sqlite",
+            "content": "Homer uses SQLite for durable local state.",
+            "cosine": 0.89,
+            "relation": "possible_supersede"
+          }
+        ]
+      }
+    ],
+    "policy": {"corpus": "public_sanitized_only", "conflict_threshold": 0.85, "writes_attempted": 0}
+  },
+  "receipt": {
+    "source": "live_bridge",
+    "observed_at": "2026-08-20T19:00:00Z",
+    "read_only": true,
+    "persisted": false
+  },
+  "limits": {"remaining_this_hour": 9, "reset_at": "2026-08-20T20:00:00Z"},
+  "spend": {"reserved_usd": 0.0015, "charged_usd": 0.00048, "daily_cap_usd": 2.0},
+  "degraded": {
+    "active": true,
+    "reason": "bridge_unavailable",
+    "replay_id": "memory.extract.v1.sqlite-conflict",
+    "captured_at": "2026-08-20T19:00:00Z",
+    "live_data_age_seconds": null
+  }
+}
