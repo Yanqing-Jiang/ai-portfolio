@@ -252,6 +252,34 @@ describe('FortuneResultShell terminal states', () => {
     expect(screen.queryByText('Tap to expand years')).not.toBeInTheDocument();
   });
 
+  it('opens Chart without mutating the frozen reading anchors', async () => {
+    vi.spyOn(fortuneClient, 'getFortune').mockResolvedValue(snapshot('done', {
+      ...COMPLETE_MODEL,
+      wish: {
+        ...COMPLETE_MODEL.wish,
+        anchors: [
+          { id: 'lower', label: 'Supporting theme', symbol: '•', relevance: 0.6, bullets: ['Keep scope clear.'] },
+          { id: 'higher', label: 'Leading theme', symbol: '•', relevance: 0.9, bullets: ['Build on your strengths.'] },
+        ],
+      },
+    }));
+    renderResult();
+    await screen.findByText('2028–2029');
+    const savedAnchors = useFortuneStore.getState().dataModel!.wish!.anchors!;
+    expect(Object.isFrozen(savedAnchors)).toBe(true);
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Chart' }));
+    expect(await screen.findByText('Chart Anchors')).toBeInTheDocument();
+    expect(screen.getByText('Leading theme')).toBeInTheDocument();
+    expect(savedAnchors.map((anchor) => anchor.id)).toEqual(['lower', 'higher']);
+    const displayed = screen.getAllByRole('button').filter((button) =>
+      button.textContent?.includes('Leading theme') || button.textContent?.includes('Supporting theme'),
+    );
+    expect(displayed[0]).toHaveTextContent('Leading theme');
+    fireEvent.click(screen.getByRole('tab', { name: 'Outlook' }));
+    expect(await screen.findByText('2028–2029')).toBeInTheDocument();
+  });
+
   it('drops explorer selection from the URL when leaving Why', async () => {
     vi.spyOn(fortuneClient, 'getFortune').mockResolvedValue(snapshot('done', COMPLETE_MODEL));
 

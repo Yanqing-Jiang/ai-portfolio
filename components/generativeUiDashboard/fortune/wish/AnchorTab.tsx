@@ -51,7 +51,7 @@ export const AnchorTab: React.FC<{ isReplay?: boolean }> = ({ isReplay = false }
           animate="visible"
           className="flex flex-col gap-3"
         >
-          {anchors.sort((a, b) => b.relevance - a.relevance).slice(0, 3).map((anchor) => (
+          {[...anchors].sort((a, b) => b.relevance - a.relevance).slice(0, 3).map((anchor) => (
             <AnchorPill
               key={anchor.id}
               {...anchor}
