@@ -52,7 +52,10 @@ class FortuneSettings(BaseSettings):
     guardrail_model: str = DEFAULT_OPENAI_MODEL
     heavy_reasoning_model: str = HEAVY_REASONING_MODEL
 
-    # Reasoning effort ("none" | "minimal" | "low" | "medium" | "high" | "xhigh").
+    # Reasoning effort ("none" | "minimal" | "low" | "medium" | "high" |
+    # "xhigh" | "max"). GPT-5.6 Luna supports all seven levels. Existing
+    # production lanes keep their established values below; the new technical
+    # interpretation stage is the explicit Luna/max lane.
     # Default = medium for narrative quality. Override per-stage via
     # FORTUNE_NARRATIVE_REASONING etc. in .env if you need to trade depth
     # for latency. Guardrail stays low because it's a small safety pass.
@@ -64,8 +67,11 @@ class FortuneSettings(BaseSettings):
     # the Ask tab. The initial reading still uses narrative_reasoning.
     ask_reasoning: str = "low"
     # Technical interpretation precedes the compact dashboard writer.
-    interpretation_reasoning: str = "medium"
-    interpretation_max_tokens: int = 6000
+    interpretation_reasoning: str = "max"
+    # Max reasoning can consume more hidden output tokens before the compact
+    # brief is returned. Keep a finite ceiling so a malformed run cannot hold
+    # the fortune worker indefinitely.
+    interpretation_max_tokens: int = 20000
 
     # PR3 (latency refactor) — per-mode reasoning effort.
     # Compatibility flipped from "medium" → "low" on 2026-05-10 after the

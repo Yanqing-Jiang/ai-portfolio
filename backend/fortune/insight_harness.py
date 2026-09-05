@@ -48,7 +48,10 @@ to attained age or derive exact Gregorian transition dates from them.
 If birth time is unknown, no hour/palace claims. Missing gender prevents luck-cycle
 direction; do not fill gaps. Civil time is not true solar time.
 
-Return 3-5 distinct findings relevant to the actual question/function. Each needs:
+Return exactly 3 distinct findings relevant to the actual question/function.
+Prioritize the strongest supplied factors; do not exhaustively analyze every
+palace, interaction, or year. This is a concise technical brief for the writer.
+Each finding needs:
 a plausible life opportunity/event theme, risk, concrete action, a competing
 interpretation/condition, concise technical_basis, and JSON Pointer evidence_paths
 into the supplied chart data (e.g. /ten_gods/0, /ziwei/palaces/4).
@@ -242,7 +245,10 @@ async def prepare_reading_brief(ctx: Any, foundation: dict[str, Any]) -> None:
     ) as log:
         # Bound the entire stage, including one evidence repair. Do not put this
         # private technical brief into the user conversation session.
-        async with asyncio.timeout(120):
+        # Production max interpretation exhausted a 10k-token budget at 94s.
+        # Allow the 20k budget to finish; other effort tiers keep their bound.
+        deadline = 240 if agent.model_settings.reasoning.effort == "max" else 120
+        async with asyncio.timeout(deadline):
             for attempt in range(2):
                 result = await Runner.run(
                     agent, input=prompt, context=ctx, run_config=_run_config(ctx), max_turns=1,

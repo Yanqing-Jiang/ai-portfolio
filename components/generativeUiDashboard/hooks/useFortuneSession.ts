@@ -363,7 +363,8 @@ export function useFortuneSession(options: UseFortuneSessionOptions): UseFortune
     try {
       await fortuneClient.cancelFortune(id);
     } catch {
-      // best-effort
+      // Leave the active reading intact and allow another pause attempt.
+      setPausing(false);
     }
   }, [fortuneId, urlFortuneId]);
 

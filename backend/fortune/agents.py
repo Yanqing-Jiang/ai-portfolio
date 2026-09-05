@@ -1198,11 +1198,12 @@ def _build_occasion_window(
     occasion_type, start, end = parsed
     candidate_days: list[dict[str, Any]] = []
     cursor = start
-    # A user-facing lucky-day window is normally one month. Cap defensively
-    # so an accidental long range cannot dominate the model prompt. The
-    # ``timedelta(days=61)`` produces exactly 62 inclusive calendar days.
-    final_day = min(end, start + timedelta(days=61))
-    while cursor <= final_day:
+    # The intake supports 18 calendar months. Score the complete accepted
+    # window; the top-21 + sample prefilter below bounds the model prompt.
+    # Reject oversized requests instead of silently dropping their last days.
+    if (end - start).days >= 550:
+        raise ValueError("Choose a date window no longer than 18 months.")
+    while cursor <= end:
         chart = compute_day_chart_cached(cursor.isoformat(), ctx.timezone)
         day = chart["day"]
         candidate_days.append({

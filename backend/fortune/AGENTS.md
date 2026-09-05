@@ -1,33 +1,38 @@
 # Ming Engine — Agent Browser & Test Guide
 
+Last audited 2026-09-05 against the checked-in backend and the current
+OpenAI model/Agents SDK surfaces.
+
 ## Stack
 
 | Layer        | Pin                              |
 | ------------ | -------------------------------- |
-| OpenAI SDK   | `openai>=1.107.3`                |
-| Agents SDK   | `openai-agents==0.15.1`          |
+| OpenAI SDK   | `openai==3.8.0`                  |
+| Agents SDK   | `openai-agents[sqlalchemy]==0.22.0` |
 | Bazi engine  | `cnlunar>=0.2.4` (deterministic) |
-| Default model| `gpt-5.4-mini`                   |
-| Reasoning    | `low` per-mode (post-PR-3, 2026-05-10); `low` for guardrail; foundation is deterministic. Legacy `narrative_reasoning` default remains `medium` for `general` fallback. |
+| Default model| `gpt-5.6-luna`                   |
+| Reasoning    | `max` for the technical interpretation brief; `low` for compatibility, occasion, luck_cycle, wish, Ask, and guardrail; `medium` for the legacy `general` fallback. Foundation is deterministic. |
 | Verbosity    | `low`                            |
-| Max tokens   | compat=10000, occasion=9000, wish=6000, luck_cycle=4500, guardrail=1200 |
+| Max tokens   | interpretation=20000, compat=10000, occasion=9000, wish=6000, luck_cycle=4500, Ask=6000, guardrail=1200 |
 
 **Per-mode reasoning (post-PR-3 flip):** compatibility, occasion, luck_cycle, and wish all default to `low`. Compatibility was at `medium` (~65s) until 2026-05-10; PR-1B's judge harness (`scripts/run_compat_judge_harness.py`) confirmed 3/3 fixtures pass authenticity ≥ 6.5/10 at `low` (medians 8.2–10.0) with latency dropping to 15-22s. Rollback: `FORTUNE_NARRATIVE_REASONING_COMPATIBILITY=medium` + `docker compose restart backend`.
 
-**PR-Panel (always-visible Thinking Panel):** every stream emits the 5 canonical rows (calendar → bazi_interpreter → classics_retriever → narrative → guardrail) under `/data/thinking/steps/{step_id}` with a queued→running→done lifecycle. See `backend/fortune/stream_bridge.py::emit_agent_step` and `routes.py::_panel_canonical_rows`. Audit covered by `tests/fortune/test_thinking_panel_completeness.py`.
+**PR-Panel (always-visible Thinking Panel):** every stream emits the 5 canonical rows (calendar → bazi_interpreter → classics_retriever → narrative → guardrail) under `/data/thinking/steps/{step_id}` with a queued→running→done lifecycle. The technical interpretation brief runs before the narrative writer and is represented in the trace/log stream rather than as a sixth panel row. See `backend/fortune/stream_bridge.py::emit_agent_step` and `routes.py::_panel_canonical_rows`. The wire contract is covered by `backend/tests/test_a2ui_frames_golden.py` and the v2 event tests.
 
 **Ask continuity (current):** `SQLAlchemySession`, keyed by fortune id, is the sole conversation-memory mechanism and survives backend restarts. Response-id chaining is disabled (`chain_status="disabled"`); the former Redis `chain_store.py` path was removed. Ask requests may include an allowlisted section locator (`section_id` plus optional `selection_id`). The backend reconstructs that section from the trusted stored narrative before adding it to the volatile `intent` tail of the triage prompt—never accept arbitrary section content from the browser.
 
 The reasoning + model wiring lives in `backend/fortune/config.py` and is read
 by `_model_settings()` in `backend/fortune/agents.py`. Override live LLM stages
-via `FORTUNE_NARRATIVE_REASONING=high` etc. in `.env`.
+via `FORTUNE_NARRATIVE_REASONING=high` or
+`FORTUNE_INTERPRETATION_REASONING=medium` in `.env`; keep the per-mode knobs
+for the established production workload tiers.
 
 **PR2 (latency refactor) note:** `_model_settings` now passes
 `Reasoning(effort=…, summary=None)` — the reasoning summary stream was
 adding 3-8 s of TTFB and 10-15 % of reasoning tokens with no model-quality
 benefit. The ThinkingPanel UX role it served is replaced by the synthetic
 heartbeat (`_thinking_heartbeat`) wired in PR5 plus the existing
-`trace_collector` breadcrumbs. Do NOT re-introduce `summary="auto"`
+`tracing.py` breadcrumbs. Do NOT re-introduce `summary="auto"`
 without coordinating a frontend fallback.
 
 ## The 5 narrative agents (per-mode)
@@ -52,7 +57,8 @@ Mode is picked by `_narrative_mode(ctx)` from `ctx.focus` — same prefix
 rules that drive the per-mode emit fan-out at `routes.py:1316-1411`.
 **Do not regress the schema split.** Per-mode compact JSON schemas land
 54-72 % smaller than the union (regression-tested by
-`tests/fortune/test_narrative_schemas.py`).
+`backend/tests/test_a2ui_frames_golden.py` and
+`backend/tests/test_fortune_insight_harness.py`.
 
 ## The 4 customer-facing functions
 
@@ -87,7 +93,8 @@ fires on repeat queries by the same user. Order:
 5. `current_year`.
 6. `focus` / `tone` / `question` / `references` (volatile per call).
 
-`tests/fortune/test_prompt_cache_prefix.py` enforces this. **Do not
+The prompt ordering is covered by the prompt assertions in
+`backend/tests/test_fortune_insight_harness.py`. **Do not
 insert a volatile field above a stable one** — the cache prefix breaks at
 the first divergent byte and the win disappears.
 
@@ -97,26 +104,33 @@ the first divergent byte and the win disappears.
 
 ```bash
 cd ~/ai-portfolio/backend
-.venv/bin/pytest tests/fortune/test_four_functions.py -v
+.venv/bin/pytest -q tests/test_sdk_smoke.py tests/test_fortune_insight_harness.py \
+  tests/test_fortune_ask_sessions.py tests/test_fortune_ask_guardrail.py \
+  tests/test_trace_redaction.py tests/test_a2ui_frames_golden.py
 ```
 
-These check stream-bridge payload shapes and that `DEFAULT_OPENAI_MODEL ==
-"gpt-5.4-mini"`.
+These check stream-bridge payload shapes, grounded evidence validation,
+session continuity, trace redaction, and the pinned Agents SDK surface. The
+golden test can be sensitive to Redis/event-loop state when run after unrelated
+async tests; run it alone when diagnosing a sequence-only failure.
 
 ### Live e2e — agent browser style (hits OpenAI)
 
 ```bash
 cd ~/ai-portfolio/backend
 set -a && source .env && set +a
-.venv/bin/pytest tests/fortune/test_agent_browser_e2e.py -v -s \
+.venv/bin/pytest tests/test_fortune_insight_harness.py -v -s \
     --log-cli-level=INFO 2>&1 | tee /tmp/fortune-e2e.out
 ```
 
-The suite drives `run_foundation` + `run_narrative` + `run_guardrail`
-directly (the same code path the SSE stream uses) for each of the 4
-functions, and asserts:
+The live smoke path should drive `run_foundation` + the technical interpreter +
+`run_narrative` + `run_guardrail` directly (the same code path the SSE stream
+uses). This checkout does not contain the former `tests/fortune` browser e2e
+suite, so production browser validation remains a separate headed check. At
+minimum assert:
 
-* narrative model = `gpt-5.4-mini`, reasoning effort = `medium`
+* narrative model = `gpt-5.6-luna`; established per-mode effort remains low,
+  while the technical interpreter uses `max`
 * the right specialized block populated (e.g. `out.compatibility` for
   compat focus, `out.occasion` for occasion focus)
 * end-to-end latency under the per-function ceilings in the test file
@@ -138,7 +152,7 @@ Every agent stage emits a single-line key=value record on
 ```
 
 * `fn` ∈ `compatibility | occasion | luck_cycle | wish | general`
-* `stage` ∈ `foundation | narrative | narrative_streamed | direct_dispatch | triage | guardrail`
+* `stage` ∈ `foundation | interpretation | narrative | narrative_streamed | direct_dispatch | triage | ask | guardrail`
 * per-stream banners use `event=stream_start` / `event=stream_end`
 
 To find slow stages:
@@ -163,7 +177,8 @@ fortune/
 ├── calendar_tool.py     # base 4-pillar chart computation tool
 ├── classics.py          # hash-cosine retrieval over 滴天髓/子平真诠/三命通会 corpus
 ├── tracing.py           # GlassBoxTraceProcessor — durable spans → fortune_trace
-└── trace_collector.py   # in-memory step trace for the SSE Glass Box
+├── insight_harness.py   # technical brief, evidence validation, age/timing gates
+└── _thinking_heartbeat.py # bounded synthetic progress while the model reasons
 ```
 
 ## Authenticity (Gemini Pro 3.1 audit, 2026-05-03)
@@ -181,12 +196,29 @@ Full report: `~/homer/output/gemini/bazi-authenticity-2026-05-03-1530.md`.
 
 ## Cost / perf notes
 
-`gpt-5.4-mini` at medium reasoning is roughly:
+`gpt-5.6-luna` is the cost-sensitive model used by the Fortune stages. The
+technical interpretation stage intentionally runs it at `max` effort with a
+20,000-token ceiling; this is the explicit deep-reasoning lane requested for
+the grounded brief.
 
-* **2–3× the latency** of low for the narrative agent (most user-facing wait).
-* **5–8× the reasoning tokens** vs low. Output token ceiling stays at 1800.
+* Existing customer-facing modes stay at their established low/medium effort
+  settings so ordinary readings remain bounded.
+* The interpretation brief runs before the writer under `asyncio.timeout(240)` for max effort (`120` seconds for other efforts)
+  and a 10,000-token model cap; it is not stored in the Ask conversation.
 * Foundation + classics retrieval are deterministic — 0 model cost.
 * Guardrail kept at `low` reasoning intentionally to bound stream tail.
 
-If a customer ever needs sub-15s narratives, drop `FORTUNE_NARRATIVE_REASONING=low`
-in `.env.production` and rebuild the container.
+If a customer needs lower latency, use the per-stage environment overrides in
+`.env.production`; do not change the established low-effort customer lanes as
+part of the Luna/max interpreter rollout.
+
+## Current references
+
+* [GPT-5.6 Luna model reference](https://developers.openai.com/api/docs/models/gpt-5.6-luna)
+  — supported reasoning levels, Responses/streaming, and Structured Outputs.
+* [Agents SDK model guidance](https://openai.github.io/openai-agents-python/models/)
+  — Responses-only reasoning controls and encrypted reasoning continuity.
+* [Agents SDK tracing](https://openai.github.io/openai-agents-python/tracing/)
+  — sensitive-data capture and custom processor behavior.
+* [Agents SDK SQLAlchemy sessions](https://openai.github.io/openai-agents-python/sessions/sqlalchemy_session/)
+  — production session storage and initialization.

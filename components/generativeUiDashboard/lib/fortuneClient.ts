@@ -397,12 +397,7 @@ export const fortuneClient = {
     },
 
     async cancelFortune(fortuneId: string): Promise<void> {
-        const base = _apiBase();
-        const authHeaders = await authService.getAuthHeaders();
-        await fetch(`${base}/api/fortune/${fortuneId}/cancel`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...authHeaders },
-        });
+        await jsonFetch(`/api/fortune/${fortuneId}/cancel`, { method: 'POST' });
     },
 
     /**

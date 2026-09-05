@@ -13,6 +13,7 @@ import {
 import { useFortuneSession } from '../../components/generativeUiDashboard/hooks/useFortuneSession';
 import { useFortuneStream } from '../../components/generativeUiDashboard/hooks/useFortuneStream';
 import { useA2UIStream } from '../../components/generativeUiDashboard/a2ui/useA2UIStream';
+import { authService } from '../../services/auth';
 import { fortuneClient, FortuneApiError } from '../../components/generativeUiDashboard/lib/fortuneClient';
 import { useFortuneStore } from '../../components/generativeUiDashboard/stores/fortuneStore';
 
@@ -21,6 +22,12 @@ describe('fortune Ask state', () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     useFortuneStore.getState().reset();
+  });
+
+  it('reports a failed Pause request instead of silently accepting it', async () => {
+    vi.spyOn(authService, 'getAuthHeaders').mockResolvedValue({});
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ detail: 'Fortune session not found' }, { status: 404 })));
+    await expect(fortuneClient.cancelFortune('missing')).rejects.toMatchObject({ status: 404 });
   });
 
   afterEach(() => {

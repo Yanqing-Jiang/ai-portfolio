@@ -4,6 +4,8 @@ import { onRequestGet as snapshot } from '../../functions/api/fortune/[fortune_i
 import { onRequestGet as trace } from '../../functions/api/fortune/[fortune_id]/trace';
 import { onRequestGet as conversation } from '../../functions/api/fortune/[fortune_id]/conversation';
 
+import { onRequestPost as cancel } from '../../functions/api/fortune/[fortune_id]/cancel';
+
 const fortuneId = 'fe70f979-fd7a-4034-abf9-ff06b761eb55';
 afterEach(() => vi.unstubAllGlobals());
 
@@ -26,4 +28,17 @@ describe.each([['snapshot', snapshot], ['trace', trace], ['conversation', conver
     expect(response.headers.get('cache-control')).toBe('no-store');
     expect(response.headers.get('x-request-id')).toBe(headers.get('x-request-id'));
   });
+});
+
+
+it('forwards production Pause to the cancel endpoint', async () => {
+  const upstream = vi.fn().mockResolvedValue(Response.json({ cancelled: true }));
+  vi.stubGlobal('fetch', upstream);
+  const response = await cancel({
+    request: new Request(`https://yanqing.app/api/fortune/${fortuneId}/cancel`, { method: 'POST' }),
+    env: {}, params: { fortune_id: fortuneId },
+  });
+  expect(upstream.mock.calls[0][0]).toBe(`https://portfolio-api.yanqing.app/api/fortune/${fortuneId}/cancel`);
+  expect(upstream.mock.calls[0][1].method).toBe('POST');
+  expect(await response.json()).toEqual({ cancelled: true });
 });

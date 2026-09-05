@@ -300,7 +300,7 @@ export const AskTab: React.FC<AskTabProps> = ({
             <h4 className="text-[11px] font-bold uppercase tracking-widest text-slate-300">
               Chart basis
             </h4>
-            <p className="mt-0.5 truncate text-[10px] text-slate-500">
+            <p className="mt-0.5 text-[12px] leading-relaxed text-slate-400">
               Based on {interactionsCount} chart interactions and {mechanismsCount} mechanisms.
               Ask about any of them.
             </p>

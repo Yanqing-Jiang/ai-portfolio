@@ -52,6 +52,7 @@ export const CalendarGrid: React.FC<CalendarGridProps> = ({
       <div className="flex items-center justify-between mb-3">
         <button
           type="button"
+          aria-label="Previous month"
           onClick={() => onMonthChange?.(-1)}
           className="p-1.5 rounded-lg hover:bg-white/5 text-slate-400"
         >
@@ -65,6 +66,7 @@ export const CalendarGrid: React.FC<CalendarGridProps> = ({
         </div>
         <button
           type="button"
+          aria-label="Next month"
           onClick={() => onMonthChange?.(1)}
           className="p-1.5 rounded-lg hover:bg-white/5 text-slate-400"
         >

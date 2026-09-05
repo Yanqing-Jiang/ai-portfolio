@@ -67,6 +67,7 @@ export const DayDetailSheet: React.FC<DayDetailSheetProps> = ({
                 </div>
                 <button
                   type="button"
+                  aria-label="Close day details"
                   onClick={onClose}
                   className="p-1.5 rounded-lg hover:bg-white/10 text-slate-400"
                 >
