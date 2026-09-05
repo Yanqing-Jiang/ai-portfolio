@@ -257,7 +257,7 @@ const AgentBubble: React.FC<AgentBubbleProps> = ({
                 <div className="flex flex-col gap-2">
                     <span className="inline-flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-slate-500">
                         <Loader2 className="h-3 w-3 animate-spin" style={{ color: accentColor }} />
-                        Consulting the oracle…
+                        Reading the chart…
                     </span>
                 </div>
             )}
@@ -453,14 +453,19 @@ export const OracleChat: React.FC<OracleChatProps> = ({
         <MotionConfig reducedMotion="user">
         <div>
             {contextLabel && (
-                <div className="mb-3 flex items-center gap-2 text-[10px] uppercase tracking-widest text-slate-500">
-                    <span>Answering about</span>
+                <div className="mb-3 space-y-1 text-[10px] uppercase tracking-widest text-slate-500">
+                    <div className="flex items-center gap-2">
+                    <span>Following up on:</span>
                     <span
                         className="rounded-full border px-2 py-1 text-slate-300"
                         style={{ borderColor: `${accentColor}44`, background: `${accentColor}12` }}
                     >
                         {contextLabel}
                     </span>
+                    </div>
+                    <p className="pl-0 text-[11px] normal-case tracking-normal text-slate-500">
+                        Go deeper: which pillars drive this answer?
+                    </p>
                 </div>
             )}
             {memoryDegraded && (
@@ -475,7 +480,7 @@ export const OracleChat: React.FC<OracleChatProps> = ({
                 aria-live="polite"
                 aria-busy={isLoading}
                 aria-label="Ask conversation"
-                className="mb-3 space-y-4 pr-1"
+                className="mb-3 space-y-4 pr-1 pb-20 sm:pb-4"
             >
                 <AnimatePresence initial={false}>
                     {messages.map((msg) =>
@@ -519,7 +524,7 @@ export const OracleChat: React.FC<OracleChatProps> = ({
                                     type="button"
                                     onClick={() => onSend(s)}
                                     disabled={disabled}
-                                    className="min-h-10 rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 font-mono text-[10px] uppercase tracking-[0.12em] text-slate-400 transition-colors hover:bg-white/[0.06] hover:text-slate-200 disabled:cursor-not-allowed disabled:opacity-40"
+                                    className="min-h-10 rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 text-[12px] leading-snug text-slate-300 transition-colors hover:bg-white/[0.06] hover:text-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
                                 >
                                     {s}
                                 </button>
@@ -547,10 +552,10 @@ export const OracleChat: React.FC<OracleChatProps> = ({
                                     key={s}
                                     type="button"
                                     onClick={() => onSend(s)}
-                                    className="inline-flex min-h-10 items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 font-mono text-[10px] uppercase tracking-[0.12em] text-slate-300 hover:bg-white/[0.07]"
+                                    className="inline-flex min-h-10 items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 text-[12px] leading-snug text-slate-300 hover:bg-white/[0.07]"
                                 >
                                     <span className="text-slate-500">{meta.icon}</span>
-                                    <span className="text-[10px] uppercase tracking-widest text-slate-500">
+                                    <span className="text-[10px] text-slate-500">
                                         {meta.kind}
                                     </span>
                                     <span>{s}</span>
@@ -580,7 +585,7 @@ export const OracleChat: React.FC<OracleChatProps> = ({
                         value={input}
                         onChange={(e) => onInputChange(e.target.value)}
                         onKeyDown={handleKeyDown}
-                        placeholder="Ask the oracle..."
+                        placeholder="Ask what the chart shows..."
                         disabled={disabled}
                         maxLength={500}
                         aria-label="Ask a question about this reading"

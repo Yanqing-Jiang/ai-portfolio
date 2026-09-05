@@ -3,8 +3,9 @@
  * Short message, one working recovery action, no raw backend detail.
  */
 
-import React from 'react';
+import React, { useState } from 'react';
 import { RotateCcw, ShieldAlert, TriangleAlert } from 'lucide-react';
+import { AuthModal } from '../../../AuthModal';
 import type { ReadingFailure } from '../shell/readingStatus';
 
 interface ReadingErrorCardProps {
@@ -19,6 +20,8 @@ export const ReadingErrorCard: React.FC<ReadingErrorCardProps> = ({
   onRestart,
   hasPartialContent = false,
 }) => {
+  const [showAuth, setShowAuth] = useState(false);
+  const needsSignIn = /sign-in required after free quota|^Fortune 401$/i.test(failure.message);
   const rejected = failure.kind === 'rejected';
   const Icon = rejected ? ShieldAlert : TriangleAlert;
   const tone = rejected ? 'text-amber-400' : 'text-rose-400';
@@ -36,9 +39,11 @@ export const ReadingErrorCard: React.FC<ReadingErrorCardProps> = ({
         <Icon size={18} className={`mt-0.5 flex-none ${tone}`} aria-hidden />
         <div className="min-w-0 space-y-1">
           <p className={`text-[11px] font-bold uppercase tracking-[0.16em] ${tone}`}>
-            {rejected ? 'Reading withheld' : 'Reading incomplete'}
+            {needsSignIn ? 'Free reading allowance reached' : rejected ? 'Reading withheld' : 'Reading incomplete'}
           </p>
-          <p className="text-[12.5px] leading-relaxed text-slate-300">{failure.message}</p>
+          <p className="text-[12.5px] leading-relaxed text-slate-300">
+            {needsSignIn ? 'Sign in to continue, or return after the daily allowance resets.' : failure.message}
+          </p>
           {hasPartialContent && (
             <p className="text-[11px] leading-relaxed text-slate-500">
               Use the chart or Why tab to explore what finished.
@@ -49,12 +54,19 @@ export const ReadingErrorCard: React.FC<ReadingErrorCardProps> = ({
 
       <button
         type="button"
-        onClick={onRestart}
+        onClick={needsSignIn ? () => setShowAuth(true) : onRestart}
         className="mt-3 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/[0.04] px-4 text-[12px] font-semibold text-slate-100 transition-colors hover:bg-white/[0.08] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50 sm:w-auto"
       >
         <RotateCcw size={14} aria-hidden />
-        Start a new reading
+        {needsSignIn ? 'Sign in to continue' : 'Start a new reading'}
       </button>
+      {needsSignIn && (
+        <AuthModal
+          isOpen={showAuth}
+          onClose={() => setShowAuth(false)}
+          onSuccess={() => window.location.reload()}
+        />
+      )}
     </div>
   );
 };

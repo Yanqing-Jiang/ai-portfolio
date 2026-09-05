@@ -12,15 +12,28 @@ interface YearCardProps {
   isReplay?: boolean;
 }
 
+type AnnualPillarDisplayData = AnnualPillar & {
+  stemElement?: string;
+  branchElement?: string;
+};
+
 export const YearCard: React.FC<YearCardProps> = ({
   item,
   isExpanded = false,
   onToggle,
   isReplay = false,
 }) => {
-  const element = item.element || 'Wood';
-  const ec = ELEMENT_COLORS[element];
-  const score = item.score ?? 50;
+  const displayItem = item as AnnualPillarDisplayData;
+  const stemElement = displayItem.stemElement;
+  const branchElement = displayItem.branchElement;
+  const element = displayItem.element || stemElement || branchElement;
+  const ec = element
+    ? ELEMENT_COLORS[element as keyof typeof ELEMENT_COLORS]
+    : undefined;
+  const elementLabel = [stemElement, branchElement].filter(Boolean).join(' · ') || element || 'Element unavailable';
+  const score = typeof item.score === 'number' && Number.isFinite(item.score)
+    ? item.score
+    : null;
 
   return (
     <motion.div
@@ -35,11 +48,11 @@ export const YearCard: React.FC<YearCardProps> = ({
         className="w-full flex items-center gap-3 p-3 text-left"
       >
         <div className="text-sm font-bold text-white min-w-[40px]">{item.year}</div>
-        <div className={`text-[10px] ${ec.text} ${ec.bg} ${ec.border} border rounded-full px-2 py-0.5`}>
-          {element}
+        <div className={`text-[10px] ${ec?.text || 'text-slate-400'} ${ec?.bg || 'bg-white/5'} ${ec?.border || 'border-white/10'} border rounded-full px-2 py-0.5`}>
+          {elementLabel}
         </div>
-        <div className={`text-xs font-semibold ml-auto ${scoreColor(score)}`}>
-          {Math.round(score)}
+        <div className={`text-xs font-semibold ml-auto ${score === null ? 'text-slate-500' : scoreColor(score)}`}>
+          {score === null ? '—' : Math.round(score)}
         </div>
         <ChevronDown
           className={`w-3.5 h-3.5 text-slate-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`}

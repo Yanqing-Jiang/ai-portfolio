@@ -98,6 +98,11 @@ def _run_config(ctx: "FortuneRunContext") -> RunConfig:
     return RunConfig(
         trace_id=f"trace_{source_id.replace('-', '')}" if source_id else None,
         group_id=f"group_{ctx.fortune_id.replace('-', '')}" if ctx.fortune_id else None,
+        workflow_name="Ming Engine Fortune Agent",
+        # Birth-derived charts, questions, and model output are sensitive. The
+        # local Glass Box processor receives its own redacted allowlist below;
+        # do not also send raw generation payloads to the SDK trace exporter.
+        trace_include_sensitive_data=False,
         trace_metadata={
             # OpenAI hosted tracing requires all metadata values to be strings.
             "run_id": ctx.run_id or "",
@@ -754,10 +759,10 @@ def _build_narrative_agent(
 # four canonical modes — ``run_narrative`` / ``run_narrative_streamed``
 # only fall through to ``general`` after route normalization.
 #
-# Compat starts at ``medium`` reasoning (gated by the fixture A/B in
-# ``test_compat_reasoning_floor.py``); the other three modes default to
-# ``low`` because their UI payloads are smaller and (for occasion) the
-# deterministic prefilter does the heavy ranking before the model.
+# Compatibility, occasion, luck-cycle, and wish modes keep their established
+# ``low`` reasoning tier because their deterministic foundation/prefilters and
+# narrow output schemas already bound the customer-facing work. The separate
+# technical interpretation stage is the explicit Luna/``max`` lane.
 NARRATIVE_AGENTS: dict[str, Agent[FortuneRunContext]] = {
     "compatibility": _build_narrative_agent(
         "fortune_narrative_compatibility",
@@ -1481,6 +1486,7 @@ async def run_guardrail(
             input=prompt,
             context=ctx,
             run_config=_run_config(ctx),
+            max_turns=1,
         )
         sh.attach_result(result)
     if isinstance(result.final_output, GuardrailOutput):

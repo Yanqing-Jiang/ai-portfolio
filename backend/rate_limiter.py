@@ -8,6 +8,7 @@ except ImportError:
     FastAPILimiter = None  # type: ignore
 from jose import jwt, JWTError
 from math import ceil
+from ipaddress import ip_address
 import os
 from typing import Optional, Dict, Tuple, Any
 from dotenv import load_dotenv
@@ -109,7 +110,9 @@ SCOPE_LIMITS: Dict[RateLimitScope, Tuple[int, int]] = {
     RateLimitScope.FORTUNE_STREAM: (10, 40),
     RateLimitScope.FORTUNE_ACTION: (GUEST_LIMIT, MEMBER_LIMIT),
     RateLimitScope.FORTUNE_CORRECTION: (GUEST_LIMIT, MEMBER_LIMIT),
-    RateLimitScope.FORTUNE_REPLAY: (GUEST_LIMIT, MEMBER_LIMIT),
+    # Snapshot, trace and conversation reads share this bucket. One reading
+    # needs several reads; replay must not spend the small generation quota.
+    RateLimitScope.FORTUNE_REPLAY: (120, 300),
     RateLimitScope.FORTUNE_ASK: (GUEST_LIMIT, MEMBER_LIMIT),
     RateLimitScope.FORTUNE_SIMULATE: (GUEST_LIMIT, MEMBER_LIMIT),
 }
@@ -257,6 +260,22 @@ def _guest_ip(request: Request) -> str:
     if TRUST_FORWARDED_IP:
         cf_ip = request.headers.get("cf-connecting-ip")
         if cf_ip:
+            # Cloudflare replaces CF-Connecting-IP on cross-zone Worker
+            # subrequests with a shared sentinel. Only our own Pages Worker
+            # may supply the original visitor through its overwritten XFF.
+            # CF-Worker is set by Cloudflare, unlike caller-supplied XFF.
+            # https://developers.cloudflare.com/fundamentals/reference/http-headers/
+            worker = request.headers.get("cf-worker", "").lower()
+            if (
+                cf_ip.strip() == "2a06:98c0:3600::103"
+                and worker == "ai-portfolio-6jm.pages.dev"
+                and request.url.path.startswith("/api/fortune/")
+            ):
+                forwarded = request.headers.get("x-forwarded-for", "").split(",", 1)[0].strip()
+                try:
+                    return str(ip_address(forwarded))
+                except ValueError:
+                    pass
             return cf_ip.strip()
         xff = request.headers.get("x-forwarded-for")
         if xff:

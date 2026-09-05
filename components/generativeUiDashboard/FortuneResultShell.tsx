@@ -24,6 +24,7 @@ import {
   FORTUNE_RESULT_CONFIG,
   buildResultHeadline,
   buildResultKpis,
+  buildReadingStatus,
   readModelId,
   shortFortuneId,
 } from './fortune/shell/resultConfig';
@@ -54,6 +55,7 @@ interface FunctionTabProps {
   askContext?: AskContext;
   askReady?: boolean;
   askDisabledReason?: string;
+  onTabChange: (id: string) => void;
 }
 
 function renderFunctionTab({
@@ -65,6 +67,7 @@ function renderFunctionTab({
   askContext,
   askReady,
   askDisabledReason,
+  onTabChange,
 }: FunctionTabProps): React.ReactNode {
   if (failed && activeTab === FORTUNE_RESULT_CONFIG[functionId].defaultTab) return null;
   const ask = (id: CanonicalFortuneFunction) => (
@@ -82,22 +85,22 @@ function renderFunctionTab({
     </HarnessView>
   );
   if (functionId === 'wish') {
-    if (activeTab === 'Verdict') return <VerdictTab isReplay={isReplay} failed={failed} />;
+    if (activeTab === 'Verdict') return <VerdictTab isReplay={isReplay} failed={failed} onTabChange={onTabChange} />;
     if (activeTab === 'Anchor') return <AnchorTab isReplay={isReplay} />;
     if (activeTab === 'Ask') return ask('wish');
   }
   if (functionId === 'cycle') {
-    if (activeTab === 'Now') return <NowTab isReplay={isReplay} />;
+    if (activeTab === 'Now') return <NowTab isReplay={isReplay} onTabChange={onTabChange} />;
     if (activeTab === 'Timeline') return <TimelineTab isReplay={isReplay} />;
     if (activeTab === 'Ask') return ask('cycle');
   }
   if (functionId === 'compatibility') {
-    if (activeTab === 'Overview') return <OverviewTab isReplay={isReplay} />;
+    if (activeTab === 'Overview') return <OverviewTab isReplay={isReplay} onTabChange={onTabChange} />;
     if (activeTab === 'Pillars') return <PillarsTab isReplay={isReplay} />;
     if (activeTab === 'Ask') return ask('compatibility');
   }
   if (functionId === 'occasion') {
-    if (activeTab === 'TopPicks') return <TopPicksTab isReplay={isReplay} />;
+    if (activeTab === 'TopPicks') return <TopPicksTab isReplay={isReplay} onTabChange={onTabChange} />;
     if (activeTab === 'Calendar') return <CalendarTab isReplay={isReplay} />;
     if (activeTab === 'Ask') return ask('occasion');
   }
@@ -230,6 +233,7 @@ export const FortuneResultShell: React.FC<FortuneResultShellProps> = ({
   });
 
   const statusPath = `fortune://${config.canonicalId}/${shortFortuneId(fortuneId)}`;
+  const readerLine = buildReadingStatus(functionId, dataModel);
   const isLg = useIsLg();
   const askContext: AskContext = {
     sectionId: TAB_SECTION_IDS[lastContentTab] || TAB_SECTION_IDS[config.defaultTab],
@@ -269,7 +273,12 @@ export const FortuneResultShell: React.FC<FortuneResultShellProps> = ({
   // Single GlassBox instance — rail on ≥lg, below the reading on mobile.
   const glass = (
     <div className="space-y-3">
-      <GlassBoxPanel accent={accent.primary} variant={isLg ? 'rail' : 'inline'} />
+      <GlassBoxPanel
+        accent={accent.primary}
+        variant={isLg ? 'rail' : 'inline'}
+        statusPath={statusPath}
+        modelId={modelId}
+      />
       <MemoryPanel />
     </div>
   );
@@ -282,9 +291,8 @@ export const FortuneResultShell: React.FC<FortuneResultShellProps> = ({
       kicker={kicker}
       headline={failed && !dataModel?.narrative?.tldr ? 'Reading not completed' : headline}
       contextLine={contextLine}
+      readerLine={readerLine}
       kpis={failed ? [] : kpis}
-      statusPath={statusPath}
-      modelId={modelId}
       runState={runState}
       tabs={config.tabs}
       activeTabId={activeTab}
@@ -320,6 +328,7 @@ export const FortuneResultShell: React.FC<FortuneResultShellProps> = ({
             askContext,
             askReady,
             askDisabledReason,
+            onTabChange: handleTabChange,
           })}
         </AnimatePresence>
       )}

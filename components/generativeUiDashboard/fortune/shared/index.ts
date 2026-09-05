@@ -27,8 +27,10 @@ export { VerdictProgressiveGauge } from './VerdictProgressiveGauge';
 export { AgentPhaseStrip } from './AgentPhaseStrip';
 export { OutlookSection } from './OutlookSection';
 export { ReadingErrorCard } from './ReadingErrorCard';
+export { ReadingBridge } from './ReadingBridge';
 export { HeroPickCard } from './HeroPickCard';
 export { LuckFilmStrip } from './LuckFilmStrip';
+export { calendarDayDistance, formatDateOnly, parseDateOnly } from './dateOnly';
 
 export { AskTab } from './AskTab';
 export { WhyTab } from './WhyTab';

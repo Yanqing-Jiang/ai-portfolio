@@ -36,7 +36,7 @@ export const MemoryPanel: React.FC = () => {
         aria-expanded={open}
       >
         <div className="min-w-0 text-[10px] font-semibold uppercase tracking-[0.2em] text-[#9fb3a8]">
-          Session Memory · {turns.length} Turn{turns.length === 1 ? '' : 's'}
+          Your follow-ups · {turns.length}
         </div>
         {open ? (
           <ChevronDown size={14} className="text-[#5c6963]" />
@@ -57,7 +57,7 @@ export const MemoryPanel: React.FC = () => {
             <div className="max-h-48 space-y-1.5 overflow-y-auto px-4 py-3" style={{ fontFamily: OBSERVATORY_MONO }}>
               {turns.length === 0 ? (
                 <p className="py-2 text-center text-[10.5px] text-[#5c6963]">
-                  No prior turns yet. Ask a follow-up to seed session memory.
+                  Questions you ask here will appear in this list.
                 </p>
               ) : (
                 turns.map((t, i) => (

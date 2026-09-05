@@ -386,11 +386,9 @@ async def startup_event():
         logger.warning("[STARTUP] Fortune trace processor registration failed: %s", e)
 
     # Override the default OpenAI client used by the openai-agents SDK so
-    # that medium-thinking gpt-5-mini narratives (compatibility / occasion
-    # mode in particular) don't get cut off at the SDK's 600s HTTP read
-    # default. The SSE path streams progress so the user UX is unaffected,
-    # but the underlying HTTP read budget needs headroom for the 5-10 min
-    # reasoning tail observed on heavy two-chart compatibility runs.
+    # long-running GPT-5.6 reasoning stages have headroom beyond the SDK's
+    # default HTTP read timeout. The SSE path streams progress so the user UX
+    # remains active while the underlying Responses call finishes.
     try:
         import os as _os
         from openai import AsyncOpenAI

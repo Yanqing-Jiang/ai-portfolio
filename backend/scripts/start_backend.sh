@@ -10,4 +10,5 @@ for migration in /app/migrations/*.sql; do
 done
 
 exec gunicorn main:app -w 1 -k uvicorn.workers.UvicornWorker \
-  --bind 0.0.0.0:8000 --timeout 120 --graceful-timeout 30 --keep-alive 75
+  --bind 0.0.0.0:8000 --timeout 120 --graceful-timeout 30 --keep-alive 75 \
+  --no-control-socket

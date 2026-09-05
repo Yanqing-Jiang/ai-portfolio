@@ -12,7 +12,7 @@ import { motion } from 'framer-motion';
 import { ChevronDown, Shuffle, Target, TrendingUp, TriangleAlert } from 'lucide-react';
 import { OBSERVATORY_MONO } from '../designTokens';
 import { staggerContainer, staggerItem, pickVariants } from '../animations';
-import { supportBand, SUPPORT_FOOTNOTE, type OutlookEntry } from './outlook';
+import { supportBand, type OutlookEntry } from './outlook';
 
 interface OutlookSectionProps {
   entries: OutlookEntry[];
@@ -40,6 +40,9 @@ export const OutlookSection: React.FC<OutlookSectionProps> = ({
       >
         {title}
       </h3>
+      <p className="px-1 text-[11px] leading-relaxed text-[#7a7f88]">
+        Evidence strength, not a probability. Ages are birthdays reached in those years.
+      </p>
 
       <motion.ul
         variants={pickVariants(isReplay, staggerContainer(0.08))}
@@ -74,7 +77,7 @@ export const OutlookSection: React.FC<OutlookSectionProps> = ({
                 {entry.support > 0 && (
                   <span className="ml-auto flex items-center gap-1.5">
                     <span className="text-[10px] uppercase tracking-wide text-[#7a7f88]">
-                      {band.label}
+                      {band.label.replace(/\s+support$/i, ' chart evidence')}
                     </span>
                     <span
                       className="h-1 w-9 overflow-hidden rounded-full bg-white/10"
@@ -153,7 +156,6 @@ export const OutlookSection: React.FC<OutlookSectionProps> = ({
         })}
       </motion.ul>
 
-      <p className="px-1 text-[10px] leading-relaxed text-slate-500">{SUPPORT_FOOTNOTE}</p>
     </section>
   );
 };

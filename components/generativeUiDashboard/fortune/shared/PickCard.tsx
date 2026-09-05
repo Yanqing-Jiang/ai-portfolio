@@ -6,6 +6,7 @@ import { motion } from 'framer-motion';
 import type { OccasionPick } from '../../lib/fortuneTypes';
 import { OBS_QUIET_CARD, OBSERVATORY_SERIF } from '../designTokens';
 import { staggerItem, pickVariants } from '../animations';
+import { formatDateOnly } from './dateOnly';
 
 interface PickCardProps {
   pick: OccasionPick;
@@ -22,10 +23,11 @@ export const PickCard: React.FC<PickCardProps> = ({
   onSelect,
   isReplay = false,
 }) => {
-  const dateObj = new Date(`${pick.date}T12:00:00`);
-  const formattedDate = Number.isFinite(dateObj.getTime())
-    ? dateObj.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
-    : 'Date pending';
+  const formattedDate = formatDateOnly(pick.date, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+  });
   const pillar = `${pick.dayPillar?.stem || '—'}${pick.dayPillar?.branch ? pick.dayPillar.branch : ''}`;
 
   return (

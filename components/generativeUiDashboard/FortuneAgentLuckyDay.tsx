@@ -1,14 +1,13 @@
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
+import { motion } from 'framer-motion';
 import {
     ProfileStep,
     ConfirmStep,
     WindowStep,
     summarizeWindow as summarizeWindowShared,
-    firstOfMonthISO as firstOfMonthISOShared,
-    lastOfMonthISO as lastOfMonthISOShared,
+    normalizeWindowBoundary,
     EMPTY_INTAKE_PROFILE,
     isProfileComplete,
     formatProfileSummary as formatProfileSummaryShared,
@@ -102,23 +101,12 @@ export interface FortuneAgentLuckyDayProps {
         profile: Profile;
         windowStart: string;
         windowEnd: string;
-        partner?: Profile;
     }) => void;
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function firstOfMonthISO(year: number, month: number): string {
-    return firstOfMonthISOShared(year, month);
-}
-
-function lastOfMonthISO(year: number, month: number): string {
-    return lastOfMonthISOShared(year, month);
-}
-
-
 
 function summarizeWindow(startKey: string | null, endKey: string | null): string {
     return summarizeWindowShared(startKey, endKey);
@@ -221,7 +209,7 @@ function SectionShell({
     );
 }
 
-// Profile editor used by Section 2 and Section 4 (partner)
+// Profile editor used by the profile section.
 interface ProfileEditorProps {
     value: Profile;
     onChange: (p: Profile) => void;
@@ -245,7 +233,7 @@ function ProfileEditor({ value, onChange, accent = '212, 175, 55' }: ProfileEdit
 const EMPTY_PROFILE: Profile = { ...EMPTY_INTAKE_PROFILE };
 
 export function FortuneAgentLuckyDay({ onBack, onComplete }: FortuneAgentLuckyDayProps) {
-    // Section index: 1..5. `activeStep` is the section currently being edited.
+    // Section index: 1..4. `activeStep` is the section currently being edited.
     // `maxStep` is the furthest section ever reached (controls what's rendered).
     const [activeStep, setActiveStep] = useState(1);
     const [maxStep, setMaxStep] = useState(1);
@@ -260,13 +248,8 @@ export function FortuneAgentLuckyDay({ onBack, onComplete }: FortuneAgentLuckyDa
     const [windowStart, setWindowStart] = useState<string | null>(null);
     const [windowEnd, setWindowEnd] = useState<string | null>(null);
 
-    // Section 4
-    const [includePartner, setIncludePartner] = useState<null | boolean>(null);
-    const [partner, setPartner] = useState<Profile>(EMPTY_PROFILE);
-
     // Refs for smooth scroll
     const sectionRefs = [
-        useRef<HTMLDivElement>(null!),
         useRef<HTMLDivElement>(null!),
         useRef<HTMLDivElement>(null!),
         useRef<HTMLDivElement>(null!),
@@ -325,33 +308,25 @@ export function FortuneAgentLuckyDay({ onBack, onComplete }: FortuneAgentLuckyDa
     // Section 3 completeness
     const windowComplete = Boolean(windowStart);
 
-    // Section 4 completeness
-    const partnerComplete =
-        includePartner === false ||
-        (includePartner === true && isProfileComplete(partner));
-
     const handleSubmit = () => {
-        if (!occasion || !profileComplete || !windowComplete || !partnerComplete) return;
+        if (!occasion || !profileComplete || !windowComplete) return;
         if (!onComplete) return;
         const effectiveEndKey = windowEnd ?? windowStart!;
-        const [sy, sm] = windowStart!.split('-').map(Number);
-        const [ey, em] = effectiveEndKey.split('-').map(Number);
         onComplete({
             occasion,
             profile,
-            windowStart: firstOfMonthISO(sy, sm),
-            windowEnd: lastOfMonthISO(ey, em),
-            partner: includePartner ? partner : undefined,
+            windowStart: normalizeWindowBoundary(windowStart!, 'start'),
+            windowEnd: normalizeWindowBoundary(effectiveEndKey, 'end'),
         });
     };
 
     const canSubmit =
-        Boolean(occasion) && profileComplete && windowComplete && partnerComplete;
+        Boolean(occasion) && profileComplete && windowComplete;
 
     // Progress dots
     const ProgressDots = () => (
         <div className="flex items-center gap-1.5">
-            {[1, 2, 3, 4, 5].map((n) => (
+            {[1, 2, 3, 4].map((n) => (
                 <span
                     key={n}
                     className="h-1.5 rounded-full transition-all"
@@ -566,150 +541,15 @@ export function FortuneAgentLuckyDay({ onBack, onComplete }: FortuneAgentLuckyDa
                     </SectionShell>
                 )}
 
-                {/* -------- Section 4: Partner (optional) -------- */}
+                {/* -------- Section 4: Confirm -------- */}
                 {maxStep >= 4 && (
                     <SectionShell
                         index={4}
-                        title="Partner / Co-signer"
-                        subtitle="Optional — a second person tied to this date"
-                        isActive={activeStep === 4}
-                        isCompleted={maxStep > 4 && partnerComplete}
-                        summary={
-                            includePartner === false
-                                ? 'No partner'
-                                : includePartner
-                                ? formatProfileSummary(partner)
-                                : undefined
-                        }
-                        onEdit={() => setActiveStep(4)}
-                        innerRef={sectionRefs[3]}
-                    >
-                        <AnimatePresence mode="wait">
-                            {includePartner === null && (
-                                <motion.div
-                                    key="choose"
-                                    initial={{ opacity: 0 }}
-                                    animate={{ opacity: 1 }}
-                                    exit={{ opacity: 0 }}
-                                >
-                                    <p className="mb-3 text-sm text-slate-300">
-                                        Is there a second person whose chart should
-                                        harmonize with this date? (e.g., spouse for a
-                                        wedding, co-founder for a business opening)
-                                    </p>
-                                    <div className="grid grid-cols-2 gap-2">
-                                        <button
-                                            onClick={() => setIncludePartner(true)}
-                                            className="min-h-[48px] rounded-xl px-3 py-2 text-sm font-medium text-white"
-                                            style={{
-                                                background: `linear-gradient(135deg, rgba(${activeAccent}, 1), rgba(${activeAccent}, 0.7))`,
-                                            }}
-                                        >
-                                            Yes, add them
-                                        </button>
-                                        <button
-                                            onClick={() => {
-                                                setIncludePartner(false);
-                                                setTimeout(() => advanceTo(5), 120);
-                                            }}
-                                            className="min-h-[48px] rounded-xl px-3 py-2 text-sm text-slate-200"
-                                            style={{
-                                                background: 'rgba(148, 163, 184, 0.08)',
-                                                border: '1px solid rgba(148, 163, 184, 0.2)',
-                                            }}
-                                        >
-                                            Skip
-                                        </button>
-                                    </div>
-                                </motion.div>
-                            )}
-                            {includePartner === true && (
-                                <motion.div
-                                    key="editor"
-                                    initial={{ opacity: 0, y: 8 }}
-                                    animate={{ opacity: 1, y: 0 }}
-                                >
-                                    <ProfileEditor
-                                        value={partner}
-                                        onChange={setPartner}
-                                        accent={activeAccent}
-                                    />
-                                    <div className="mt-4 flex gap-2">
-                                        <button
-                                            onClick={() => {
-                                                setIncludePartner(false);
-                                                setPartner(EMPTY_PROFILE);
-                                                setTimeout(() => advanceTo(5), 120);
-                                            }}
-                                            className="min-h-[48px] flex-1 rounded-xl px-3 py-2 text-sm text-slate-300"
-                                            style={{
-                                                background: 'rgba(148, 163, 184, 0.06)',
-                                                border: '1px solid rgba(148, 163, 184, 0.18)',
-                                            }}
-                                        >
-                                            Actually, skip
-                                        </button>
-                                        <button
-                                            disabled={!partnerComplete}
-                                            onClick={() => advanceTo(5)}
-                                            className="min-h-[48px] flex-1 rounded-xl px-3 py-2 text-sm font-semibold"
-                                            style={{
-                                                background: partnerComplete
-                                                    ? `linear-gradient(135deg, rgba(${activeAccent}, 1), rgba(${activeAccent}, 0.75))`
-                                                    : 'rgba(148, 163, 184, 0.1)',
-                                                color: partnerComplete ? '#fff' : '#64748b',
-                                            }}
-                                        >
-                                            Continue →
-                                        </button>
-                                    </div>
-                                </motion.div>
-                            )}
-                            {includePartner === false && activeStep === 4 && (
-                                <motion.div
-                                    key="skipped"
-                                    initial={{ opacity: 0 }}
-                                    animate={{ opacity: 1 }}
-                                >
-                                    <p className="mb-3 text-sm text-slate-300">
-                                        Skipped — solo reading.
-                                    </p>
-                                    <div className="flex gap-2">
-                                        <button
-                                            onClick={() => setIncludePartner(null)}
-                                            className="min-h-[48px] flex-1 rounded-xl px-3 py-2 text-sm text-slate-300"
-                                            style={{
-                                                background: 'rgba(148, 163, 184, 0.06)',
-                                                border: '1px solid rgba(148, 163, 184, 0.18)',
-                                            }}
-                                        >
-                                            Add a partner
-                                        </button>
-                                        <button
-                                            onClick={() => advanceTo(5)}
-                                            className="min-h-[48px] flex-1 rounded-xl px-3 py-2 text-sm font-semibold text-white"
-                                            style={{
-                                                background: `linear-gradient(135deg, rgba(${activeAccent}, 1), rgba(${activeAccent}, 0.75))`,
-                                            }}
-                                        >
-                                            Continue →
-                                        </button>
-                                    </div>
-                                </motion.div>
-                            )}
-                        </AnimatePresence>
-                    </SectionShell>
-                )}
-
-                {/* -------- Section 5: Confirm -------- */}
-                {maxStep >= 5 && (
-                    <SectionShell
-                        index={5}
                         title="Confirm"
                         subtitle="Double-check and we'll scan the calendar"
-                        isActive={activeStep === 5}
+                        isActive={activeStep === 4}
                         isCompleted={false}
-                        innerRef={sectionRefs[4]}
+                        innerRef={sectionRefs[3]}
                     >
                         <ConfirmStep
                             accentRgb={activeAccent}
@@ -717,9 +557,6 @@ export function FortuneAgentLuckyDay({ onBack, onComplete }: FortuneAgentLuckyDa
                                 { label: 'Occasion', value: currentOccasion?.label || '—' },
                                 { label: 'You', value: formatProfileSummary(profile) },
                                 { label: 'Window', value: summarizeWindow(windowStart, windowEnd) },
-                                ...(includePartner
-                                    ? [{ label: 'Partner', value: formatProfileSummary(partner) }]
-                                    : []),
                             ]}
                             ctaLabel="Find my lucky days →"
                             onConfirm={handleSubmit}

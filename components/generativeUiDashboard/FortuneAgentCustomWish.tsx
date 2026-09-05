@@ -219,7 +219,7 @@ export function FortuneAgentCustomWish({ onBack, onComplete }: Props) {
                     <textarea
                       value={question}
                       onChange={(e) => setQuestion(e.target.value)}
-                      placeholder="Ask the old heaven anything…"
+                      placeholder="Ask what your chart shows…"
                       rows={6}
                       className="w-full bg-[#0f0d1a] border border-white/10 rounded-2xl px-5 py-6 text-lg leading-relaxed text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-indigo-500/30 transition-all resize-none shadow-2xl"
                       style={{ 
@@ -354,10 +354,9 @@ export function FortuneAgentCustomWish({ onBack, onComplete }: Props) {
                     </h3>
                     
                     <div className="mt-8 pt-8 border-t border-white/5 flex flex-col items-center gap-1">
-                       <span className="text-[10px] uppercase tracking-[0.2em] text-slate-600">Offered by</span>
+                       <span className="text-[10px] uppercase tracking-[0.2em] text-slate-600">Asked by</span>
                        <span className="text-xs text-slate-400">
-                         {gender === 'male' ? 'A Son' : gender === 'female' ? 'A Daughter' : 'A Soul'} 
-                         {' '}born on {birthDate}
+                         Someone born on {birthDate}{timeUnknown ? ', birth time unknown' : ''}
                        </span>
                     </div>
                   </div>
@@ -373,7 +372,7 @@ export function FortuneAgentCustomWish({ onBack, onComplete }: Props) {
                     }}
                   >
                     <span className={`relative z-10 flex items-center justify-center gap-3 text-black font-bold uppercase tracking-[0.2em] text-sm transition-opacity ${isSubmitting ? 'opacity-0' : 'opacity-100'}`}>
-                      Ask the oracle →
+                      Read my outlook →
                     </span>
                     
                     {/* Ripple / Loading State */}
@@ -385,13 +384,13 @@ export function FortuneAgentCustomWish({ onBack, onComplete }: Props) {
                           transition={{ duration: 0.8, ease: "easeOut" }}
                           className="w-20 h-20 rounded-full bg-white/20"
                         />
-                        <span className="absolute text-[10px] font-bold text-white tracking-[0.3em] uppercase">Consulting...</span>
+                        <span className="absolute text-[10px] font-bold text-white tracking-[0.3em] uppercase">Reading your chart...</span>
                       </div>
                     )}
                   </button>
                   
                   <p className="mt-6 text-[10px] text-slate-500 uppercase tracking-widest leading-relaxed max-w-[200px]">
-                    The answer is already written; we simply unfold it.
+                    A chart shows tendencies, not a verdict on your life. We read it carefully and show our work.
                   </p>
                 </motion.div>
               )}

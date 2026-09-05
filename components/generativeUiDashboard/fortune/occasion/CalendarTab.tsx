@@ -10,6 +10,7 @@ import { useFortuneStore } from '../../stores/fortuneStore';
 import { CalendarGrid } from '../shared/CalendarGrid';
 import { DayDetailSheet } from '../shared/DayDetailSheet';
 import { FLOW_ACCENTS, GLASS } from '../designTokens';
+import { formatDateOnly } from '../shared/dateOnly';
 import { fadeInUp, pickVariants } from '../animations';
 import type {
   OccasionDay,
@@ -88,7 +89,6 @@ export const CalendarTab: React.FC<{ isReplay?: boolean }> = ({ isReplay = false
           </span>
           <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
             {topPicks.slice(0, 3).map((pick, idx) => {
-              const date = new Date(pick.date);
               const dayData = days.find((d) => d.date === pick.date) || {
                 date: pick.date,
                 score: pick.score,
@@ -103,7 +103,7 @@ export const CalendarTab: React.FC<{ isReplay?: boolean }> = ({ isReplay = false
                   <div className="flex flex-col items-start">
                     <span className="text-[10px] text-amber-500 font-bold">#{idx + 1}</span>
                     <span className="text-xs text-white font-medium">
-                      {date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                      {formatDateOnly(pick.date, { month: 'short', day: 'numeric' })}
                     </span>
                   </div>
                   <div className="h-6 w-px bg-white/10" />

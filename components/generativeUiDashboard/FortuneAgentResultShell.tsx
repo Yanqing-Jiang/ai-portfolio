@@ -2,7 +2,7 @@
  * FortuneAgentResultShell — Observatory chrome for all 4 result pages.
  *
  * Phase 5 visual direction (mock A + B ledger rail):
- * - Top status bar: fortune://{fn}/{id} · model · LIVE/REPLAY/GUARDRAIL
+ * - Top status bar: reader-facing source line · LIVE/SAVED READING/GUARDRAIL
  * - Kicker (CJK · label) + serif tldr headline + context sub-line
  * - KPI band (4 cards)
  * - Pill tabs (mono uppercase)
@@ -43,9 +43,9 @@ interface FortuneAgentResultShellProps {
   kicker: string;
   headline: string;
   contextLine?: string;
+  /** Reader-facing provenance line; technical ids stay inside Glass Box. */
+  readerLine?: string;
   kpis: ResultKpi[];
-  statusPath: string;
-  modelId?: string;
   runState: ShellRunState;
   tabs: FortuneTab[];
   activeTabId: string;
@@ -85,8 +85,8 @@ function StateChip({
   }
   if (runState === 'replay') {
     return (
-      <span className="inline-flex items-center gap-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.2em] text-[#8a8f98]">
-        Replay
+      <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-[#b9c4bd]">
+        Saved reading
       </span>
     );
   }
@@ -114,9 +114,8 @@ export const FortuneAgentResultShell: React.FC<FortuneAgentResultShellProps> = (
   kicker,
   headline,
   contextLine,
+  readerLine,
   kpis,
-  statusPath,
-  modelId,
   runState,
   tabs,
   activeTabId,
@@ -174,14 +173,11 @@ export const FortuneAgentResultShell: React.FC<FortuneAgentResultShellProps> = (
         }}
       >
         <div className="mx-auto flex w-full max-w-[1100px] items-center justify-between gap-3 px-4 py-2.5">
-          <div className="hidden min-w-0 items-center gap-2 sm:flex">
+          <div className="min-w-0 flex-1 items-center gap-2 sm:flex">
             <span
-              className="truncate font-mono text-[10px] uppercase tracking-[0.18em] text-[#5fbf8f]/90"
-              style={{ fontFamily: OBSERVATORY_MONO }}
-              title={statusPath}
+              className="truncate text-[11px] font-medium text-[#9fb3a8] sm:text-[12px]"
             >
-              {statusPath}
-              {modelId ? ` · ${modelId}` : ''}
+              {readerLine || 'Read from your chart'}
             </span>
           </div>
           <div className="flex flex-1 items-center justify-end gap-3 sm:flex-none">

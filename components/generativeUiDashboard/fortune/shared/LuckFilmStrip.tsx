@@ -31,7 +31,14 @@ export const LuckFilmStrip: React.FC<LuckFilmStripProps> = ({
   useEffect(() => {
     if (activeIdx >= 0 && scrollRef.current) {
       const child = scrollRef.current.children[activeIdx] as HTMLElement | undefined;
-      child?.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+      if (child) {
+        // Center within the film strip only. scrollIntoView also moved the
+        // page vertically and hid the reading headline on mobile.
+        scrollRef.current.scrollTo({
+          left: child.offsetLeft - (scrollRef.current.clientWidth - child.clientWidth) / 2,
+          behavior: 'smooth',
+        });
+      }
     }
   }, [activeIdx]);
 

@@ -14,7 +14,7 @@
  *   Output: YYYY-MM-DD string (same contract as <input type="date">)
  */
 
-import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo, type KeyboardEvent } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 // ---------------------------------------------------------------------------
@@ -69,6 +69,15 @@ function getGanZhiYear(year: number): string {
 const ITEM_HEIGHT = 48; // px — must match CSS
 const VISIBLE_ITEMS = 5; // show 5 items, center one is selected
 
+function scrollContainerTo(container: HTMLDivElement, top: number): void {
+    if (typeof container.scrollTo === 'function') {
+        container.scrollTo({ top, behavior: 'smooth' });
+    } else {
+        // jsdom and a few embedded webviews expose scrollTop without scrollTo.
+        container.scrollTop = top;
+    }
+}
+
 interface ScrollColumnProps {
     columnId: 'year' | 'month' | 'day';
     items: { value: number; label: string; sublabel?: string }[];
@@ -114,10 +123,7 @@ function ScrollColumn({ columnId, items, selected, onSelect, width = '33%' }: Sc
             const clampedIndex = Math.max(0, Math.min(nearestIndex, items.length - 1));
 
             // Smooth snap
-            container.scrollTo({
-                top: clampedIndex * ITEM_HEIGHT,
-                behavior: 'smooth',
-            });
+            scrollContainerTo(container, clampedIndex * ITEM_HEIGHT);
 
             if (items[clampedIndex] && items[clampedIndex].value !== selected) {
                 onSelect(items[clampedIndex].value);
@@ -133,17 +139,29 @@ function ScrollColumn({ columnId, items, selected, onSelect, width = '33%' }: Sc
     }, []);
 
     // Tap to select
-    const handleItemClick = useCallback(
+    const selectItem = useCallback(
         (value: number, index: number) => {
             const container = containerRef.current;
             if (!container) return;
-            container.scrollTo({
-                top: index * ITEM_HEIGHT,
-                behavior: 'smooth',
-            });
+            scrollContainerTo(container, index * ITEM_HEIGHT);
             onSelect(value);
         },
         [onSelect],
+    );
+
+    const handleItemKeyDown = useCallback(
+        (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
+            let nextIndex: number | null = null;
+            if (event.key === 'ArrowDown') nextIndex = Math.min(index + 1, items.length - 1);
+            if (event.key === 'ArrowUp') nextIndex = Math.max(index - 1, 0);
+            if (event.key === 'Home') nextIndex = 0;
+            if (event.key === 'End') nextIndex = items.length - 1;
+            if (nextIndex === null || nextIndex === index || !items[nextIndex]) return;
+
+            event.preventDefault();
+            selectItem(items[nextIndex].value, nextIndex);
+        },
+        [items, selectItem],
     );
 
     // Padding items so the first/last can reach center
@@ -183,6 +201,8 @@ function ScrollColumn({ columnId, items, selected, onSelect, width = '33%' }: Sc
             <div
                 ref={containerRef}
                 className="h-full overflow-y-auto scrollbar-hide"
+                role="group"
+                aria-label={`${columnId} of birth`}
                 onScroll={handleScroll}
                 style={{
                     scrollSnapType: 'y mandatory',
@@ -199,10 +219,14 @@ function ScrollColumn({ columnId, items, selected, onSelect, width = '33%' }: Sc
                 {items.map((item, index) => {
                     const isSelected = item.value === selected;
                     return (
-                        <div
+                        <button
+                            type="button"
                             key={`${columnId}-${item.value}-${index}`}
-                            onClick={() => handleItemClick(item.value, index)}
-                            className="flex cursor-pointer items-center justify-center select-none"
+                            onClick={() => selectItem(item.value, index)}
+                            onKeyDown={(event) => handleItemKeyDown(event, index)}
+                            aria-label={`${item.label}${item.sublabel ? `, ${item.sublabel}` : ''}`}
+                            aria-pressed={isSelected}
+                            className="flex w-full cursor-pointer items-center justify-center select-none border-0 p-0"
                             style={{
                                 height: ITEM_HEIGHT,
                                 scrollSnapAlign: 'start',
@@ -210,6 +234,7 @@ function ScrollColumn({ columnId, items, selected, onSelect, width = '33%' }: Sc
                                 color: isSelected ? '#eab308' : '#94a3b8',
                                 opacity: isSelected ? 1 : 0.5,
                                 fontWeight: isSelected ? 600 : 400,
+                                background: 'transparent',
                             }}
                         >
                             <div className="flex flex-col items-center leading-tight">
@@ -234,7 +259,7 @@ function ScrollColumn({ columnId, items, selected, onSelect, width = '33%' }: Sc
                                     </span>
                                 )}
                             </div>
-                        </div>
+                        </button>
                     );
                 })}
 

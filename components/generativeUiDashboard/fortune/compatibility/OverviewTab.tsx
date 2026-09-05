@@ -1,19 +1,23 @@
 import React, { useMemo } from 'react';
-import { motion } from 'framer-motion';
+import { motion, useReducedMotion } from 'framer-motion';
 import { useShallow } from 'zustand/react/shallow';
 import { ArrowDown, ShieldCheck, AlertCircle } from 'lucide-react';
 import { useFortuneStore } from '../../stores/fortuneStore';
-import { DualRingGauge, StreamingText, GuardrailBanner } from '../shared';
+import { DualRingGauge, StreamingText, GuardrailBanner, ReadingBridge } from '../shared';
 import { OutlookSection } from '../shared/OutlookSection';
 import { buildOutlook } from '../shared/outlook';
-import { FLOW_ACCENTS, OBSERVATORY_SERIF, OBSERVATORY_MONO, observatoryAccent } from '../designTokens';
+import { FLOW_ACCENTS, observatoryAccent } from '../designTokens';
 import { tabContentVariants } from '../animations';
 
 const ACCENT = FLOW_ACCENTS.compatibility;
 
-export const OverviewTab: React.FC<{ isReplay?: boolean }> = ({ isReplay = false }) => {
+export const OverviewTab: React.FC<{
+  isReplay?: boolean;
+  onTabChange?: (id: string) => void;
+}> = ({ isReplay = false, onTabChange }) => {
   const { dataModel } = useFortuneStore(useShallow((s) => ({ dataModel: s.dataModel })));
 
+  const reduceMotion = useReducedMotion();
   const compat = dataModel?.compatibility;
   const overview = compat?.overview;
   const guardrail = dataModel?.guardrail;
@@ -42,26 +46,13 @@ export const OverviewTab: React.FC<{ isReplay?: boolean }> = ({ isReplay = false
           background: observatoryAccent(ACCENT.primary).heroWash,
         }}
       >
-        <div
-          className="text-[40px] font-bold leading-none"
-          style={{ fontFamily: OBSERVATORY_SERIF, color: ACCENT.primary }}
-        >
-          {Math.round(overview.score)}
-          <small
-            className="mt-1 block text-[8px] font-semibold uppercase tracking-[0.25em] text-[#8a8f98]"
-            style={{ fontFamily: OBSERVATORY_MONO }}
-          >
-            Harmony
-          </small>
-        </div>
-
-        <div className="relative mx-auto w-[55vw] max-w-[220px] aspect-square">
+        <div className="relative mx-auto w-40">
           <DualRingGauge
             score={overview.score}
             personAName={compat?.personA?.name || 'Person A'}
             personBName={compat?.personB?.name || 'Person B'}
             accentColor={ACCENT.primary}
-            size={200}
+            size={160}
             isReplay={isReplay}
           />
         </div>
@@ -85,7 +76,7 @@ export const OverviewTab: React.FC<{ isReplay?: boolean }> = ({ isReplay = false
         />
 
         <motion.div
-          animate={{ y: [0, 5, 0] }}
+          animate={reduceMotion ? undefined : { y: [0, 5, 0] }}
           transition={{ repeat: Infinity, duration: 2 }}
           className="text-slate-500"
         >
@@ -128,6 +119,7 @@ export const OverviewTab: React.FC<{ isReplay?: boolean }> = ({ isReplay = false
       </div>
 
       <OutlookSection entries={outlook} accentColor={ACCENT.primary} isReplay={isReplay} />
+      <ReadingBridge functionId="compatibility" dataModel={dataModel} onTabChange={onTabChange} />
 
       {guardrail && <GuardrailBanner guardrail={guardrail} />}
     </motion.div>

@@ -5,7 +5,7 @@
  * Replay: GET /api/fortune/{id}/trace when live events are empty.
  *
  * variant="inline" (default): collapsible drawer for mobile / Phase-4 placement.
- * variant="rail": always-open sticky side ledger for ≥lg screens.
+ * variant="rail": same collapsible detail in the desktop side rail.
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -117,13 +117,18 @@ function isActiveStatus(status: string | null | undefined): boolean {
 
 interface GlassBoxPanelProps {
   accent?: string;
-  /** inline = collapsible (mobile); rail = always open desktop ledger */
+  /** inline = page drawer; rail = desktop side-rail treatment */
   variant?: 'inline' | 'rail';
+  /** Technical provenance stays available inside the expanded detail. */
+  statusPath?: string;
+  modelId?: string;
 }
 
 export const GlassBoxPanel: React.FC<GlassBoxPanelProps> = ({
   accent = '#39d98a',
   variant = 'inline',
+  statusPath,
+  modelId,
 }) => {
   const reduceMotion = useReducedMotion();
   const { fortuneId, status, askLoading, traceEvents, hydrateTraceProjections } = useFortuneStore(
@@ -137,7 +142,9 @@ export const GlassBoxPanel: React.FC<GlassBoxPanelProps> = ({
   );
 
   const isRail = variant === 'rail';
-  const [open, setOpen] = useState(isRail);
+  // Keep the reader's first fold focused on the result. The trace remains
+  // available from this header, including on the desktop rail.
+  const [open, setOpen] = useState(false);
   const [openRows, setOpenRows] = useState<Set<string>>(() => new Set());
   const [loadingReplay, setLoadingReplay] = useState(false);
   const traceFetchInFlight = useRef<{ fortuneId: string; request: Promise<void> } | null>(null);
@@ -146,10 +153,6 @@ export const GlassBoxPanel: React.FC<GlassBoxPanelProps> = ({
     blocked: false,
   });
   const previousAskLoading = useRef({ fortuneId, askLoading });
-
-  useEffect(() => {
-    if (isRail) setOpen(true);
-  }, [isRail]);
 
   useEffect(() => {
     setOpenRows(new Set());
@@ -253,13 +256,16 @@ export const GlassBoxPanel: React.FC<GlassBoxPanelProps> = ({
   // Span count is unknown until the closed drawer is opened and hydrated.
   const traceUnloaded = !open && projections.length === 0;
   const baseHeaderText = loadingReplay
-    ? 'EXECUTION TRACE · LOADING…'
+    ? 'How this reading was made · loading…'
     : traceUnloaded
-      ? 'EXECUTION TRACE'
-      : `EXECUTION TRACE · ${projections.length} SPAN${projections.length === 1 ? '' : 'S'}${
+      ? 'How this reading was made'
+      : projections.length === 0
+        ? 'How this reading was made · no steps yet'
+        : `How this reading was made · ${projections.length} step${projections.length === 1 ? '' : 's'}${
           totalMs > 0 ? ` · ${formatDuration(totalMs)}` : ''
         }`;
-  const headerText = askLoading ? `${baseHeaderText} · ASK RUNNING` : baseHeaderText;
+  const headerText = askLoading ? `${baseHeaderText} · follow-up in progress` : baseHeaderText;
+  const technicalLine = [statusPath, modelId].filter(Boolean).join(' · ');
 
   const rows = (
     <div
@@ -365,34 +371,11 @@ export const GlassBoxPanel: React.FC<GlassBoxPanelProps> = ({
     </div>
   );
 
-  if (isRail) {
-    return (
-      <div className={`${OBS_LEDGER} overflow-hidden`} style={{ borderColor: '#1c2420' }}>
-        <div className={OBS_LEDGER_HEADER} style={{ color: accent, fontFamily: OBSERVATORY_MONO }}>
-          <span className="inline-flex items-center gap-2">
-            {isLive && (
-              <motion.span
-                aria-hidden
-                className="inline-block h-1.5 w-1.5 rounded-full"
-                style={{ background: accent }}
-                animate={reduceMotion ? undefined : { opacity: [1, 0.3, 1] }}
-                transition={
-                  reduceMotion
-                    ? undefined
-                    : { duration: 1.4, repeat: Infinity, ease: 'easeInOut' }
-                }
-              />
-            )}
-            {headerText}
-          </span>
-        </div>
-        {rows}
-      </div>
-    );
-  }
-
   return (
-    <div className={`${OBS_LEDGER} overflow-hidden`} style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
+    <div
+      className={`${OBS_LEDGER} overflow-hidden`}
+      style={{ borderColor: isRail ? '#1c2420' : 'rgba(255,255,255,0.06)' }}
+    >
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -432,6 +415,15 @@ export const GlassBoxPanel: React.FC<GlassBoxPanelProps> = ({
             transition={{ duration: reduceMotion ? 0 : 0.2 }}
             className="overflow-hidden border-t border-white/[0.05]"
           >
+            {technicalLine && (
+              <div
+                className="border-b border-white/[0.04] px-4 py-2 text-[10px] leading-relaxed text-[#5c6963]"
+                style={{ fontFamily: OBSERVATORY_MONO }}
+                title={technicalLine}
+              >
+                {technicalLine}
+              </div>
+            )}
             {rows}
           </motion.div>
         )}

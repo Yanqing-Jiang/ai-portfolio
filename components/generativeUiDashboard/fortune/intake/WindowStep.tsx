@@ -3,6 +3,7 @@
  * Used by Occasion / Lucky Day intake; other wizards keep their own horizon UI.
  */
 import React, { useMemo } from 'react';
+import { parseDateOnly } from '../shared/dateOnly';
 
 const MONTH_NAMES_SHORT = [
   'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
@@ -36,13 +37,104 @@ export function lastOfMonthISO(year: number, month: number): string {
   return `${year}-${String(month).padStart(2, '0')}-${String(last).padStart(2, '0')}`;
 }
 
-export function summarizeWindow(startKey: string | null, endKey: string | null): string {
+export function normalizeWindowBoundary(
+  value: string,
+  boundary: 'start' | 'end',
+  now = new Date(),
+): string {
+  const [year, month] = value.split('-').map(Number);
+  if (
+    boundary === 'start' &&
+    value.length === 7 &&
+    year === now.getFullYear() &&
+    month === now.getMonth() + 1
+  ) {
+    return toDateOnlyISO(new Date(now.getFullYear(), now.getMonth(), now.getDate()));
+  }
+  if (parseDateOnly(value)) return value;
+  if (!year || !month) return value;
+  return boundary === 'start'
+    ? firstOfMonthISO(year, month)
+    : lastOfMonthISO(year, month);
+}
+
+function toDateOnlyISO(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
+    date.getDate(),
+  ).padStart(2, '0')}`;
+}
+
+function addCalendarDays(date: Date, days: number): Date {
+  const result = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  result.setDate(result.getDate() + days);
+  return result;
+}
+
+export function quickWindowRange(
+  id: 'next30' | 'summer' | 'eoy',
+  now = new Date(),
+): { start: string; end: string } {
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+  if (id === 'next30') {
+    return {
+      start: toDateOnlyISO(today),
+      end: toDateOnlyISO(addCalendarDays(today, 29)),
+    };
+  }
+
+  if (id === 'summer') {
+    // Once June–August has passed, use the next occurrence instead of sending
+    // a user into an already elapsed window.
+    const summerYear = today.getMonth() > 7 ? today.getFullYear() + 1 : today.getFullYear();
+    const summerStart = new Date(summerYear, 5, 1);
+    const summerEnd = new Date(summerYear, 8, 0);
+    return {
+      start: toDateOnlyISO(summerStart > today ? summerStart : today),
+      end: toDateOnlyISO(summerEnd),
+    };
+  }
+
+  return {
+    start: toDateOnlyISO(today),
+    end: toDateOnlyISO(new Date(today.getFullYear(), 11, 31)),
+  };
+}
+
+export function summerChipLabel(now = new Date()): 'This summer' | 'Next summer' {
+  return now.getMonth() > 7 ? 'Next summer' : 'This summer';
+}
+
+function monthKey(value: string): string {
+  return value.slice(0, 7);
+}
+
+export function summarizeWindow(
+  startKey: string | null,
+  endKey: string | null,
+  now = new Date(),
+): string {
   if (!startKey) return 'Pick a month or range';
-  const [sy, sm] = startKey.split('-').map(Number);
-  const startLabel = `${MONTH_NAMES_SHORT[sm - 1]} ${sy}`;
+  const effectiveStartKey = normalizeWindowBoundary(startKey, 'start', now);
+  const effectiveEndKey = endKey ? normalizeWindowBoundary(endKey, 'end', now) : null;
+  const startDate = parseDateOnly(effectiveStartKey);
+  const endDate = effectiveEndKey ? parseDateOnly(effectiveEndKey) : null;
+  const [sy, sm] = effectiveStartKey.split('-').map(Number);
+  const startLabel = startDate && startDate.getDate() !== 1
+    ? startDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    : `${MONTH_NAMES_SHORT[sm - 1]} ${sy}`;
   if (!endKey || endKey === startKey) return startLabel;
-  const [ey, em] = endKey.split('-').map(Number);
-  return `${startLabel} → ${MONTH_NAMES_SHORT[em - 1]} ${ey}`;
+  const [ey, em] = effectiveEndKey!.split('-').map(Number);
+  const endIsMonthBoundary = endDate
+    && endDate.getDate() === new Date(endDate.getFullYear(), endDate.getMonth() + 1, 0).getDate();
+  const endLabel = endDate && (!endIsMonthBoundary
+    || (startDate
+      && startDate.getDate() !== 1
+      && startDate.getFullYear() === endDate.getFullYear()
+      && startDate.getMonth() === endDate.getMonth()))
+    ? endDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    : `${MONTH_NAMES_SHORT[em - 1]} ${ey}`;
+  return `${startLabel} → ${endLabel}`;
 }
 
 export interface WindowStepProps {
@@ -67,13 +159,14 @@ export const WindowStep: React.FC<WindowStepProps> = ({
       onChange(key, null);
       return;
     }
+    const startMonth = monthKey(windowStart);
     if (windowStart && !windowEnd) {
-      if (monthKeyCompare(key, windowStart) < 0) {
+      if (monthKeyCompare(key, startMonth) < 0) {
         onChange(key, null);
-      } else if (key === windowStart) {
+      } else if (key === startMonth) {
         onChange(key, key);
       } else {
-        onChange(windowStart, key);
+        onChange(startMonth, key);
       }
       return;
     }
@@ -82,27 +175,18 @@ export const WindowStep: React.FC<WindowStepProps> = ({
 
   const isMonthInRange = (key: string): boolean => {
     if (!windowStart) return false;
-    if (!windowEnd) return key === windowStart;
+    const startMonth = monthKey(windowStart);
+    if (!windowEnd) return key === startMonth;
+    const endMonth = monthKey(windowEnd);
     return (
-      monthKeyCompare(key, windowStart) >= 0 &&
-      monthKeyCompare(key, windowEnd) <= 0
+      monthKeyCompare(key, startMonth) >= 0 &&
+      monthKeyCompare(key, endMonth) <= 0
     );
   };
 
   const applyQuickChip = (id: 'next30' | 'summer' | 'eoy') => {
-    const now = new Date();
-    const yr = now.getFullYear();
-    if (id === 'next30') {
-      const k = `${yr}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-      onChange(k, k);
-      return;
-    }
-    if (id === 'summer') {
-      onChange(`${yr}-06`, `${yr}-08`);
-      return;
-    }
-    const sm = String(now.getMonth() + 1).padStart(2, '0');
-    onChange(`${yr}-${sm}`, `${yr}-12`);
+    const range = quickWindowRange(id);
+    onChange(range.start, range.end);
   };
 
   return (
@@ -118,7 +202,7 @@ export const WindowStep: React.FC<WindowStepProps> = ({
         {(
           [
             { id: 'next30' as const, label: 'Next 30 days' },
-            { id: 'summer' as const, label: 'This summer' },
+            { id: 'summer' as const, label: summerChipLabel() },
             { id: 'eoy' as const, label: 'Before year-end' },
           ] as const
         ).map((chip) => (
@@ -148,7 +232,8 @@ export const WindowStep: React.FC<WindowStepProps> = ({
         <div className="flex gap-2">
           {monthStrip.map((m) => {
             const inRange = isMonthInRange(m.key);
-            const isAnchor = m.key === windowStart || m.key === windowEnd;
+            const isAnchor = m.key === (windowStart ? monthKey(windowStart) : null)
+              || m.key === (windowEnd ? monthKey(windowEnd) : null);
             return (
               <button
                 key={m.key}

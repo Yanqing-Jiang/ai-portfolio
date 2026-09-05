@@ -21,6 +21,31 @@ function findCurrentDecadeIndex(decades: LuckPillar[]) {
   ));
 }
 
+export function filterAnnualYearsForDecade(
+  activeDecade: LuckPillar | undefined,
+  allYears: AnnualPillar[],
+): AnnualPillar[] {
+  if (!activeDecade) return allYears;
+
+  const startYear = activeDecade.startYear ?? (
+    activeDecade.startAge > 1900 ? activeDecade.startAge : undefined
+  );
+  const endYear = activeDecade.endYear ?? (
+    activeDecade.endAge > 1900 ? activeDecade.endAge : undefined
+  );
+  if (typeof startYear !== 'number' || typeof endYear !== 'number') return [];
+
+  return allYears.filter((year) => year.year >= startYear && year.year <= endYear);
+}
+
+export function getDecadeScores(decades: LuckPillar[]): number[] {
+  return decades.flatMap((decade) => (
+    typeof decade.score === 'number' && Number.isFinite(decade.score)
+      ? [decade.score]
+      : []
+  ));
+}
+
 export const TimelineTab: React.FC<{ isReplay?: boolean }> = ({ isReplay = false }) => {
   const [showChinese, setShowChinese] = useState(false);
   const [selectedDecadeIdx, setSelectedDecadeIdx] = useState<number>(-1);
@@ -38,21 +63,13 @@ export const TimelineTab: React.FC<{ isReplay?: boolean }> = ({ isReplay = false
   const activeIdx = selectedDecadeIdx >= 0 ? selectedDecadeIdx : currentDecadeIdx;
   const activeDecade = decades[activeIdx];
 
-  // Filter years by decade. startAge/endAge are ages (not calendar years), so we
-  // can only filter when the values happen to be calendar years (> 1900). Otherwise
-  // fall back to showing all years for context.
+  // Filter years by decade. startAge/endAge are ages (not calendar years), so a
+  // decade without calendar bounds cannot truthfully claim any annual years.
   const filteredYears = useMemo(() => {
-    if (!activeDecade || allYears.length === 0) return allYears;
-    const startYear = activeDecade.startYear ?? (activeDecade.startAge > 1900 ? activeDecade.startAge : undefined);
-    const endYear = activeDecade.endYear ?? (activeDecade.endAge > 1900 ? activeDecade.endAge : undefined);
-    if (!startYear || !endYear) return allYears;
-    const matched = allYears.filter(
-      (y) => y.year >= startYear && y.year <= endYear,
-    );
-    return matched.length > 0 ? matched : allYears;
+    return filterAnnualYearsForDecade(activeDecade, allYears);
   }, [activeDecade, allYears]);
 
-  const sparkData = decades.map((d) => d.score ?? 50);
+  const sparkData = getDecadeScores(decades);
 
   return (
     <motion.div
@@ -132,7 +149,11 @@ export const TimelineTab: React.FC<{ isReplay?: boolean }> = ({ isReplay = false
           ) : (
             <div className="text-center py-12 rounded-2xl border border-dashed border-slate-800 bg-slate-900/20">
               <p className="text-xs text-slate-500">
-                {status === 'streaming' ? 'Calculating annual pillars...' : 'Select a decade to view yearly details'}
+                {status === 'streaming'
+                  ? 'Calculating annual pillars...'
+                  : activeDecade
+                    ? 'No annual pillars are available for this decade.'
+                    : 'Select a decade to view yearly details'}
               </p>
             </div>
           )}

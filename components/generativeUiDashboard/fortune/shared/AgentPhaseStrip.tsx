@@ -31,7 +31,7 @@ export const AgentPhaseStrip: React.FC<AgentPhaseStripProps> = ({ progress, isCo
           <div className="flex items-center gap-2">
             <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-500" />
             <span className="text-[11px] font-medium text-amber-100/80 uppercase tracking-wider">
-              Agent Orchestration
+              Reading your chart
             </span>
           </div>
           <span className="text-[10px] text-white/40 tabular-nums">

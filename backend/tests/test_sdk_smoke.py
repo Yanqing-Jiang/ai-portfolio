@@ -58,8 +58,8 @@ class _MockModel(Model):
 
 
 @pytest.mark.asyncio
-async def test_openai_agents_0182_sdk_surface_without_network() -> None:
-    assert agents.__version__ == "0.18.2"
+async def test_openai_agents_0220_sdk_surface_without_network() -> None:
+    assert agents.__version__ == "0.22.0"
 
     model = _MockModel()
     agent = Agent(name="sdk_smoke", instructions="Reply briefly.", model=model)
@@ -71,7 +71,7 @@ async def test_openai_agents_0182_sdk_surface_without_network() -> None:
         "fortune_sdk_smoke", engine=engine, create_tables=False,
     )
 
-    # 0.17.3+ public surface: exercise it against a mock model, without
+    # 0.22.0 public surface: exercise it against a mock model, without
     # enabling it in Fortune (SQLAlchemySession remains our sole spine).
     result = await runner.run(
         agent,

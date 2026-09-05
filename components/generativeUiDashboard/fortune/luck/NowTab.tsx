@@ -9,6 +9,7 @@ import {
   GuardrailBanner,
   SeasonalStrengthBar,
   LuckFilmStrip,
+  ReadingBridge,
 } from '../shared';
 import { OutlookSection } from '../shared/OutlookSection';
 import { buildOutlook } from '../shared/outlook';
@@ -30,7 +31,10 @@ function findCurrentDecadeIndex(decades: LuckPillar[]) {
   ));
 }
 
-export const NowTab: React.FC<{ isReplay?: boolean }> = ({ isReplay = false }) => {
+export const NowTab: React.FC<{
+  isReplay?: boolean;
+  onTabChange?: (id: string) => void;
+}> = ({ isReplay = false, onTabChange }) => {
   const { dataModel, status } = useFortuneStore(useShallow((s) => ({
     dataModel: s.dataModel,
     status: s.status,
@@ -97,6 +101,7 @@ export const NowTab: React.FC<{ isReplay?: boolean }> = ({ isReplay = false }) =
       )}
 
       <OutlookSection entries={outlook} accentColor={ACCENT.primary} isReplay={isReplay} />
+      <ReadingBridge functionId="cycle" dataModel={dataModel} onTabChange={onTabChange} />
 
       <div className="grid grid-cols-1 gap-4">
         {dayMaster && (

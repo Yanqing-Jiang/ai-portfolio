@@ -4,6 +4,7 @@ import { X } from 'lucide-react';
 import type { OccasionDay, Mechanism, Citation } from '../../lib/fortuneTypes';
 import { GLASS, scoreBg, scoreColor } from '../designTokens';
 import { MechanismCard } from './MechanismCard';
+import { formatDateOnly } from './dateOnly';
 
 interface DayDetailSheetProps {
   day: OccasionDay | null;
@@ -45,7 +46,7 @@ export const DayDetailSheet: React.FC<DayDetailSheetProps> = ({
             <div className="flex items-center justify-between mb-4">
               <div>
                 <div className="text-sm font-semibold text-white">
-                  {new Date(day.date).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}
+                  {formatDateOnly(day.date, { weekday: 'long', month: 'short', day: 'numeric' })}
                 </div>
                 <div className="flex items-center gap-2 mt-1">
                   {day.pillar && (

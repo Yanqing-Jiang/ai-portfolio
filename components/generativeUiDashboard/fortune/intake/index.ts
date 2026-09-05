@@ -14,5 +14,8 @@ export {
   summarizeWindow,
   firstOfMonthISO,
   lastOfMonthISO,
+  normalizeWindowBoundary,
+  quickWindowRange,
+  summerChipLabel,
   type WindowStepProps,
 } from './WindowStep';

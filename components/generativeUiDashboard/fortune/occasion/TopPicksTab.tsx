@@ -10,12 +10,16 @@ import { staggerContainer, pickVariants } from '../animations';
 import { HeroPickCard } from '../shared/HeroPickCard';
 import { ExpandablePickCard } from './ExpandablePickCard';
 import { AgentPhaseStrip } from '../shared/AgentPhaseStrip';
+import { ReadingBridge } from '../shared/ReadingBridge';
 import { OutlookSection } from '../shared/OutlookSection';
 import { buildOutlook } from '../shared/outlook';
 import { FLOW_ACCENTS } from '../designTokens';
 import type { OccasionPick, Citation } from '../../lib/fortuneTypes';
 
-export const TopPicksTab: React.FC<{ isReplay?: boolean }> = ({ isReplay = false }) => {
+export const TopPicksTab: React.FC<{
+  isReplay?: boolean;
+  onTabChange?: (id: string) => void;
+}> = ({ isReplay = false, onTabChange }) => {
   const { dataModel } = useFortuneStore(useShallow((s) => ({
     dataModel: s.dataModel,
   })));
@@ -92,6 +96,7 @@ export const TopPicksTab: React.FC<{ isReplay?: boolean }> = ({ isReplay = false
         accentColor={FLOW_ACCENTS['lucky-day'].primary}
         isReplay={isReplay}
       />
+      <ReadingBridge functionId="occasion" dataModel={dataModel} onTabChange={onTabChange} />
     </div>
   );
 };

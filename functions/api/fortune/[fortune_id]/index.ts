@@ -26,7 +26,8 @@ export const onRequestGet: PagesHandler<BffEnv> = async ({ request, env, params 
   // Forward auth + conditional headers
   const fwdHeaders: Record<string, string> = {
     "x-request-id": requestId,
-    "x-forwarded-for": request.headers.get("cf-connecting-ip") || "",
+    "cf-connecting-ip": request.headers.get("cf-connecting-ip") || "0.0.0.0",
+    "x-forwarded-for": request.headers.get("cf-connecting-ip") || "0.0.0.0",
   };
   const auth = request.headers.get("authorization");
   if (auth) fwdHeaders["authorization"] = auth;
@@ -39,6 +40,7 @@ export const onRequestGet: PagesHandler<BffEnv> = async ({ request, env, params 
 
   const outHeaders = new Headers(upstreamResp.headers);
   outHeaders.set("x-request-id", requestId);
+  outHeaders.set("cache-control", "no-store");
 
   return new Response(upstreamResp.body, {
     status: upstreamResp.status,

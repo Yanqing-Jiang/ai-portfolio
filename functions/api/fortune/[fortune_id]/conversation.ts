@@ -21,7 +21,8 @@ export const onRequestGet: PagesHandler<BffEnv> = async ({ request, env, params 
   const backendUrl = env.BACKEND_ORIGIN || DEFAULT_BACKEND_ORIGIN;
   const fwdHeaders: Record<string, string> = {
     "x-request-id": requestId,
-    "x-forwarded-for": request.headers.get("cf-connecting-ip") || "",
+    "cf-connecting-ip": request.headers.get("cf-connecting-ip") || "0.0.0.0",
+    "x-forwarded-for": request.headers.get("cf-connecting-ip") || "0.0.0.0",
   };
   const auth = request.headers.get("authorization");
   if (auth) fwdHeaders["authorization"] = auth;

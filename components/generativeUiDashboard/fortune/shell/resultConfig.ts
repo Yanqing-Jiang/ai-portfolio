@@ -25,6 +25,7 @@ import type {
 } from '../../lib/fortuneTypes';
 import type { FortuneTab } from '../../FortuneAgentResultShell';
 import { FORTUNE_THEMES } from '../../fortuneAgentTheme';
+import { formatDateOnly } from '../shared/dateOnly';
 
 export interface FortuneResultConfig {
   canonicalId: CanonicalFortuneFunction;
@@ -122,7 +123,7 @@ export const FORTUNE_RESULT_CONFIG: Record<
     sessionFunctionId: 'lucky-day',
     baseRoute: fortuneIntakeRoute('occasion'),
     eyebrow: 'Occasion',
-    subtitle: '擇日 · Auspicious Date',
+    subtitle: 'See which dates fit your chart and occasion.',
     glyph: FORTUNE_THEMES['lucky-day'].glyph,
     cjkTitle: '擇日',
     functionLabel: 'Auspicious Date',
@@ -148,12 +149,26 @@ function asKpi(model: FortuneDataModel | null | undefined): Record<string, unkno
 }
 
 function birthElementLabel(model: FortuneDataModel | null | undefined): string {
-  return dash(asKpi(model).dayMasterElement);
+  const kpi = asKpi(model);
+  const element = typeof kpi.dayMasterElement === 'string' ? kpi.dayMasterElement.trim() : '';
+  const stem = typeof kpi.dayMaster === 'string' ? kpi.dayMaster.trim() : '';
+  if (stem && element && !stem.toLowerCase().includes(element.toLowerCase())) {
+    return `${stem} ${element}`;
+  }
+  return dash(stem || element);
 }
 
 function formatHours(hours?: string[]): string {
-  if (!hours || hours.length === 0) return '—';
-  return hours.slice(0, 2).join(' · ');
+  const values = (hours || []).filter((hour) => typeof hour === 'string' && hour.trim());
+  if (values.length === 0) return 'Not calculated';
+  return values.slice(0, 2).join(' · ');
+}
+
+function scoreWord(score: unknown): string {
+  if (typeof score !== 'number' || !Number.isFinite(score)) return 'Not calculated';
+  if (score >= 80) return 'Strong';
+  if (score >= 60) return 'Moderate';
+  return 'Limited';
 }
 
 function spotlightYear(model: FortuneDataModel | null | undefined): string {
@@ -178,23 +193,49 @@ function spotlightYear(model: FortuneDataModel | null | undefined): string {
   return best ? String(best.year) : '—';
 }
 
-/**
- * Interpretive support for the dated guidance — how much chart evidence backs
- * it, on a 0–100 scale. Deliberately not a percentage or a likelihood.
- */
-function wishSupportScore(model: FortuneDataModel | null | undefined): string {
+/** Interpretive support for the dated guidance, expressed without a probability. */
+function chartEvidenceLabel(model: FortuneDataModel | null | undefined): string {
   const preds = model?.narrative?.yearPredictions;
   if (preds && preds.length > 0) {
     const avg =
       preds.reduce((s, p) => s + (typeof p.confidence === 'number' ? p.confidence : 0), 0) /
       preds.length;
-    if (avg > 0) return `${Math.round(avg * 100)}/100`;
+    if (avg > 0) return scoreWord(avg * 100);
   }
-  const seasonal = asKpi(model).seasonalScore;
-  if (typeof seasonal === 'number') return `${Math.round(seasonal)}/100`;
-  const score = model?.wish?.verdict?.score ?? asKpi(model).harmonyScore;
-  if (typeof score === 'number') return `${Math.round(score)}/100`;
-  return '—';
+  // Seasonal strength describes the chart's elemental balance, not how certain
+  // a future reading is. Keep the evidence tile honest when no confidence is
+  // supplied by the reading itself.
+  return 'Not rated';
+}
+
+function functionMechanismCount(
+  canonicalId: CanonicalFortuneFunction,
+  model: FortuneDataModel | null | undefined,
+): number {
+  if (canonicalId === 'wish') {
+    return model?.wish?.mechanisms?.length ?? model?.narrative?.insights?.length ?? 0;
+  }
+  if (canonicalId === 'cycle') return model?.luckCycle?.mechanisms?.length ?? 0;
+  if (canonicalId === 'compatibility') return model?.compatibility?.mechanisms?.length ?? 0;
+  return model?.occasion?.mechanisms?.length ?? 0;
+}
+
+/** Reader-facing status line; technical ids remain available in Glass Box. */
+export function buildReadingStatus(
+  canonicalId: CanonicalFortuneFunction,
+  dataModel: FortuneDataModel | null | undefined,
+): string {
+  const factorCount = functionMechanismCount(canonicalId, dataModel);
+  const references = dataModel?.classics?.references?.length ?? 0;
+  const parts = ['Read from your chart'];
+  if (factorCount > 0) {
+    const noun = canonicalId === 'wish' ? 'theme' : 'factor';
+    parts.push(`${factorCount} ${noun}${factorCount === 1 ? '' : 's'}`);
+  }
+  if (references > 0) {
+    parts.push(`${references} classical source${references === 1 ? '' : 's'} cited`);
+  }
+  return parts.join(' · ');
 }
 
 /** 4 KPI cards per function — values already present on dataModel only. */
@@ -206,19 +247,19 @@ export function buildResultKpis(
 
   if (canonicalId === 'occasion') {
     const picks = (dataModel?.occasion?.topPicks || []) as OccasionPick[];
-    const windowDays = dataModel?.occasion?.calendar?.days?.length;
     const top = picks[0];
+    const bestDay = top?.date
+      ? formatDateOnly(top.date, { weekday: 'short', month: 'short', day: 'numeric' })
+      : 'Not calculated';
+    const keyElements = dataModel?.occasion?.analysis?.keyElements || [];
     return [
-      { value: dash(top?.score), label: 'Top score' },
-      { value: birthElementLabel(dataModel), label: 'Birth element' },
-      {
-        value:
-          windowDays && picks.length
-            ? `${picks.length} / ${windowDays}`
-            : dash(picks.length || undefined),
-        label: 'Days qualified',
-      },
+      { value: bestDay, label: 'Best day' },
       { value: formatHours(top?.bestHours), label: 'Prime hours' },
+      {
+        value: picks.length ? String(picks.length) : 'Not calculated',
+        label: 'Selected dates',
+      },
+      { value: keyElements.length ? keyElements.join(', ') : 'Not calculated', label: 'Elements that help' },
     ];
   }
 
@@ -234,21 +275,21 @@ export function buildResultKpis(
     return [
       {
         value: dash(window?.score ?? kpi.harmonyScore),
-        label: 'Vitality score',
+        label: 'Cycle outlook',
       },
-      { value: birthElementLabel(dataModel), label: 'Birth element' },
-      { value: dash(current), label: 'Current decade' },
-      { value: spotlightYear(dataModel), label: 'Year spotlight' },
+      { value: birthElementLabel(dataModel), label: 'Day master' },
+      { value: dash(current), label: 'This decade' },
+      { value: spotlightYear(dataModel), label: 'Year to watch' },
     ];
   }
 
   if (canonicalId === 'compatibility') {
     const overview = dataModel?.compatibility?.overview;
     return [
-      { value: dash(overview?.score ?? kpi.harmonyScore), label: 'Harmony score' },
+      { value: dash(overview?.score ?? kpi.harmonyScore), label: 'Harmony' },
       { value: dash(overview?.relationship), label: 'Relationship' },
-      { value: dash(overview?.strengths?.length), label: 'Strengths' },
-      { value: dash(overview?.frictions?.length), label: 'Frictions' },
+      { value: `${overview?.strengths?.length ?? 0} pull together`, label: 'Strengths' },
+      { value: `${overview?.frictions?.length ?? 0} clash`, label: 'Frictions' },
     ];
   }
 
@@ -261,11 +302,11 @@ export function buildResultKpis(
   return [
     {
       value: dash(dataModel?.wish?.verdict?.score ?? kpi.harmonyScore),
-      label: 'Harmony score',
+      label: 'Outlook',
     },
-    { value: birthElementLabel(dataModel), label: 'Birth element' },
-    { value: dash(themes || undefined), label: 'Themes found' },
-    { value: wishSupportScore(dataModel), label: 'Support score' },
+    { value: birthElementLabel(dataModel), label: 'Day master' },
+    { value: dash(themes || undefined), label: 'Chart themes' },
+    { value: chartEvidenceLabel(dataModel), label: 'Chart evidence' },
   ];
 }
 

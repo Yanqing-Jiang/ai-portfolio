@@ -4,6 +4,7 @@ import { ChevronLeft, ChevronRight } from 'lucide-react';
 import type { OccasionDay } from '../../lib/fortuneTypes';
 import { scoreBg } from '../designTokens';
 import { staggerContainer, staggerItem, pickVariants } from '../animations';
+import { formatDateOnly } from './dateOnly';
 
 interface CalendarGridProps {
   month: string;
@@ -32,9 +33,10 @@ export const CalendarGrid: React.FC<CalendarGridProps> = ({
   const dayMap = new Map(dayScores.map((d) => [d.date, d]));
 
   // Parse first day of month for layout
-  const monthDate = new Date(`${year}-${month}-01`);
+  const monthNumber = parseInt(month, 10);
+  const monthDate = new Date(year, monthNumber - 1, 1);
   const startDow = monthDate.getDay();
-  const daysInMonth = new Date(year, parseInt(month), 0).getDate();
+  const daysInMonth = new Date(year, monthNumber, 0).getDate();
 
   // Build grid cells
   const cells: (OccasionDay | null)[] = [];
@@ -56,7 +58,10 @@ export const CalendarGrid: React.FC<CalendarGridProps> = ({
           <ChevronLeft className="w-4 h-4" />
         </button>
         <div className="text-sm font-semibold text-slate-200">
-          {monthDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+          {formatDateOnly(`${year}-${month.padStart(2, '0')}-01`, {
+            month: 'long',
+            year: 'numeric',
+          })}
         </div>
         <button
           type="button"

@@ -7,6 +7,7 @@ interface WeighingTickerProps {
   total: number;
   isComplete: boolean;
   accentColor: string;
+  onTabChange?: (id: string) => void;
 }
 
 export const WeighingTicker: React.FC<WeighingTickerProps> = ({
@@ -15,6 +16,7 @@ export const WeighingTicker: React.FC<WeighingTickerProps> = ({
   total,
   isComplete,
   accentColor,
+  onTabChange,
 }) => {
   return (
     <div className="flex flex-col items-center justify-center py-2 h-10">
@@ -46,9 +48,21 @@ export const WeighingTicker: React.FC<WeighingTickerProps> = ({
             className="flex items-center gap-2"
           >
             <span className="flex h-1.5 w-1.5 rounded-full" style={{ backgroundColor: accentColor }} />
-            <span className="text-[10px] font-bold uppercase tracking-[0.1em] text-slate-400">
-              Verdict Finalized
-            </span>
+            {onTabChange ? (
+              <button
+                type="button"
+                onClick={() => onTabChange('Why')}
+                className="text-[11px] font-medium text-slate-400 underline decoration-slate-600 underline-offset-4 hover:text-slate-200"
+              >
+                {count > 0
+                  ? `Weighed from ${count} factor${count === 1 ? '' : 's'} · see Why`
+                  : 'Weighed from the chart · see Why'}
+              </button>
+            ) : (
+              <span className="text-[10px] font-bold uppercase tracking-[0.1em] text-slate-400">
+                Reading complete
+              </span>
+            )}
           </motion.div>
         )}
       </AnimatePresence>

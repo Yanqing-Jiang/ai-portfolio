@@ -364,7 +364,7 @@ const SectionShell = React.forwardRef<HTMLElement, SectionShellProps>(
                 ref={ref}
                 id={`section-${sectionId}`}
                 data-section-id={sectionId}
-                className="relative flex h-[100svh] w-full flex-none snap-start items-center justify-center overflow-hidden px-6"
+                className="relative flex h-[calc(100dvh-4rem)] w-full flex-none snap-start items-center justify-center overflow-hidden px-6"
                 style={{
                     background: `linear-gradient(180deg, ${gradient[0]} 0%, ${gradient[1]} 100%)`,
                     scrollSnapAlign: 'start',
@@ -385,7 +385,7 @@ function VermillionSealVariant({ reduce }: { reduce: boolean }) {
     // Big off-center ivory 命 ink-wash, diagonal gold "fortune-agent" wordmark,
     // red seal with carved 命 stamped at the tail.
     return (
-        <div className="relative flex h-[240px] w-full items-center justify-center sm:h-[280px]">
+        <div className="relative flex h-[185px] w-full items-center justify-center sm:h-[215px]">
             <motion.span
                 aria-hidden
                 initial={{ opacity: 0, scale: 1.1 }}
@@ -395,7 +395,7 @@ function VermillionSealVariant({ reduce }: { reduce: boolean }) {
                 style={{
                     fontFamily: TOKEN.chinese,
                     color: HEX.ivory,
-                    fontSize: 'clamp(220px, 60vw, 360px)',
+                    fontSize: 'clamp(160px, 44vw, 260px)',
                     left: '50%',
                     top: '50%',
                     transform: 'translate(-50%, -50%)',
@@ -415,7 +415,7 @@ function VermillionSealVariant({ reduce }: { reduce: boolean }) {
                         fontFamily: "'Bodoni Moda', 'Playfair Display', Georgia, serif",
                         color: HEX.gold,
                         fontWeight: 300,
-                        fontSize: 'clamp(54px, 15vw, 96px)',
+                        fontSize: 'clamp(40px, 11vw, 70px)',
                         lineHeight: 0.9,
                         letterSpacing: '-0.03em',
                     }}
@@ -441,12 +441,12 @@ function VermillionSealVariant({ reduce }: { reduce: boolean }) {
                     style={{
                         right: '-18px',
                         bottom: '-22px',
-                        width: 56,
-                        height: 56,
+                        width: 42,
+                        height: 42,
                         background: HEX.accent,
                         color: HEX.ivory,
                         fontFamily: TOKEN.chinese,
-                        fontSize: 34,
+                        fontSize: 26,
                         lineHeight: 1,
                         letterSpacing: 0,
                         boxShadow: `0 6px 22px -8px ${HEX.accent}`,
@@ -464,7 +464,7 @@ function GildedPillarVariant({ reduce }: { reduce: boolean }) {
     // Three vertical gold lines form a pillar. Vertical 命 + 運 on the left,
     // stacked FORTUNE / AGENT on the right.
     return (
-        <div className="relative flex h-[260px] w-full items-center justify-center sm:h-[300px]">
+        <div className="relative flex h-[200px] w-full items-center justify-center sm:h-[220px]">
             <div className="pointer-events-none absolute inset-y-2 left-1/2 flex -translate-x-1/2 gap-[4px]">
                 {[0, 1, 2].map((i) => (
                     <motion.span
@@ -492,7 +492,7 @@ function GildedPillarVariant({ reduce }: { reduce: boolean }) {
                             initial={{ opacity: 0, y: -8 }}
                             animate={{ opacity: i === 0 ? 0.95 : 0.6, y: 0 }}
                             transition={{ duration: 0.6, delay: 0.7 + i * 0.15 }}
-                            style={{ fontSize: 'clamp(44px, 11vw, 62px)', lineHeight: 1 }}
+                            style={{ fontSize: 'clamp(32px, 8vw, 46px)', lineHeight: 1 }}
                         >
                             {ch}
                         </motion.span>
@@ -509,7 +509,7 @@ function GildedPillarVariant({ reduce }: { reduce: boolean }) {
                             fontFamily: "'Inter', 'Helvetica Neue', sans-serif",
                             fontWeight: 900,
                             color: HEX.gold,
-                            fontSize: 'clamp(32px, 9vw, 54px)',
+                            fontSize: 'clamp(24px, 7vw, 42px)',
                             letterSpacing: '0.14em',
                             lineHeight: 0.95,
                         }}
@@ -525,7 +525,7 @@ function GildedPillarVariant({ reduce }: { reduce: boolean }) {
                             fontFamily: "'Inter', 'Helvetica Neue', sans-serif",
                             fontWeight: 200,
                             color: HEX.ivory,
-                            fontSize: 'clamp(22px, 6.5vw, 36px)',
+                            fontSize: 'clamp(17px, 5vw, 27px)',
                             letterSpacing: '0.38em',
                             lineHeight: 1,
                         }}
@@ -552,7 +552,7 @@ function CalligraphicVoidVariant({ reduce }: { reduce: boolean }) {
     // Massive ivory 命 with "fortune-agent" carved out of its horizontal
     // stroke via SVG mask — the indigo bg shows through as the letters.
     return (
-        <div className="relative flex h-[260px] w-full items-center justify-center sm:h-[300px]">
+        <div className="relative flex h-[200px] w-full items-center justify-center sm:h-[220px]">
             <svg
                 viewBox="0 0 360 260"
                 className="h-full w-auto"
@@ -649,13 +649,14 @@ function HeroSection({ variant, sectionRef, onScrollNext, onJumpToSection }: Her
         id: FortunePurposeId;
         glyph: string;
         label: string;
+        promise: string;
         accentBorder: string;
         accentBg: string;
     }[] = [
-        { id: 'compatibility', glyph: '緣', label: 'Compatibility', accentBorder: 'rgba(244,63,94,0.75)', accentBg: 'rgba(244,63,94,0.14)' },
-        { id: 'lucky-day', glyph: '擇', label: 'Occasion', accentBorder: 'rgba(234,179,8,0.75)', accentBg: 'rgba(234,179,8,0.14)' },
-        { id: 'luck-draw', glyph: '運', label: 'Cycle Reading', accentBorder: 'rgba(249,115,22,0.75)', accentBg: 'rgba(249,115,22,0.14)' },
-        { id: 'custom-wish', glyph: '問', label: 'Ask Anything', accentBorder: 'rgba(96,165,250,0.75)', accentBg: 'rgba(96,165,250,0.14)' },
+        { id: 'compatibility', glyph: '緣', label: 'Compatibility', promise: 'Two charts, one reading of where they pull and clash.', accentBorder: 'rgba(244,63,94,0.75)', accentBg: 'rgba(244,63,94,0.14)' },
+        { id: 'lucky-day', glyph: '擇', label: 'Occasion', promise: 'Pick a day your chart agrees with.', accentBorder: 'rgba(234,179,8,0.75)', accentBg: 'rgba(234,179,8,0.14)' },
+        { id: 'luck-draw', glyph: '運', label: 'Cycle Reading', promise: 'Where you stand in your ten-year luck pillar.', accentBorder: 'rgba(249,115,22,0.75)', accentBg: 'rgba(249,115,22,0.14)' },
+        { id: 'custom-wish', glyph: '問', label: 'Ask Anything', promise: 'One question, answered from your birth chart.', accentBorder: 'rgba(96,165,250,0.75)', accentBg: 'rgba(96,165,250,0.14)' },
     ];
 
     let artwork: React.ReactNode;
@@ -681,18 +682,18 @@ function HeroSection({ variant, sectionRef, onScrollNext, onJumpToSection }: Her
             <motion.div
                 ref={contentRef}
                 {...anim}
-                className="relative z-10 flex h-full w-full max-w-xl flex-col items-center justify-center gap-8 py-14 text-center sm:gap-10"
+                className="relative z-10 flex h-full w-full max-w-xl flex-col items-center justify-center gap-5 py-10 text-center sm:gap-7"
             >
                 {/* Artistic wordmark — THE centerpiece */}
                 <div className="w-full">{artwork}</div>
 
-                {/* "Pick a subject" label, above the tiles */}
+                {/* Reader-facing prompt above the tiles */}
                 <div className="flex flex-col items-center gap-5 w-full">
                     <p
                         className="text-[12px] uppercase tracking-[0.38em] text-white/60 sm:text-[13px]"
                         style={{ fontFamily: TOKEN.chinese }}
                     >
-                        Pick a subject
+                        What are you asking today?
                     </p>
 
                     {/* 4 bigger tiles — each scrolls to its section */}
@@ -702,7 +703,7 @@ function HeroSection({ variant, sectionRef, onScrollNext, onJumpToSection }: Her
                                 key={t.id}
                                 type="button"
                                 onClick={() => onJumpToSection(TILE_TO_SECTION[t.id])}
-                                aria-label={`Jump to ${t.label} section`}
+                                aria-label={`Jump to ${t.label} section: ${t.promise}`}
                                 initial={{
                                     opacity: 0,
                                     y: 12,
@@ -721,7 +722,7 @@ function HeroSection({ variant, sectionRef, onScrollNext, onJumpToSection }: Her
                                           }
                                 }
                                 whileTap={reduce ? undefined : { scale: 0.97 }}
-                                className="flex min-h-[96px] flex-col items-center justify-center gap-2 rounded-2xl border px-3 py-4 text-center sm:min-h-[108px]"
+                                className="flex min-h-[126px] flex-col items-center justify-center gap-1.5 rounded-2xl border px-3 py-3 text-center sm:min-h-[136px]"
                             >
                                 <span
                                     className="block text-[15px] font-medium leading-tight text-white/95 sm:text-[16px]"
@@ -734,12 +735,15 @@ function HeroSection({ variant, sectionRef, onScrollNext, onJumpToSection }: Her
                                     style={{
                                         fontFamily: TOKEN.chinese,
                                         color: TOKEN.gold,
-                                        fontSize: 30,
+                                        fontSize: 27,
                                         lineHeight: 1,
                                         opacity: 0.85,
                                     }}
                                 >
                                     {t.glyph}
+                                </span>
+                                <span className="block max-w-[180px] text-[11px] leading-snug text-white/60">
+                                    {t.promise}
                                 </span>
                             </motion.button>
                         ))}
@@ -878,10 +882,10 @@ function CustomWishSection({ onCta, sectionRef, nav }: CustomWishProps) {
                 </h2>
 
                 <p className="mt-2 text-balance text-lg font-medium leading-snug text-white">
-                    Ask anything the old heaven knows.
+                    What is your chart pointing to?
                 </p>
                 <p className="mt-2 max-w-xs text-balance text-sm leading-relaxed text-white/65">
-                    Career windows. A name. A quiet fear. Phrase it plainly on the next screen.
+                    One question, answered from your birth chart with the reasoning kept visible.
                 </p>
 
                 <button
@@ -1038,9 +1042,13 @@ export const FortuneAgentHub: React.FC<FortuneAgentHubProps> = ({
         <div className="relative w-full" style={{ background: TOKEN.bg, color: '#fff' }}>
             <ProgressRail activeIndex={activeIndex} onJump={jumpTo} />
 
+            <style>{`
+                .fortune-agent-hub-scroller { -ms-overflow-style: none; scrollbar-width: none; }
+                .fortune-agent-hub-scroller::-webkit-scrollbar { display: none; }
+            `}</style>
             <div
                 ref={scrollerRef}
-                className="h-[100svh] w-full overflow-y-auto overflow-x-hidden"
+                className="fortune-agent-hub-scroller h-[calc(100dvh-4rem)] w-full overflow-y-auto overflow-x-hidden"
                 style={{
                     scrollSnapType: 'y mandatory',
                     WebkitOverflowScrolling: 'touch',
@@ -1061,9 +1069,9 @@ export const FortuneAgentHub: React.FC<FortuneAgentHubProps> = ({
                     gradient={SECTIONS[1].gradient}
                     eyebrow="Compatibility"
                     glyph="緣"
-                    headline="See two charts sing."
-                    subline="Two pillars leaning across a gold thread. Where they meet, fate hums."
-                    cta="See two charts sing"
+                    headline="Why do we click—and clash?"
+                    subline="Two charts, one reading of where they align, pull, and differ."
+                    cta="Compare two charts"
                     onCta={() => handleSelect('compatibility')}
                     motif={<PillarPair className="h-full w-full" />}
                     nav={{ direction: 'down', onClick: () => jumpTo(2), label: 'Continue to Occasion' }}
@@ -1075,8 +1083,8 @@ export const FortuneAgentHub: React.FC<FortuneAgentHubProps> = ({
                     gradient={SECTIONS[2].gradient}
                     eyebrow="Occasion"
                     glyph="擇"
-                    headline="Pick a day the sky agrees with."
-                    subline="Weddings, signings, first days. Let the calendar lean your way."
+                    headline="Which day gives you an edge?"
+                    subline="See the chart factors behind each date's ranking."
                     cta="Find an auspicious date"
                     onCta={() => handleSelect('lucky-day')}
                     motif={<LunarWheel className="h-full w-full" />}
@@ -1089,9 +1097,9 @@ export const FortuneAgentHub: React.FC<FortuneAgentHubProps> = ({
                     gradient={SECTIONS[3].gradient}
                     eyebrow="Cycle Reading"
                     glyph="運"
-                    headline="Where are you in the cycle?"
-                    subline="An ember circles the ring. Some months glow; some are for rest."
-                    cta="Draw this year's luck"
+                    headline="Is this your moment to move?"
+                    subline="Read where you stand in your current ten-year luck pillar."
+                    cta="Read my current cycle"
                     onCta={() => handleSelect('luck-draw')}
                     motif={<EmberRing className="h-full w-full" />}
                     nav={{ direction: 'down', onClick: () => jumpTo(4), label: 'Continue to Custom Wish' }}

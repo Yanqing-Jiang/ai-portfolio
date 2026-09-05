@@ -13,6 +13,7 @@ import {
 } from '../designTokens';
 import { fadeInUp, pickVariants } from '../animations';
 import type { OccasionPick } from '../../lib/fortuneTypes';
+import { calendarDayDistance, formatDateOnly } from './dateOnly';
 
 interface HeroPickCardProps {
   pick: OccasionPick;
@@ -35,19 +36,13 @@ export const HeroPickCard: React.FC<HeroPickCardProps> = ({ pick, isComputing, i
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const dateObj = new Date(`${pick.date}T12:00:00`);
-  const isValidDate = Number.isFinite(dateObj.getTime());
-  const formattedDate = isValidDate
-    ? dateObj.toLocaleDateString('en-US', {
-        weekday: 'long',
-        month: 'long',
-        day: 'numeric',
-      })
-    : 'Date pending';
+  const formattedDate = formatDateOnly(pick.date, {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+  });
 
-  const daysDiff = isValidDate
-    ? Math.ceil((dateObj.getTime() - Date.now()) / (1000 * 60 * 60 * 24))
-    : null;
+  const daysDiff = calendarDayDistance(pick.date);
 
   const pillar = `${pick.dayPillar?.stem || '—'}${pick.dayPillar?.branch || ''}`;
 

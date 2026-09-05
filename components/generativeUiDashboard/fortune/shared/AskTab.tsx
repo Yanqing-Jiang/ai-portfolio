@@ -8,10 +8,16 @@ import { useShallow } from 'zustand/react/shallow';
 import { Brain, MessageSquareQuote, TrendingUp } from 'lucide-react';
 import { useFortuneAsk } from '../../hooks/useFortuneAsk';
 import { useFortuneStore } from '../../stores/fortuneStore';
+import { formatDateOnly } from './dateOnly';
 import { OracleChat, type OracleChatMessage } from './OracleChat';
 import { FLOW_ACCENTS, OBSERVATORY_MONO, accentAlpha } from '../designTokens';
 import { tabContentVariants } from '../animations';
-import type { AskContext, FortuneFunctionId, OccasionPick } from '../../lib/fortuneTypes';
+import type {
+  AskContext,
+  FortuneDataModel,
+  FortuneFunctionId,
+  OccasionPick,
+} from '../../lib/fortuneTypes';
 import type { CanonicalFortuneFunction } from '../../../../lib/fortuneRoutes';
 
 /** Map canonical ids → legacy FLOW_ACCENTS / ask keys (API unchanged). */
@@ -24,27 +30,26 @@ const SESSION_ID: Record<CanonicalFortuneFunction, FortuneFunctionId> = {
 
 const DEFAULT_SUGGESTIONS: Record<CanonicalFortuneFunction, string[]> = {
   wish: [
-    "What's the best timing?",
-    'What should I avoid?',
-    'Who can help me?',
+    'What in my chart argues against this?',
+    'Which pillar drives this verdict?',
+    'What should I watch for in the highlighted year?',
     'What would change the verdict?',
   ],
   cycle: [
-    'Which decade is my financial peak?',
-    'Should I be cautious in 2028?',
-    'How does the Wood element affect me?',
-    'Best years for career transition?',
+    'Which decade does the chart favour, and why?',
+    'What is the friction in my current decade?',
+    'Where is the evidence weakest?',
+    'What would change this outlook?',
   ],
   compatibility: [
     'What makes our bond so strong?',
     'What triggers conflict between us?',
-    'Best way to handle our clashes?',
+    'Where is the evidence weakest?',
   ],
   occasion: [
-    "What defines a 'Lucky Day'?",
-    'How is my birth chart used?',
-    'What if there are no good days?',
-    'Explain the scoring logic',
+    'How does the chart rank these days?',
+    'What constraints change the ranking?',
+    'What does the calendar leave uncertain?',
   ],
 };
 
@@ -54,41 +59,60 @@ const HEADERS: Record<
 > = {
   wish: { title: 'Refine your inquiry' },
   cycle: {
-    title: 'Cycle Inquiry',
-    subtitle: 'Deep dive into specific timing or life domains.',
+    title: 'Read deeper',
+    subtitle: 'Ask about timing, trade-offs, or what the chart leaves uncertain.',
   },
   compatibility: { title: '' },
   occasion: { title: '' },
 };
 
-function wishSuggestions(question?: string): string[] {
-  if (!question) return DEFAULT_SUGGESTIONS.wish;
+function highlightedYear(dataModel: FortuneDataModel | null | undefined): string {
+  const currentYear = new Date().getFullYear();
+  const year = dataModel?.narrative?.yearPredictions
+    ?.map((item) => item.year)
+    .filter((item) => Number.isFinite(item) && item >= currentYear)
+    .sort((a, b) => a - b)[0];
+  return typeof year === 'number' ? String(year) : 'the highlighted year';
+}
+
+function wishSuggestions(
+  question?: string,
+  dataModel?: FortuneDataModel | null,
+): string[] {
+  const year = highlightedYear(dataModel);
+  if (!question) {
+    return DEFAULT_SUGGESTIONS.wish.map((suggestion) =>
+      suggestion.replace('the highlighted year', year),
+    );
+  }
   const lowerQ = question.toLowerCase();
   if (lowerQ.includes('job') || lowerQ.includes('career') || lowerQ.includes('work')) {
     return [
-      'What about salary prospects?',
-      'Is my boss supportive?',
-      'Should I wait for next month?',
-      'Will I face competition?',
+      'Which chart factor shapes this work question?',
+      `What should I watch for in ${year}?`,
+      'Is this a year to move or to wait?',
+      'What would change this outlook?',
     ];
   }
   if (lowerQ.includes('love') || lowerQ.includes('relationship') || lowerQ.includes('marry')) {
     return [
-      'Is the timing right for marriage?',
-      'Are there hidden conflicts?',
-      'How can I improve our harmony?',
-      "What about our parents' influence?",
+      'What in my chart supports this relationship?',
+      'Where is the friction?',
+      'What timing does the chart suggest?',
+      'What would change this outlook?',
     ];
   }
   if (lowerQ.includes('money') || lowerQ.includes('wealth') || lowerQ.includes('investment')) {
     return [
-      'When is my peak wealth luck?',
-      'Which element brings me money?',
-      'Is this a high-risk period?',
-      'Should I partner with others?',
+      'Which element governs this question?',
+      'What is the timing signal, not the outcome?',
+      'Where is the evidence weakest?',
+      'What would change this outlook?',
     ];
   }
-  return DEFAULT_SUGGESTIONS.wish;
+  return DEFAULT_SUGGESTIONS.wish.map((suggestion) =>
+    suggestion.replace('the highlighted year', year),
+  );
 }
 
 export interface AskTabProps {
@@ -117,14 +141,14 @@ export const AskTab: React.FC<AskTabProps> = ({
   const dataModel = useFortuneStore(useShallow((s) => s.dataModel));
 
   const suggestions = useMemo(() => {
-    if (functionId === 'wish') return wishSuggestions(question);
+    if (functionId === 'wish') return wishSuggestions(question, dataModel);
 
     if (functionId === 'compatibility') {
       const overview = dataModel?.compatibility?.overview;
       const interactionsCount = dataModel?.compatibility?.pairInteractions?.length || 0;
       const base = [
         'What triggers conflict between us?',
-        'Best way to handle our clashes?',
+        'What would change this outlook?',
       ];
       if (overview?.score && overview.score < 60) {
         base.unshift(`Why is our harmony score only ${Math.round(overview.score)}?`);
@@ -138,14 +162,14 @@ export const AskTab: React.FC<AskTabProps> = ({
     if (functionId === 'occasion') {
       const topPicks = (dataModel?.occasion?.topPicks || []) as OccasionPick[];
       if (topPicks.length > 0) {
-        const bestDate = new Date(topPicks[0].date).toLocaleDateString('en-US', {
+        const bestDate = formatDateOnly(topPicks[0].date, {
           month: 'short',
           day: 'numeric',
         });
         return [
           `Why is ${bestDate} ranked #1?`,
-          'Compare #1 vs #2 picks',
-          `Best hours on ${bestDate}`,
+          `What does ${bestDate} clash with?`,
+          `What are the chart's strongest hours on ${bestDate}?`,
           'What if I can only do weekends?',
         ];
       }
@@ -220,7 +244,7 @@ export const AskTab: React.FC<AskTabProps> = ({
                     Current Recommendation
                   </span>
                   <span className="truncate text-xs font-medium text-white">
-                    {new Date(topPicks[0].date).toLocaleDateString('en-US', {
+                    {formatDateOnly(topPicks[0].date, {
                       month: 'long',
                       day: 'numeric',
                     })}{' '}
@@ -232,10 +256,10 @@ export const AskTab: React.FC<AskTabProps> = ({
                 type="button"
                 onClick={() =>
                   setInput(
-                    `Tell me more about the ${new Date(topPicks[0].date).toLocaleDateString(
-                      'en-US',
-                      { month: 'short', day: 'numeric' },
-                    )} pick`,
+                    `Tell me more about the ${formatDateOnly(topPicks[0].date, {
+                      month: 'short',
+                      day: 'numeric',
+                    })} pick`,
                   )
                 }
                 className="shrink-0 text-[10px] font-bold text-amber-500 hover:text-amber-400"
@@ -274,11 +298,11 @@ export const AskTab: React.FC<AskTabProps> = ({
           </div>
           <div className="min-w-0 flex-1">
             <h4 className="text-[11px] font-bold uppercase tracking-widest text-slate-300">
-              Analysis Summary
+              Chart basis
             </h4>
             <p className="mt-0.5 truncate text-[10px] text-slate-500">
-              The agent analyzed {interactionsCount} interactions and {mechanismsCount}{' '}
-              mechanisms to calculate your compatibility.
+              Based on {interactionsCount} chart interactions and {mechanismsCount} mechanisms.
+              Ask about any of them.
             </p>
           </div>
         </div>

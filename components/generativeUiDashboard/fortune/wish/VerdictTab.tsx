@@ -10,19 +10,25 @@ import {
   GuardrailBanner,
   VerdictBadge,
   WeighingTicker,
-  VerdictProgressiveGauge
+  VerdictProgressiveGauge,
+  ReadingBridge,
 } from '../shared';
 import { OutlookSection } from '../shared/OutlookSection';
 import { buildOutlook } from '../shared/outlook';
-import { FLOW_ACCENTS, OBSERVATORY_SERIF, OBSERVATORY_MONO, observatoryAccent } from '../designTokens';
+import { FLOW_ACCENTS, observatoryAccent } from '../designTokens';
 import { staggerContainer, tabContentVariants, pickVariants } from '../animations';
 import type { Retrodiction, WishModel } from '../../lib/fortuneTypes';
 
 const ACCENT = FLOW_ACCENTS.wish;
 
-export const VerdictTab: React.FC<{ isReplay?: boolean; failed?: boolean }> = ({
+export const VerdictTab: React.FC<{
+  isReplay?: boolean;
+  failed?: boolean;
+  onTabChange?: (id: string) => void;
+}> = ({
   isReplay = false,
   failed = false,
+  onTabChange,
 }) => {
   const { dataModel, status, persistenceDegraded } = useFortuneStore(
     useShallow((s) => ({
@@ -49,6 +55,7 @@ export const VerdictTab: React.FC<{ isReplay?: boolean; failed?: boolean }> = ({
   const totalFactors = isComplete ? mechanisms.length : Math.max(mechanisms.length + 1, 5);
   const currentFactorIdx = mechanisms.length;
   const currentMechanismName = mechanisms[mechanisms.length - 1]?.title;
+  const weighedCount = mechanisms.length || narrative?.insights?.length || wish?.anchors?.length || 0;
   
   const streamedFraction = isComplete ? 1 : Math.min(0.9, mechanisms.length / totalFactors);
 
@@ -78,17 +85,7 @@ export const VerdictTab: React.FC<{ isReplay?: boolean; failed?: boolean }> = ({
             aria-hidden
           />
 
-          {typeof score === 'number' && score > 0 ? (
-            <div style={{ fontFamily: OBSERVATORY_SERIF, color: ACCENT.primary }}>
-              <div className="text-[40px] font-bold leading-none">{Math.round(score)}</div>
-              <small
-                className="mt-1 block text-[8px] font-semibold uppercase tracking-[0.25em] text-[#8a8f98]"
-                style={{ fontFamily: OBSERVATORY_MONO }}
-              >
-                Score
-              </small>
-            </div>
-          ) : failed ? null : (
+          {!isComplete && !failed && (
             <VerdictProgressiveGauge
               finalScore={score}
               streamedFraction={streamedFraction}
@@ -102,10 +99,11 @@ export const VerdictTab: React.FC<{ isReplay?: boolean; failed?: boolean }> = ({
             {!failed && (
               <WeighingTicker
                 currentMechanism={currentMechanismName}
-                count={currentFactorIdx}
+                count={isComplete ? weighedCount : currentFactorIdx}
                 total={totalFactors}
                 isComplete={isComplete}
                 accentColor={ACCENT.primary}
+                onTabChange={onTabChange}
               />
             )}
           </div>
@@ -153,6 +151,7 @@ export const VerdictTab: React.FC<{ isReplay?: boolean; failed?: boolean }> = ({
 
       {/* 4. Dated guidance — year/age → possible event → action */}
       <OutlookSection entries={outlook} accentColor={ACCENT.primary} isReplay={isReplay} />
+      <ReadingBridge functionId="wish" dataModel={dataModel} onTabChange={onTabChange} />
 
       {/* 5. Past-year pattern checks — a diagnostic, not part of the reading */}
       {retrodictions && retrodictions.length > 0 && (

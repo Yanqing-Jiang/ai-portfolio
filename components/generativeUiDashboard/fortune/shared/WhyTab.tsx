@@ -279,7 +279,7 @@ export const WhyTab: React.FC<WhyTabProps> = ({
             <span className="h-1 w-1 animate-bounce rounded-full bg-indigo-500 [animation-delay:0.2s]" />
             <span className="h-1 w-1 animate-bounce rounded-full bg-indigo-500 [animation-delay:0.4s]" />
             <span className="ml-1 text-[10px] font-medium uppercase tracking-wider text-slate-500">
-              Agent is Thinking
+              Still reading
             </span>
           </div>
         )}
