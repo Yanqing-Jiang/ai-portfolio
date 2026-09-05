@@ -14,8 +14,29 @@ import {
   parseDateOnly,
 } from '../../components/generativeUiDashboard/fortune/shared/dateOnly';
 import { BirthdayScrollPicker } from '../../components/generativeUiDashboard/BirthdayScrollPicker';
+import { CalendarTab } from '../../components/generativeUiDashboard/fortune/occasion/CalendarTab';
+import { useFortuneStore } from '../../components/generativeUiDashboard/stores/fortuneStore';
 
 describe('fortune frontend date handling', () => {
+  it('navigates across months and opens a scored date in the next month', () => {
+    useFortuneStore.getState().reset();
+    useFortuneStore.getState().applyPatch('/data/occasion', {
+      calendar: { month: '09', year: 2026, days: [
+        { date: '2026-09-24', score: 82 }, { date: '2026-10-01', score: 80 },
+      ] },
+    });
+    const view = render(<CalendarTab isReplay />);
+    expect(screen.getByText('September 2026')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Next month' }));
+    expect(screen.getByText('October 2026')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '1' }));
+    expect(screen.getByRole('button', { name: 'Close day details' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Close day details' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Previous month' }));
+    expect(screen.getByText('September 2026')).toBeInTheDocument();
+    view.unmount();
+    useFortuneStore.getState().reset();
+  });
   it('keeps the next-30-days promise at exact local calendar boundaries', () => {
     const range = quickWindowRange('next30', new Date(2026, 8, 5, 23, 45));
 

@@ -21,6 +21,7 @@ import type {
 
 export const CalendarTab: React.FC<{ isReplay?: boolean }> = ({ isReplay = false }) => {
   const [selectedDay, setSelectedDay] = useState<OccasionDay | null>(null);
+  const [monthOffset, setMonthOffset] = useState(0);
   const { dataModel } = useFortuneStore(useShallow((s) => ({
     dataModel: s.dataModel,
   })));
@@ -49,6 +50,7 @@ export const CalendarTab: React.FC<{ isReplay?: boolean }> = ({ isReplay = false
 
   const days = calendarData.days as OccasionDay[];
   const topPickDates = topPicks.map((p) => p.date);
+  const visibleMonth = new Date(calendarData.year, Number(calendarData.month) - 1 + monthOffset, 1);
 
   return (
     <motion.div
@@ -71,12 +73,13 @@ export const CalendarTab: React.FC<{ isReplay?: boolean }> = ({ isReplay = false
 
       <div className={`${GLASS} p-4`}>
         <CalendarGrid
-          month={calendarData.month}
-          year={calendarData.year}
+          month={String(visibleMonth.getMonth() + 1).padStart(2, '0')}
+          year={visibleMonth.getFullYear()}
           dayScores={days}
           topPickDates={topPickDates}
           accentColor={accent.primary}
           onDaySelect={setSelectedDay}
+          onMonthChange={(direction) => setMonthOffset((offset) => offset + direction)}
           isReplay={isReplay}
         />
       </div>
