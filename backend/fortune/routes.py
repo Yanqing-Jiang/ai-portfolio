@@ -49,6 +49,7 @@ try:
         run_foundation,
     )
     from .config import get_settings
+    from .stream_bridge import READING_ERROR_MESSAGE
     from .store import ASK_LEASE_TTL_SECONDS, get_repository, FortuneRepository
     from .triage import ASK_AGENT, ALLOWED_ACTION_IDS, run_triage
     from .session_store import (
@@ -82,6 +83,7 @@ except ImportError:
         run_foundation,
     )
     from config import get_settings  # type: ignore[no-redef]
+    from stream_bridge import READING_ERROR_MESSAGE  # type: ignore[no-redef]
     from store import ASK_LEASE_TTL_SECONDS, get_repository, FortuneRepository  # type: ignore[no-redef]
     from triage import ASK_AGENT, ALLOWED_ACTION_IDS, run_triage  # type: ignore[no-redef]
     from session_store import (  # type: ignore[no-redef]
@@ -341,6 +343,9 @@ def _snapshot_pillars(session: "FortuneSession", foundation: dict[str, Any]) -> 
     payload = {
         "pillars": _to_jsonable(foundation.get("pillars")),
         "elements": _to_jsonable(foundation.get("elements")),
+        "ziwei": _to_jsonable(foundation.get("ziwei")),
+        "birth_year": foundation.get("birth_year"),
+        "reading_brief": _to_jsonable(foundation.get("reading_brief")),
     }
     person_b = foundation.get("person_b")
     if person_b:
@@ -348,6 +353,8 @@ def _snapshot_pillars(session: "FortuneSession", foundation: dict[str, Any]) -> 
         payload["person_b"] = {
             "pillars": _to_jsonable(person_b.get("pillars")),
             "elements": _to_jsonable(person_b.get("elements")),
+            "ziwei": _to_jsonable(person_b.get("ziwei")),
+            "birth_year": person_b.get("birth_year"),
             # Ask hydration needs the same computed chart for both people.
             # Persist the complete deterministic analysis, not just the two
             # fields needed by the compatibility result cards.
@@ -608,6 +615,9 @@ async def _hydrate_foundation_from_snapshot(
         "retrodictions": [],
         "trace": None,
         "request_context": request_context,
+        "ziwei": pillars.get("ziwei"),
+        "birth_year": pillars.get("birth_year"),
+        "reading_brief": pillars.get("reading_brief"),
     }
     person_b = pillars.get("person_b")
     if isinstance(person_b, dict):
@@ -623,6 +633,8 @@ async def _hydrate_foundation_from_snapshot(
                     "analysis": analysis_b,
                     "pillars": person_b.get("pillars") or {},
                     "elements": person_b.get("elements") or {},
+                    "ziwei": person_b.get("ziwei"),
+                    "birth_year": person_b.get("birth_year"),
                 }
             except Exception as exc:
                 logger.warning(
@@ -837,6 +849,8 @@ def _unpack_jsonb(value: Any) -> Any:
 
 
 def _replay_cache_control(snapshot_status: str) -> str:
+    if snapshot_status == "error":
+        return "no-store"
     if snapshot_status == "done":
         return "public, s-maxage=300, stale-while-revalidate=86400"
     # Partial snapshot — cache briefly for reload protection but don't let
@@ -930,6 +944,15 @@ async def get_fortune_replay(
 
     snapshot_status = row.get("snapshot_status")
     snapshot_version = row.get("snapshot_version")
+    # A failed initial run can leave a partial snapshot (or none). Its durable
+    # run status must win over that stale progress state after a restart/expiry.
+    # A later failed Ask/action never invalidates an already completed reading.
+    reading_failed = snapshot_status != "done" and row.get("latest_reading_run_status") in {
+        "error", "interrupted", "failed_guardrail",
+    }
+    if reading_failed:
+        snapshot_status = "error"
+        snapshot_version = snapshot_version or 0
 
     # No snapshot yet — run is probably still streaming (or crashed before first write).
     if snapshot_version is None:
@@ -943,6 +966,8 @@ async def get_fortune_replay(
         )
 
     etag = f'"fortune-{fortune_id}-v{snapshot_version}"'
+    if reading_failed:
+        etag = f'"fortune-{fortune_id}-v{snapshot_version}-error-{row.get("latest_reading_run_id")}"'
     if _if_none_match_matches(if_none_match, etag):
         return Response(
             status_code=304,
@@ -961,7 +986,19 @@ async def get_fortune_replay(
     )
     schema_version = row.get("schema_version")
     if schema_version is None:
-        schema_version = 1
+        schema_version = 2 if reading_failed else 1
+    data_model = _unpack_jsonb(row.get("data_model"))
+    if reading_failed:
+        data_model = dict(data_model or {})
+        data_model["meta"] = {
+            **(data_model.get("meta") or {}),
+            "status": "error", "error_message": READING_ERROR_MESSAGE,
+        }
+        data_model["meta"].pop("progress", None)
+        if row.get("latest_reading_run_status") == "failed_guardrail":
+            data_model["guardrail"] = {
+                "level": "critical", "message": "We can’t safely present this reading.",
+            }
     payload = {
         "fortune_id": fortune_id,
         "snapshot_version": snapshot_version,
@@ -979,7 +1016,7 @@ async def get_fortune_replay(
             "corrections": corrections_block,
         },
         # Additive v2 field; NULL/absent on schema_version=1 rows (dual-read).
-        "data_model": _unpack_jsonb(row.get("data_model")),
+        "data_model": data_model,
     }
 
     return JSONResponse(

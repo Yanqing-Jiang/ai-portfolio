@@ -30,8 +30,9 @@ export const AnchorPill: React.FC<AnchorPillProps> = ({
     <div className="flex flex-col gap-1 w-full">
       <motion.button
         onClick={() => setIsOpen(!isOpen)}
+        aria-expanded={isOpen}
         whileTap={{ scale: 0.98 }}
-        className={`flex items-center gap-2 rounded-xl border transition-all duration-300 ${
+        className={`flex min-h-11 items-center gap-2 rounded-xl border transition-all duration-300 ${
           isOpen ? 'bg-white/10' : 'bg-white/5'
         }`}
         style={{

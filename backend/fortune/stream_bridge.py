@@ -11,6 +11,8 @@ import json
 from datetime import datetime
 from typing import Any
 
+READING_ERROR_MESSAGE = "This reading could not be completed. Please start a new reading."
+
 try:
     from generative_ui.a2ui.emitter import A2UIMessageEmitter
     from generative_ui.a2ui.messages import A2UIComponent
@@ -846,6 +848,22 @@ class FortuneStreamBridge:
                 return pillar
         return luck_pillars[0] if luck_pillars else None
 
+    def emit_harness(self, foundation: dict[str, Any], *, include_brief: bool = False) -> str:
+        from .classics import load_classics_corpus
+        corpus = load_classics_corpus()
+        payload = {
+            "charts": {
+                "personA": foundation.get("ziwei"),
+                "personB": (foundation.get("person_b") or {}).get("ziwei"),
+            },
+            "sources": {"bazi_passages": len(corpus),
+                        "bazi_books": len({p.source.split(" · ")[0] for p in corpus}),
+                        "ziwei_passages": 0},
+        }
+        if include_brief and foundation.get("reading_brief"):
+            payload["brief"] = foundation["reading_brief"]
+        return self.emitter.data_update(payload, path="/data/harness")
+
     def emit_pillars(self, payload: dict[str, Any]) -> str:
         normalized: dict[str, Any] = {}
         for key in ("year", "month", "day"):
@@ -1529,7 +1547,7 @@ class FortuneStreamBridge:
         """
         return [
             self.emitter.data_update(
-                {"status": "error", "error_message": message},
+                {"status": "error", "error_message": message or READING_ERROR_MESSAGE},
                 path="/data/meta",
             ),
             self.emitter.audit("error", details=message),

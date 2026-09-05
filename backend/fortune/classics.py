@@ -5,7 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from dataclasses import dataclass
+import re
+from collections import Counter
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Sequence
@@ -27,35 +28,20 @@ class ClassicalPassage(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
-@dataclass(frozen=True)
-class IndexedClassicalPassage:
-    passage: ClassicalPassage
-    vector: tuple[float, ...]
-
-
 def _stable_id(*parts: str) -> str:
     digest = hashlib.md5("|".join(parts).encode("utf-8")).hexdigest()[:8]
     return f"ref_{digest}"
 
 
 def _tokenize(text: str) -> list[str]:
-    normalized = "".join(ch.lower() if ch.isalnum() else " " for ch in text)
-    return [t for t in normalized.split() if t]
-
-
-def _hash_embed(text: str, dims: int = 64) -> list[float]:
-    vec = [0.0] * dims
-    for token in _tokenize(text):
-        digest = hashlib.md5(token.encode("utf-8")).hexdigest()
-        slot = int(digest[:8], 16) % dims
-        sign = -1.0 if int(digest[8:10], 16) % 2 else 1.0
-        vec[slot] += sign
-    norm = math.sqrt(sum(v * v for v in vec)) or 1.0
-    return [v / norm for v in vec]
-
-
-def _cosine(a: Sequence[float], b: Sequence[float]) -> float:
-    return sum(x * y for x, y in zip(a, b, strict=False))
+    # Split snake-case tags and Chinese into overlapping bigrams; hash vectors
+    # conflated unrelated terms and treated whole Chinese sentences as tokens.
+    stop = {"the", "a", "an", "and", "or", "of", "to", "in", "is", "it", "for", "my", "i", "with", "your",
+            "will", "what", "how", "can", "should", "this", "that", "its", "their", "they", "be", "are", "new"}
+    tokens = re.findall(r"[a-z0-9]+", text.lower())
+    for run in re.findall(r"[\u3400-\u9fff]+", text):
+        tokens.extend(run[i:i + 2] for i in range(max(1, len(run) - 1)))
+    return [token for token in tokens if token not in stop]
 
 
 @lru_cache(maxsize=1)
@@ -76,52 +62,58 @@ def load_classics_corpus() -> list[ClassicalPassage]:
 
 
 @lru_cache(maxsize=1)
-def load_classics_index() -> tuple[IndexedClassicalPassage, ...]:
-    index: list[IndexedClassicalPassage] = []
-    for passage in load_classics_corpus():
-        joined = " ".join([
-            passage.passage,
-            passage.translation,
-            passage.source,
-            *passage.tags,
-        ])
-        index.append(
-            IndexedClassicalPassage(
-                passage=passage,
-                vector=tuple(_hash_embed(joined)),
-            )
-        )
-    return tuple(index)
+def load_classics_index() -> tuple[tuple[ClassicalPassage, Counter], ...]:
+    return tuple(
+        (p, Counter(_tokenize(" ".join([p.passage, p.translation, p.source, *p.tags]))))
+        for p in load_classics_corpus()
+    )
 
 
 def retrieve_classical_references(
-    query: str,
-    limit: int | None = None,
+    query: str, limit: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Retrieve relevant classical passages via hash-based cosine similarity.
+    """Exact lexical BM25 retrieval over the local Bazi corpus, with tag boosts.
 
-    Plain callable for direct import/testing. The Agents SDK wrapper is
-    exposed separately as ``retrieve_classical_references_tool``.
+    No positive match means no reference. Never pad with irrelevant citations.
     """
     settings = get_settings()
     target_limit = max(1, min(limit or settings.max_classical_references, 5))
-    query_vec = _hash_embed(query)
-
-    ranked: list[tuple[float, ClassicalPassage]] = []
-    for item in load_classics_index():
-        score = _cosine(query_vec, item.vector)
-        ranked.append((score, item.passage))
-
-    ranked.sort(key=lambda item: item[0], reverse=True)
+    index = load_classics_index()
+    terms = set(_tokenize(query))
+    if terms & {"career", "role", "job", "work", "promotion"}:
+        terms.update({"career", "authority", "officer"})
+    requested_stems = terms & set("jia yi bing ding wu ji geng xin ren gui".split())
+    if not index or not terms:
+        return []
+    count = len(index)
+    avg_len = sum(sum(freq.values()) for _, freq in index) / count
+    doc_freq = {term: sum(term in freq for _, freq in index) for term in terms}
+    ranked = []
+    for passage, freq in index:
+        passage_stems = set(passage.tags) & set("jia yi bing ding wu ji geng xin ren gui".split())
+        if requested_stems and passage_stems and not requested_stems & passage_stems:
+            continue
+        if "career" in terms and set(passage.tags) & {"children", "health", "illness", "romance", "marriage"}:
+            continue
+        matched = sorted(terms & freq.keys())
+        score = 0.0
+        tags = set(_tokenize(" ".join(passage.tags)))
+        for term in matched:
+            idf = math.log(1 + (count - doc_freq[term] + 0.5) / (doc_freq[term] + 0.5))
+            tf = freq[term]
+            score += idf * tf * 2.2 / (tf + 1.2 * (0.25 + 0.75 * sum(freq.values()) / avg_len))
+            if term in tags:
+                score += idf
+        if score > 0:
+            ranked.append((score, passage, matched))
+    ranked.sort(key=lambda item: (-item[0], item[1].id))
     return [
         {
-            "id": p.id,
-            "passage": p.passage,
-            "translation": p.translation,
+            "id": p.id, "passage": p.passage, "translation": p.translation,
             "source": p.source,
-            "relevance": f"Cosine similarity {score:.3f} against query: {query[:60]}",
+            "relevance": f"Bazi corpus; matched terms: {', '.join(matched)}; BM25 {score:.3f}",
         }
-        for score, p in ranked[:target_limit]
+        for score, p, matched in ranked[:target_limit]
     ]
 
 

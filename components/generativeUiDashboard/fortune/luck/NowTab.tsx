@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { useShallow } from 'zustand/react/shallow';
 import { useFortuneStore } from '../../stores/fortuneStore';
@@ -10,6 +10,8 @@ import {
   SeasonalStrengthBar,
   LuckFilmStrip,
 } from '../shared';
+import { OutlookSection } from '../shared/OutlookSection';
+import { buildOutlook } from '../shared/outlook';
 import { FLOW_ACCENTS } from '../designTokens';
 import { tabContentVariants } from '../animations';
 import type { ElementType, SeasonalStrength as SSType, LuckPillar } from '../../lib/fortuneTypes';
@@ -41,6 +43,7 @@ export const NowTab: React.FC<{ isReplay?: boolean }> = ({ isReplay = false }) =
   const guardrail = dataModel?.guardrail;
   const decades = (dataModel?.luckPillars?.items || luckCycle?.timeline?.decades || []) as LuckPillar[];
   const currentDecadeIdx = findCurrentDecadeIndex(decades);
+  const outlook = useMemo(() => buildOutlook(dataModel), [dataModel]);
 
   const score = luckCycle?.currentWindow?.score ?? (kpi?.harmonyScore as number | undefined);
   const dayMaster = (kpi?.dayMaster || '') as string;
@@ -80,17 +83,20 @@ export const NowTab: React.FC<{ isReplay?: boolean }> = ({ isReplay = false }) =
         </div>
       )}
 
-      {narrative?.tldr && (
+      {/* The finished tldr is already the page headline — only stream the draft. */}
+      {narrative?.streamingText && !narrative.isComplete && (
         <div className="bg-indigo-500/5 border border-indigo-500/10 rounded-2xl p-4">
           <StreamingText
-            text={narrative.streamingText || narrative.tldr}
-            isStreaming={!narrative.isComplete}
+            text={narrative.streamingText}
+            isStreaming
             isReplay={isReplay}
             cursorColor={ACCENT.primary}
             className="text-sm italic"
           />
         </div>
       )}
+
+      <OutlookSection entries={outlook} accentColor={ACCENT.primary} isReplay={isReplay} />
 
       <div className="grid grid-cols-1 gap-4">
         {dayMaster && (

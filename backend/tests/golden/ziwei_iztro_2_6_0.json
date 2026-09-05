@@ -1,0 +1,787 @@
+{
+  "source": "iztro@2.6.0 astro.bySolar(date, time_index, gender, true, zh-CN); generated with the upstream npm library, not the Python adapter",
+  "cases": [
+    {
+      "date": "2000-8-16",
+      "time_index": 2,
+      "gender": "男",
+      "palaces": [
+        {
+          "index": 0,
+          "body": false,
+          "decadal_ages": [
+            83,
+            92
+          ],
+          "stars": [
+            [
+              "武曲",
+              "得",
+              "权"
+            ],
+            [
+              "天相",
+              "庙",
+              null
+            ]
+          ]
+        },
+        {
+          "index": 1,
+          "body": false,
+          "decadal_ages": [
+            93,
+            102
+          ],
+          "stars": [
+            [
+              "太阳",
+              "庙",
+              "禄"
+            ],
+            [
+              "天梁",
+              "庙",
+              null
+            ]
+          ]
+        },
+        {
+          "index": 2,
+          "body": false,
+          "decadal_ages": [
+            103,
+            112
+          ],
+          "stars": [
+            [
+              "七杀",
+              "庙",
+              null
+            ]
+          ]
+        },
+        {
+          "index": 3,
+          "body": false,
+          "decadal_ages": [
+            113,
+            122
+          ],
+          "stars": [
+            [
+              "天机",
+              "平",
+              null
+            ]
+          ]
+        },
+        {
+          "index": 4,
+          "body": false,
+          "decadal_ages": [
+            3,
+            12
+          ],
+          "stars": [
+            [
+              "紫微",
+              "庙",
+              null
+            ]
+          ]
+        },
+        {
+          "index": 5,
+          "body": false,
+          "decadal_ages": [
+            13,
+            22
+          ],
+          "stars": []
+        },
+        {
+          "index": 6,
+          "body": false,
+          "decadal_ages": [
+            23,
+            32
+          ],
+          "stars": [
+            [
+              "破军",
+              "得",
+              null
+            ]
+          ]
+        },
+        {
+          "index": 7,
+          "body": false,
+          "decadal_ages": [
+            33,
+            42
+          ],
+          "stars": []
+        },
+        {
+          "index": 8,
+          "body": true,
+          "decadal_ages": [
+            43,
+            52
+          ],
+          "stars": [
+            [
+              "廉贞",
+              "利",
+              null
+            ],
+            [
+              "天府",
+              "庙",
+              null
+            ]
+          ]
+        },
+        {
+          "index": 9,
+          "body": false,
+          "decadal_ages": [
+            53,
+            62
+          ],
+          "stars": [
+            [
+              "太阴",
+              "庙",
+              "科"
+            ]
+          ]
+        },
+        {
+          "index": 10,
+          "body": false,
+          "decadal_ages": [
+            63,
+            72
+          ],
+          "stars": [
+            [
+              "贪狼",
+              "旺",
+              null
+            ]
+          ]
+        },
+        {
+          "index": 11,
+          "body": false,
+          "decadal_ages": [
+            73,
+            82
+          ],
+          "stars": [
+            [
+              "天同",
+              "不",
+              "忌"
+            ],
+            [
+              "巨门",
+              "不",
+              null
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "date": "1990-5-15",
+      "time_index": 6,
+      "gender": "女",
+      "palaces": [
+        {
+          "index": 0,
+          "body": false,
+          "decadal_ages": [
+            95,
+            104
+          ],
+          "stars": [
+            [
+              "廉贞",
+              "庙",
+              null
+            ]
+          ]
+        },
+        {
+          "index": 1,
+          "body": false,
+          "decadal_ages": [
+            85,
+            94
+          ],
+          "stars": []
+        },
+        {
+          "index": 2,
+          "body": false,
+          "decadal_ages": [
+            75,
+            84
+          ],
+          "stars": [
+            [
+              "破军",
+              "旺",
+              null
+            ]
+          ]
+        },
+        {
+          "index": 3,
+          "body": false,
+          "decadal_ages": [
+            65,
+            74
+          ],
+          "stars": [
+            [
+              "天同",
+              "庙",
+              "忌"
+            ]
+          ]
+        },
+        {
+          "index": 4,
+          "body": false,
+          "decadal_ages": [
+            55,
+            64
+          ],
+          "stars": [
+            [
+              "武曲",
+              "旺",
+              "权"
+            ],
+            [
+              "天府",
+              "旺",
+              null
+            ]
+          ]
+        },
+        {
+          "index": 5,
+          "body": false,
+          "decadal_ages": [
+            45,
+            54
+          ],
+          "stars": [
+            [
+              "太阳",
+              "得",
+              "禄"
+            ],
+            [
+              "太阴",
+              "不",
+              "科"
+            ]
+          ]
+        },
+        {
+          "index": 6,
+          "body": false,
+          "decadal_ages": [
+            35,
+            44
+          ],
+          "stars": [
+            [
+              "贪狼",
+              "平",
+              null
+            ]
+          ]
+        },
+        {
+          "index": 7,
+          "body": false,
+          "decadal_ages": [
+            25,
+            34
+          ],
+          "stars": [
+            [
+              "天机",
+              "旺",
+              null
+            ],
+            [
+              "巨门",
+              "庙",
+              null
+            ]
+          ]
+        },
+        {
+          "index": 8,
+          "body": false,
+          "decadal_ages": [
+            15,
+            24
+          ],
+          "stars": [
+            [
+              "紫微",
+              "得",
+              null
+            ],
+            [
+              "天相",
+              "得",
+              null
+            ]
+          ]
+        },
+        {
+          "index": 9,
+          "body": true,
+          "decadal_ages": [
+            5,
+            14
+          ],
+          "stars": [
+            [
+              "天梁",
+              "陷",
+              null
+            ]
+          ]
+        },
+        {
+          "index": 10,
+          "body": false,
+          "decadal_ages": [
+            115,
+            124
+          ],
+          "stars": [
+            [
+              "七杀",
+              "旺",
+              null
+            ]
+          ]
+        },
+        {
+          "index": 11,
+          "body": false,
+          "decadal_ages": [
+            105,
+            114
+          ],
+          "stars": []
+        }
+      ]
+    },
+    {
+      "date": "1988-2-4",
+      "time_index": 12,
+      "gender": "男",
+      "palaces": [
+        {
+          "index": 0,
+          "body": false,
+          "decadal_ages": [
+            113,
+            122
+          ],
+          "stars": [
+            [
+              "天同",
+              "利",
+              "权"
+            ],
+            [
+              "天梁",
+              "庙",
+              null
+            ]
+          ]
+        },
+        {
+          "index": 1,
+          "body": false,
+          "decadal_ages": [
+            103,
+            112
+          ],
+          "stars": [
+            [
+              "武曲",
+              "利",
+              null
+            ],
+            [
+              "七杀",
+              "旺",
+              null
+            ]
+          ]
+        },
+        {
+          "index": 2,
+          "body": false,
+          "decadal_ages": [
+            93,
+            102
+          ],
+          "stars": [
+            [
+              "太阳",
+              "旺",
+              null
+            ]
+          ]
+        },
+        {
+          "index": 3,
+          "body": false,
+          "decadal_ages": [
+            83,
+            92
+          ],
+          "stars": []
+        },
+        {
+          "index": 4,
+          "body": false,
+          "decadal_ages": [
+            73,
+            82
+          ],
+          "stars": [
+            [
+              "天机",
+              "庙",
+              "科"
+            ]
+          ]
+        },
+        {
+          "index": 5,
+          "body": false,
+          "decadal_ages": [
+            63,
+            72
+          ],
+          "stars": [
+            [
+              "紫微",
+              "庙",
+              null
+            ],
+            [
+              "破军",
+              "旺",
+              null
+            ]
+          ]
+        },
+        {
+          "index": 6,
+          "body": false,
+          "decadal_ages": [
+            53,
+            62
+          ],
+          "stars": []
+        },
+        {
+          "index": 7,
+          "body": false,
+          "decadal_ages": [
+            43,
+            52
+          ],
+          "stars": [
+            [
+              "天府",
+              "旺",
+              null
+            ]
+          ]
+        },
+        {
+          "index": 8,
+          "body": false,
+          "decadal_ages": [
+            33,
+            42
+          ],
+          "stars": [
+            [
+              "太阴",
+              "旺",
+              "禄"
+            ]
+          ]
+        },
+        {
+          "index": 9,
+          "body": false,
+          "decadal_ages": [
+            23,
+            32
+          ],
+          "stars": [
+            [
+              "廉贞",
+              "陷",
+              null
+            ],
+            [
+              "贪狼",
+              "陷",
+              null
+            ]
+          ]
+        },
+        {
+          "index": 10,
+          "body": false,
+          "decadal_ages": [
+            13,
+            22
+          ],
+          "stars": [
+            [
+              "巨门",
+              "旺",
+              "忌"
+            ]
+          ]
+        },
+        {
+          "index": 11,
+          "body": true,
+          "decadal_ages": [
+            3,
+            12
+          ],
+          "stars": [
+            [
+              "天相",
+              "庙",
+              null
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "date": "2023-4-5",
+      "time_index": 4,
+      "gender": "女",
+      "palaces": [
+        {
+          "index": 0,
+          "body": false,
+          "decadal_ages": [
+            32,
+            41
+          ],
+          "stars": [
+            [
+              "七杀",
+              "庙",
+              null
+            ]
+          ]
+        },
+        {
+          "index": 1,
+          "body": false,
+          "decadal_ages": [
+            42,
+            51
+          ],
+          "stars": [
+            [
+              "天同",
+              "平",
+              null
+            ]
+          ]
+        },
+        {
+          "index": 2,
+          "body": false,
+          "decadal_ages": [
+            52,
+            61
+          ],
+          "stars": [
+            [
+              "武曲",
+              "庙",
+              null
+            ]
+          ]
+        },
+        {
+          "index": 3,
+          "body": false,
+          "decadal_ages": [
+            62,
+            71
+          ],
+          "stars": [
+            [
+              "太阳",
+              "旺",
+              null
+            ]
+          ]
+        },
+        {
+          "index": 4,
+          "body": false,
+          "decadal_ages": [
+            72,
+            81
+          ],
+          "stars": [
+            [
+              "破军",
+              "庙",
+              "禄"
+            ]
+          ]
+        },
+        {
+          "index": 5,
+          "body": true,
+          "decadal_ages": [
+            82,
+            91
+          ],
+          "stars": [
+            [
+              "天机",
+              "陷",
+              null
+            ]
+          ]
+        },
+        {
+          "index": 6,
+          "body": false,
+          "decadal_ages": [
+            92,
+            101
+          ],
+          "stars": [
+            [
+              "紫微",
+              "旺",
+              null
+            ],
+            [
+              "天府",
+              "得",
+              null
+            ]
+          ]
+        },
+        {
+          "index": 7,
+          "body": false,
+          "decadal_ages": [
+            102,
+            111
+          ],
+          "stars": [
+            [
+              "太阴",
+              "不",
+              "科"
+            ]
+          ]
+        },
+        {
+          "index": 8,
+          "body": false,
+          "decadal_ages": [
+            112,
+            121
+          ],
+          "stars": [
+            [
+              "贪狼",
+              "庙",
+              "忌"
+            ]
+          ]
+        },
+        {
+          "index": 9,
+          "body": false,
+          "decadal_ages": [
+            2,
+            11
+          ],
+          "stars": [
+            [
+              "巨门",
+              "旺",
+              "权"
+            ]
+          ]
+        },
+        {
+          "index": 10,
+          "body": false,
+          "decadal_ages": [
+            12,
+            21
+          ],
+          "stars": [
+            [
+              "廉贞",
+              "平",
+              null
+            ],
+            [
+              "天相",
+              "庙",
+              null
+            ]
+          ]
+        },
+        {
+          "index": 11,
+          "body": false,
+          "decadal_ages": [
+            22,
+            31
+          ],
+          "stars": [
+            [
+              "天梁",
+              "旺",
+              null
+            ]
+          ]
+        }
+      ]
+    }
+  ]
+}

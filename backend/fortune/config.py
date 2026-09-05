@@ -63,6 +63,9 @@ class FortuneSettings(BaseSettings):
     # roughly 30% faster than medium, which dominates perceived latency on
     # the Ask tab. The initial reading still uses narrative_reasoning.
     ask_reasoning: str = "low"
+    # Technical interpretation precedes the compact dashboard writer.
+    interpretation_reasoning: str = "medium"
+    interpretation_max_tokens: int = 6000
 
     # PR3 (latency refactor) — per-mode reasoning effort.
     # Compatibility flipped from "medium" → "low" on 2026-05-10 after the

@@ -3,6 +3,7 @@
 **/*.py[cod]
 .env
 .env.production
+.env.*
 .git/
 .DS_Store
 tests/

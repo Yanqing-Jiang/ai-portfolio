@@ -43,7 +43,7 @@ try:
         run_narrative_streamed,
     )
     from .config import get_settings
-    from .stream_bridge import FortuneStreamBridge
+    from .stream_bridge import FortuneStreamBridge, READING_ERROR_MESSAGE
     from .store import get_repository
     from .triage import run_triage
     from .naming import canonical_function
@@ -77,7 +77,7 @@ except ImportError:  # pragma: no cover
         run_narrative_streamed,
     )
     from config import get_settings  # type: ignore[no-redef]
-    from stream_bridge import FortuneStreamBridge  # type: ignore[no-redef]
+    from stream_bridge import FortuneStreamBridge, READING_ERROR_MESSAGE  # type: ignore[no-redef]
     from store import get_repository  # type: ignore[no-redef]
     from triage import run_triage  # type: ignore[no-redef]
     from naming import canonical_function  # type: ignore[no-redef]
@@ -502,6 +502,7 @@ async def _event_generator_impl(session, *, request=None, store=None):
                 ))
                 foundation = {**foundation, "person_b": foundation_b}
                 session.latest_foundation = foundation
+        yield await _emit(bridge.emit_harness(foundation))
         if analysis.luck_pillars:
             yield await _emit(bridge.emit_luck_pillars(analysis.luck_pillars))
         if analysis.annual_pillars:
@@ -667,11 +668,28 @@ async def _event_generator_impl(session, *, request=None, store=None):
                 get_settings().narrative_model,
             )
 
-            stream_result = await run_narrative_streamed(
-                ctx,
-                foundation=foundation,
-                session=sdk_session,
-            )
+            async def _start_interpretation():
+                yield await run_narrative_streamed(
+                    ctx, foundation=foundation, session=sdk_session,
+                )
+
+            # The technical interpreter runs before the dashboard stream.
+            # Keep cancellation and SSE heartbeats alive during that stage too.
+            from contextlib import aclosing
+            async with aclosing(iter_with_heartbeats(_start_interpretation())) as starting:
+                async for prepared in starting:
+                    cancel_msg = await _cancel_event("narrative", trace)
+                    if cancel_msg:
+                        if not isinstance(prepared, HeartbeatTick):
+                            prepared.cancel()
+                        yield cancel_msg
+                        return
+                    if isinstance(prepared, HeartbeatTick):
+                        yield await _emit(bridge.emit_progress(
+                            "narrative", f"Connecting life themes and timing… ({prepared.elapsed_s}s)",
+                        ))
+                    else:
+                        stream_result = prepared
             seen_tools: set[str] = set()
             async for event in _events_or_tripwire(stream_result):
                 if isinstance(event, OutputGuardrailTripwireTriggered):
@@ -760,6 +778,8 @@ async def _event_generator_impl(session, *, request=None, store=None):
             )
             narrative = _promote_narrative_to_enriched(raw_narrative)
 
+        from .insight_harness import validate_narrative_years
+        narrative = validate_narrative_years(ctx, foundation, narrative)
         session.latest_narrative = repair_occasion_narrative(
             ctx,
             narrative.model_dump(),
@@ -958,6 +978,7 @@ async def _event_generator_impl(session, *, request=None, store=None):
         # has passed. Build the exact legacy frame sequence, then release it as
         # one late batch.
         narrative_frames: list[str] = []
+        narrative_frames.append(await _emit(bridge.emit_harness(foundation, include_brief=True)))
         narrative_frames.append(await _emit(
             bridge.emit_agent_step(
                 step_id="narrative",
@@ -1164,11 +1185,11 @@ async def _event_generator_impl(session, *, request=None, store=None):
         if run_uuid is not None:
             try:
                 await repo.update_run_status(
-                    run_uuid, "error", error_message=str(exc)[:500],
+                    run_uuid, "error", error_message=(str(exc) or type(exc).__name__)[:500],
                 )
             except Exception as update_exc:
                 logger.warning("[FORTUNE] error-status update failed: %s", update_exc)
         await _maybe_clear_pending()
         await flush_pending_spans(run_id=run_id)
-        for msg in bridge.emit_error(str(exc)):
+        for msg in bridge.emit_error(READING_ERROR_MESSAGE):
             yield await _emit(msg)

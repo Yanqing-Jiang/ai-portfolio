@@ -199,6 +199,9 @@ export const GlassBoxPanel: React.FC<GlassBoxPanelProps> = ({
 
   useEffect(() => {
     if (!fortuneId) return;
+    // A closed drawer must not spend the guest replay quota just to render a
+    // header; hydrate on first open instead.
+    if (!open) return;
     if (projections.length > 0) return;
     if (status === 'streaming' || status === 'loading') return;
 
@@ -215,34 +218,47 @@ export const GlassBoxPanel: React.FC<GlassBoxPanelProps> = ({
         setLoadingReplay(false);
       }
     })();
-  }, [fortuneId, projections.length, status, fetchLatestTrace]);
+  }, [fortuneId, open, projections.length, status, fetchLatestTrace]);
 
   useEffect(() => {
     const previous = previousAskLoading.current;
-    if (fortuneId && previous.fortuneId === fortuneId && previous.askLoading && !askLoading) {
-      // DEBT: trace refreshes once per completed Ask (no live polling — GET /trace shares the 5/day guest replay quota), upgrade when trace gets a dedicated rate-limit scope or SSE push.
+    if (open && fortuneId && previous.fortuneId === fortuneId && previous.askLoading && !askLoading) {
+      // DEBT: trace refreshes once per completed Ask while the panel is open (no live polling — GET /trace shares the 5/day guest replay quota), upgrade when trace gets a dedicated rate-limit scope or SSE push.
       void fetchLatestTrace().catch(() => {
         // Final trace hydration is best-effort.
       });
     }
     previousAskLoading.current = { fortuneId, askLoading };
-  }, [askLoading, fortuneId, fetchLatestTrace]);
+  }, [askLoading, fortuneId, open, fetchLatestTrace]);
 
   const isLive = status === 'streaming' || status === 'loading' || askLoading;
   const totalMs = useMemo(
-    () =>
-      projections.reduce(
-        (sum, p) => sum + (typeof p.durationMs === 'number' ? p.durationMs : 0),
-        0,
-      ),
+    () => {
+      // Agent, turn and response spans nest. Sum elapsed ranges per run,
+      // not span durations, or a 50-second run appears to take 200 seconds.
+      const ranges = new Map<string, [number, number]>();
+      for (const span of projections) {
+        const start = Date.parse(span.startedAt || '');
+        const end = Date.parse(span.endedAt || span.startedAt || '');
+        if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
+        const key = span.runId || 'reading';
+        const range = ranges.get(key);
+        ranges.set(key, range ? [Math.min(range[0], start), Math.max(range[1], end)] : [start, end]);
+      }
+      return [...ranges.values()].reduce((sum, [start, end]) => sum + Math.max(0, end - start), 0);
+    },
     [projections],
   );
 
+  // Span count is unknown until the closed drawer is opened and hydrated.
+  const traceUnloaded = !open && projections.length === 0;
   const baseHeaderText = loadingReplay
     ? 'EXECUTION TRACE · LOADING…'
-    : `EXECUTION TRACE · ${projections.length} SPAN${projections.length === 1 ? '' : 'S'}${
-        totalMs > 0 ? ` · ${formatDuration(totalMs)}` : ''
-      }`;
+    : traceUnloaded
+      ? 'EXECUTION TRACE'
+      : `EXECUTION TRACE · ${projections.length} SPAN${projections.length === 1 ? '' : 'S'}${
+          totalMs > 0 ? ` · ${formatDuration(totalMs)}` : ''
+        }`;
   const headerText = askLoading ? `${baseHeaderText} · ASK RUNNING` : baseHeaderText;
 
   const rows = (

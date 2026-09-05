@@ -15,7 +15,7 @@ const SEVERITY_MAP = {
 export const GuardrailBanner: React.FC<GuardrailBannerProps> = ({ guardrail }) => {
   // Backend emits `level`, frontend uses `severity` — accept both
   const severity = guardrail.severity || guardrail.level || 'info';
-  const { Icon, color, bg, border } = SEVERITY_MAP[severity];
+  const { Icon, color, bg, border } = SEVERITY_MAP[severity === 'critical' ? 'error' : severity];
 
   return (
     <div

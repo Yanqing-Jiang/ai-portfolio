@@ -1,29 +1,34 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { useShallow } from 'zustand/react/shallow';
-import { AlertTriangle, Quote } from 'lucide-react';
+import { AlertTriangle, ChevronDown } from 'lucide-react';
 import { useFortuneStore } from '../../stores/fortuneStore';
-import { 
-  StreamingText, 
-  ConditionCard, 
-  YearPredictionBar, 
+import {
+  StreamingText,
+  ConditionCard,
+  YearPredictionBar,
   GuardrailBanner,
   VerdictBadge,
   WeighingTicker,
   VerdictProgressiveGauge
 } from '../shared';
+import { OutlookSection } from '../shared/OutlookSection';
+import { buildOutlook } from '../shared/outlook';
 import { FLOW_ACCENTS, OBSERVATORY_SERIF, OBSERVATORY_MONO, observatoryAccent } from '../designTokens';
 import { staggerContainer, tabContentVariants, pickVariants } from '../animations';
 import type { Retrodiction, WishModel } from '../../lib/fortuneTypes';
 
 const ACCENT = FLOW_ACCENTS.wish;
 
-export const VerdictTab: React.FC<{ isReplay?: boolean; question?: string }> = ({ isReplay = false, question }) => {
+export const VerdictTab: React.FC<{ isReplay?: boolean; failed?: boolean }> = ({
+  isReplay = false,
+  failed = false,
+}) => {
   const { dataModel, status, persistenceDegraded } = useFortuneStore(
-    useShallow((s) => ({ 
-      dataModel: s.dataModel, 
-      status: s.status, 
-      persistenceDegraded: s.persistenceDegraded 
+    useShallow((s) => ({
+      dataModel: s.dataModel,
+      status: s.status,
+      persistenceDegraded: s.persistenceDegraded
     })),
   );
 
@@ -33,8 +38,10 @@ export const VerdictTab: React.FC<{ isReplay?: boolean; question?: string }> = (
   const narrative = dataModel?.narrative;
   const retrodictions = dataModel?.retrodictions?.items as Retrodiction[] | undefined;
   const guardrail = dataModel?.guardrail;
-  
-  const isComplete = narrative?.isComplete || status === 'complete';
+  const outlook = useMemo(() => buildOutlook(dataModel), [dataModel]);
+
+  // A stopped run is terminal — never keep "weighing" a reading that ended.
+  const isComplete = narrative?.isComplete || status === 'complete' || failed;
   const score = verdict?.score ?? 0;
   
   // Orchestration logic: how many factors are we weighing?
@@ -54,76 +61,68 @@ export const VerdictTab: React.FC<{ isReplay?: boolean; question?: string }> = (
       exit="exit"
       className="space-y-6 pb-8"
     >
-      {/* 1. Question quote block */}
-      {question && (
-        <motion.div 
-          initial={{ opacity: 0, x: -10 }}
-          animate={{ opacity: 1, x: 0 }}
-          className="relative pl-6 py-2"
+      {/* 1. Verdict hero card — Observatory accent wash. The question already
+          sits in the shell's context line; don't repeat it. A stopped run with
+          no verdict shows no hero at all rather than an empty gauge. */}
+      {(!failed || !!verdict) && (
+        <div
+          className="relative flex flex-col items-center gap-3 overflow-hidden rounded-2xl border p-4 text-center sm:gap-4 sm:p-6"
+          style={{
+            borderColor: observatoryAccent(ACCENT.primary).heroBorder,
+            background: observatoryAccent(ACCENT.primary).heroWash,
+          }}
         >
-          <Quote className="absolute left-0 top-0 h-5 w-5 opacity-20" style={{ color: ACCENT.primary }} />
-          <p className="text-base italic leading-relaxed text-white/90 font-serif">
-            {question}
-          </p>
-        </motion.div>
+          <div
+            className="absolute -right-6 -top-8 h-28 w-28 rounded-full opacity-20 blur-3xl"
+            style={{ backgroundColor: ACCENT.primary }}
+            aria-hidden
+          />
+
+          {typeof score === 'number' && score > 0 ? (
+            <div style={{ fontFamily: OBSERVATORY_SERIF, color: ACCENT.primary }}>
+              <div className="text-[40px] font-bold leading-none">{Math.round(score)}</div>
+              <small
+                className="mt-1 block text-[8px] font-semibold uppercase tracking-[0.25em] text-[#8a8f98]"
+                style={{ fontFamily: OBSERVATORY_MONO }}
+              >
+                Score
+              </small>
+            </div>
+          ) : failed ? null : (
+            <VerdictProgressiveGauge
+              finalScore={score}
+              streamedFraction={streamedFraction}
+              accentColor={ACCENT.primary}
+              isReplay={isReplay}
+            />
+          )}
+
+          <div className="z-10 space-y-1">
+            <VerdictBadge score={score} isReplay={isReplay} />
+            {!failed && (
+              <WeighingTicker
+                currentMechanism={currentMechanismName}
+                count={currentFactorIdx}
+                total={totalFactors}
+                isComplete={isComplete}
+                accentColor={ACCENT.primary}
+              />
+            )}
+          </div>
+
+          {verdict?.summary && (
+            <motion.p
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="max-w-sm text-[12.5px] leading-relaxed text-[#9aa0a8]"
+            >
+              {verdict.summary}
+            </motion.p>
+          )}
+        </div>
       )}
 
-      {/* 2. Verdict hero card — Observatory accent wash */}
-      <div
-        className="relative flex flex-col items-center gap-4 overflow-hidden rounded-2xl border p-6 text-center"
-        style={{
-          borderColor: observatoryAccent(ACCENT.primary).heroBorder,
-          background: observatoryAccent(ACCENT.primary).heroWash,
-        }}
-      >
-        <div
-          className="absolute -right-6 -top-8 h-28 w-28 rounded-full opacity-20 blur-3xl"
-          style={{ backgroundColor: ACCENT.primary }}
-          aria-hidden
-        />
-
-        {typeof score === 'number' && score > 0 ? (
-          <div style={{ fontFamily: OBSERVATORY_SERIF, color: ACCENT.primary }}>
-            <div className="text-[40px] font-bold leading-none">{Math.round(score)}</div>
-            <small
-              className="mt-1 block text-[8px] font-semibold uppercase tracking-[0.25em] text-[#8a8f98]"
-              style={{ fontFamily: OBSERVATORY_MONO }}
-            >
-              Score
-            </small>
-          </div>
-        ) : (
-          <VerdictProgressiveGauge
-            finalScore={score}
-            streamedFraction={streamedFraction}
-            accentColor={ACCENT.primary}
-            isReplay={isReplay}
-          />
-        )}
-
-        <div className="z-10 space-y-1">
-          <VerdictBadge score={score} isReplay={isReplay} />
-          <WeighingTicker
-            currentMechanism={currentMechanismName}
-            count={currentFactorIdx}
-            total={totalFactors}
-            isComplete={isComplete}
-            accentColor={ACCENT.primary}
-          />
-        </div>
-
-        {verdict?.summary && (
-          <motion.p
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="max-w-sm text-[12.5px] leading-relaxed text-[#9aa0a8]"
-          >
-            {verdict.summary}
-          </motion.p>
-        )}
-      </div>
-
-      {/* 3. Conditions list */}
+      {/* 2. Conditions list */}
       {verdict?.conditions && verdict.conditions.length > 0 && (
         <motion.div
           variants={pickVariants(isReplay, staggerContainer(0.1))}
@@ -137,7 +136,7 @@ export const VerdictTab: React.FC<{ isReplay?: boolean; question?: string }> = (
         </motion.div>
       )}
 
-      {/* 4. Caution card */}
+      {/* 3. Caution card */}
       {verdict?.caution && (
         <motion.div
           initial={{ opacity: 0, scale: 0.95 }}
@@ -152,26 +151,32 @@ export const VerdictTab: React.FC<{ isReplay?: boolean; question?: string }> = (
         </motion.div>
       )}
 
-      {/* 5. Year predictions */}
+      {/* 4. Dated guidance — year/age → possible event → action */}
+      <OutlookSection entries={outlook} accentColor={ACCENT.primary} isReplay={isReplay} />
+
+      {/* 5. Past-year pattern checks — a diagnostic, not part of the reading */}
       {retrodictions && retrodictions.length > 0 && (
-        <div className="space-y-3">
-          <div className="flex items-center justify-between px-1">
-            <h3 className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-500">
-              Temporal Outlook
-            </h3>
-            <span className="text-[10px] text-slate-600 italic">Tap to expand years</span>
+        <details className="group rounded-xl border border-white/[0.06] bg-white/[0.015]">
+          <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-2 px-3 text-[11px] text-slate-400 hover:text-slate-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/40">
+            <span>Past-year pattern checks ({retrodictions.length})</span>
+            <ChevronDown size={13} className="flex-none transition-transform group-open:rotate-180" aria-hidden />
+          </summary>
+          <div className="space-y-2 px-3 pb-3">
+            <p className="text-[10.5px] leading-relaxed text-slate-500">
+              Earlier years the same method flags. They test the chart's patterns; they are not predictions.
+            </p>
+            <motion.div
+              variants={pickVariants(isReplay, staggerContainer(0.08))}
+              initial="hidden"
+              animate="visible"
+              className="space-y-2"
+            >
+              {retrodictions.map((r, index) => (
+                <YearPredictionBar key={`${r.year}-${index}`} item={r} accentColor={ACCENT.primary} isReplay={isReplay} />
+              ))}
+            </motion.div>
           </div>
-          <motion.div
-            variants={pickVariants(isReplay, staggerContainer(0.08))}
-            initial="hidden"
-            animate="visible"
-            className="space-y-2"
-          >
-            {retrodictions.map((r, index) => (
-              <YearPredictionBar key={`${r.year}-${index}`} item={r} accentColor={ACCENT.primary} isReplay={isReplay} />
-            ))}
-          </motion.div>
-        </div>
+        </details>
       )}
 
       {/* Narrative TLDR streaming (fallback if verdict summary not yet available) */}

@@ -10,6 +10,9 @@ import { staggerContainer, pickVariants } from '../animations';
 import { HeroPickCard } from '../shared/HeroPickCard';
 import { ExpandablePickCard } from './ExpandablePickCard';
 import { AgentPhaseStrip } from '../shared/AgentPhaseStrip';
+import { OutlookSection } from '../shared/OutlookSection';
+import { buildOutlook } from '../shared/outlook';
+import { FLOW_ACCENTS } from '../designTokens';
 import type { OccasionPick, Citation } from '../../lib/fortuneTypes';
 
 export const TopPicksTab: React.FC<{ isReplay?: boolean }> = ({ isReplay = false }) => {
@@ -18,6 +21,7 @@ export const TopPicksTab: React.FC<{ isReplay?: boolean }> = ({ isReplay = false
   })));
 
   const picks = (dataModel?.occasion?.topPicks || []) as OccasionPick[];
+  const outlook = useMemo(() => buildOutlook(dataModel), [dataModel]);
   const isComplete = dataModel?.narrative?.isComplete ?? false;
   const citations = (dataModel?.classics?.references || []) as Citation[];
 
@@ -72,16 +76,22 @@ export const TopPicksTab: React.FC<{ isReplay?: boolean }> = ({ isReplay = false
               </div>
             </motion.div>
           ) : (
-            /* Skeleton State */
-            <div key="skeleton" className="flex flex-col gap-4">
-              <div className="h-64 rounded-3xl bg-white/5 animate-pulse border border-white/10" />
-              {[1, 2, 3, 4].map((i) => (
-                <div key={i} className="h-20 rounded-2xl bg-white/5 animate-pulse border border-white/10" />
+            /* Skeleton State — kept short so the fold isn't all placeholder */
+            <div key="skeleton" className="flex flex-col gap-3">
+              <div className="h-36 rounded-3xl bg-white/5 animate-pulse border border-white/10" />
+              {[1, 2].map((i) => (
+                <div key={i} className="h-14 rounded-2xl bg-white/5 animate-pulse border border-white/10" />
               ))}
             </div>
           )}
         </AnimatePresence>
       </motion.div>
+
+      <OutlookSection
+        entries={outlook}
+        accentColor={FLOW_ACCENTS['lucky-day'].primary}
+        isReplay={isReplay}
+      />
     </div>
   );
 };

@@ -25,6 +25,8 @@ export { WeighingTicker } from './WeighingTicker';
 export { AnchorPill } from './AnchorPill';
 export { VerdictProgressiveGauge } from './VerdictProgressiveGauge';
 export { AgentPhaseStrip } from './AgentPhaseStrip';
+export { OutlookSection } from './OutlookSection';
+export { ReadingErrorCard } from './ReadingErrorCard';
 export { HeroPickCard } from './HeroPickCard';
 export { LuckFilmStrip } from './LuckFilmStrip';
 

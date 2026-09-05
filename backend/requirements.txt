@@ -13,6 +13,7 @@ pydantic-settings==2.14.2
 openai>=1.107.3
 openai-agents==0.18.2
 cnlunar>=0.2.4
+iztro-py==0.5.0
 google-genai
 anthropic==0.75.0
 # claude-agent-sdk removed: its startup overhead exceeded the API boot budget

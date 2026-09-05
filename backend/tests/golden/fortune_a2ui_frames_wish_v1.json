@@ -908,36 +908,36 @@
             "key": "references",
             "valueArray": [
               {
-                "id": "yuan_hai_timing",
-                "passage": "大运看十年之祸福，流年看一年之吉凶。运年并论，方得其真。",
-                "translation": "Major cycles reveal fortune and misfortune over ten-year periods; annual cycles reveal luck for a single year. Only by examining both together can the truth be found.",
-                "source": "渊海子平 · 论大运流年",
-                "sourceEnglish": "Yuanhai Ziping · On Luck & Annual Pillars",
-                "relevance": "Cosine similarity 0.438 against query: Will I find a new role this year? warm metal"
+                "id": "zi_ping_cai_guan",
+                "passage": "财能生官，官能护财。财官双美，富贵之格也。",
+                "translation": "Wealth can produce Officer, and Officer can protect Wealth. When both Wealth and Officer are fine, it is a pattern of riches and honor.",
+                "source": "子平真诠 · 论财官",
+                "sourceEnglish": "Ziping's True Classic · On Wealth & Officer",
+                "relevance": "Bazi corpus; matched terms: career, officer, wealth; BM25 14.513"
               },
               {
-                "id": "san_ming_tai_sui",
-                "passage": "太岁者，一年之主宰也。犯太岁则灾，合太岁则吉。",
-                "translation": "Tai Sui is the sovereign of the year. Offending Tai Sui brings disaster; harmonizing with Tai Sui brings fortune.",
-                "source": "三命通会 · 论太岁",
-                "sourceEnglish": "Three Lives Compendium · On the Grand Duke (Year God)",
-                "relevance": "Cosine similarity 0.340 against query: Will I find a new role this year? warm metal"
+                "id": "di_tian_sui_geng",
+                "passage": "庚金带煞，刚健为最。得水而清，得火而锐。",
+                "translation": "Geng Metal carries a killing edge — it is the most forceful and unyielding. With Water it becomes refined; with Fire it becomes sharp.",
+                "source": "滴天髓 · 庚金",
+                "sourceEnglish": "Drops of Heaven's Essence · Yang Metal",
+                "relevance": "Bazi corpus; matched terms: geng, metal; BM25 10.516"
               },
               {
-                "id": "san_ming_san_he",
-                "passage": "申子辰合水局，亥卯未合木局，寅午戌合火局，巳酉丑合金局。",
-                "translation": "Shen-Zi-Chen form a Water frame, Hai-Mao-Wei form a Wood frame, Yin-Wu-Xu form a Fire frame, Si-You-Chou form a Metal frame.",
-                "source": "三命通会 · 论三合",
-                "sourceEnglish": "Three Lives Compendium · On Three Harmonies",
-                "relevance": "Cosine similarity 0.303 against query: Will I find a new role this year? warm metal"
+                "id": "di_tian_sui_tong_gen",
+                "passage": "天干得一比肩，不如得支中一个余气通根。",
+                "translation": "A Heavenly Stem gaining one Companion in the stems is not as valuable as finding one residual root in the Earthly Branches.",
+                "source": "滴天髓 · 论通根",
+                "sourceEnglish": "Drops of Heaven's Essence · On Rooting",
+                "relevance": "Bazi corpus; matched terms: companion, roots; BM25 10.324"
               },
               {
-                "id": "di_tian_sui_xin",
-                "passage": "辛金软弱，温润而清。畏土之叠，乐水之盈。",
-                "translation": "Xin Metal is soft and delicate — warm, refined, and pure. It fears excessive Earth piling up, and delights in abundant Water.",
-                "source": "滴天髓 · 辛金",
-                "sourceEnglish": "Drops of Heaven's Essence · Yin Metal",
-                "relevance": "Cosine similarity 0.206 against query: Will I find a new role this year? warm metal"
+                "id": "yuan_hai_yi_lu",
+                "passage": "建禄者，月令与日主同气也。身旺不需印，一逢财官便为美。",
+                "translation": "Established Salary means the month branch shares the same element as the Day Master. The self is already strong without needing Resource — encountering Wealth and Officer becomes auspicious.",
+                "source": "渊海子平 · 论建禄",
+                "sourceEnglish": "Yuanhai Ziping · On Established Salary",
+                "relevance": "Bazi corpus; matched terms: career, officer, wealth; BM25 10.126"
               }
             ]
           }
@@ -1322,6 +1322,542 @@
         "surfaceId": "fortune_main",
         "contents": [
           {
+            "key": "charts",
+            "valueMap": [
+              {
+                "key": "personA",
+                "valueMap": [
+                  {
+                    "key": "engine",
+                    "valueString": "iztro-py"
+                  },
+                  {
+                    "key": "version",
+                    "valueString": "0.5.0"
+                  },
+                  {
+                    "key": "conventions",
+                    "valueMap": [
+                      {
+                        "key": "time",
+                        "valueString": "local civil time; no longitude/true-solar correction"
+                      },
+                      {
+                        "key": "late_zi",
+                        "valueString": "23:00 uses time index 12; early Zi uses index 0"
+                      },
+                      {
+                        "key": "leap_month",
+                        "valueString": "fix_leap=True (library split-month convention)"
+                      },
+                      {
+                        "key": "decadal_age",
+                        "valueString": "traditional nominal age; not birthday age"
+                      }
+                    ]
+                  },
+                  {
+                    "key": "status",
+                    "valueString": "computed"
+                  },
+                  {
+                    "key": "time_index",
+                    "valueNumber": 5.0
+                  },
+                  {
+                    "key": "five_elements_class",
+                    "valueString": "fire 6th"
+                  },
+                  {
+                    "key": "palaces",
+                    "valueArray": [
+                      {
+                        "index": 0,
+                        "name": "spirit",
+                        "key": "spiritPalace",
+                        "branch": "yin",
+                        "stem": "wu",
+                        "is_body_palace": false,
+                        "major_stars": [
+                          {
+                            "name": "ziweiMaj",
+                            "type": "major",
+                            "scope": "origin",
+                            "brightness": "旺",
+                            "mutagen": null
+                          },
+                          {
+                            "name": "tianfuMaj",
+                            "type": "major",
+                            "scope": "origin",
+                            "brightness": "庙",
+                            "mutagen": null
+                          }
+                        ],
+                        "minor_stars": [],
+                        "decadal_nominal_ages": [
+                          106,
+                          115
+                        ],
+                        "related_palace_indices": [
+                          4,
+                          8,
+                          6
+                        ]
+                      },
+                      {
+                        "index": 1,
+                        "name": "property",
+                        "key": "propertyPalace",
+                        "branch": "mao",
+                        "stem": "ji",
+                        "is_body_palace": false,
+                        "major_stars": [
+                          {
+                            "name": "taiyinMaj",
+                            "type": "major",
+                            "scope": "origin",
+                            "brightness": "陷",
+                            "mutagen": "科"
+                          }
+                        ],
+                        "minor_stars": [],
+                        "decadal_nominal_ages": [
+                          96,
+                          105
+                        ],
+                        "related_palace_indices": [
+                          5,
+                          9,
+                          7
+                        ]
+                      },
+                      {
+                        "index": 2,
+                        "name": "career",
+                        "key": "careerPalace",
+                        "branch": "chen",
+                        "stem": "geng",
+                        "is_body_palace": false,
+                        "major_stars": [
+                          {
+                            "name": "tanlangMaj",
+                            "type": "major",
+                            "scope": "origin",
+                            "brightness": "庙",
+                            "mutagen": null
+                          }
+                        ],
+                        "minor_stars": [
+                          {
+                            "name": "dijieMin",
+                            "type": "tough",
+                            "scope": "origin",
+                            "brightness": null,
+                            "mutagen": null
+                          }
+                        ],
+                        "decadal_nominal_ages": [
+                          86,
+                          95
+                        ],
+                        "related_palace_indices": [
+                          6,
+                          10,
+                          8
+                        ]
+                      },
+                      {
+                        "index": 3,
+                        "name": "friends",
+                        "key": "friendsPalace",
+                        "branch": "si",
+                        "stem": "xin",
+                        "is_body_palace": false,
+                        "major_stars": [
+                          {
+                            "name": "jumenMaj",
+                            "type": "major",
+                            "scope": "origin",
+                            "brightness": "旺",
+                            "mutagen": null
+                          }
+                        ],
+                        "minor_stars": [
+                          {
+                            "name": "wenchangMin",
+                            "type": "soft",
+                            "scope": "origin",
+                            "brightness": "庙",
+                            "mutagen": null
+                          }
+                        ],
+                        "decadal_nominal_ages": [
+                          76,
+                          85
+                        ],
+                        "related_palace_indices": [
+                          7,
+                          11,
+                          9
+                        ]
+                      },
+                      {
+                        "index": 4,
+                        "name": "surface",
+                        "key": "surfacePalace",
+                        "branch": "woo",
+                        "stem": "ren",
+                        "is_body_palace": false,
+                        "major_stars": [
+                          {
+                            "name": "lianzhenMaj",
+                            "type": "major",
+                            "scope": "origin",
+                            "brightness": "平",
+                            "mutagen": null
+                          },
+                          {
+                            "name": "tianxiangMaj",
+                            "type": "major",
+                            "scope": "origin",
+                            "brightness": "庙",
+                            "mutagen": null
+                          }
+                        ],
+                        "minor_stars": [
+                          {
+                            "name": "dikongMin",
+                            "type": "tough",
+                            "scope": "origin",
+                            "brightness": null,
+                            "mutagen": null
+                          },
+                          {
+                            "name": "huoxingMin",
+                            "type": "tough",
+                            "scope": "origin",
+                            "brightness": "庙",
+                            "mutagen": null
+                          }
+                        ],
+                        "decadal_nominal_ages": [
+                          66,
+                          75
+                        ],
+                        "related_palace_indices": [
+                          8,
+                          0,
+                          10
+                        ]
+                      },
+                      {
+                        "index": 5,
+                        "name": "health",
+                        "key": "healthPalace",
+                        "branch": "wei",
+                        "stem": "gui",
+                        "is_body_palace": false,
+                        "major_stars": [
+                          {
+                            "name": "tianliangMaj",
+                            "type": "major",
+                            "scope": "origin",
+                            "brightness": "旺",
+                            "mutagen": null
+                          }
+                        ],
+                        "minor_stars": [
+                          {
+                            "name": "zuofuMin",
+                            "type": "soft",
+                            "scope": "origin",
+                            "brightness": null,
+                            "mutagen": null
+                          },
+                          {
+                            "name": "youbiMin",
+                            "type": "soft",
+                            "scope": "origin",
+                            "brightness": null,
+                            "mutagen": null
+                          },
+                          {
+                            "name": "tianyueMin",
+                            "type": "soft",
+                            "scope": "origin",
+                            "brightness": null,
+                            "mutagen": null
+                          },
+                          {
+                            "name": "tuoluoMin",
+                            "type": "tough",
+                            "scope": "origin",
+                            "brightness": "庙",
+                            "mutagen": null
+                          }
+                        ],
+                        "decadal_nominal_ages": [
+                          56,
+                          65
+                        ],
+                        "related_palace_indices": [
+                          9,
+                          1,
+                          11
+                        ]
+                      },
+                      {
+                        "index": 6,
+                        "name": "wealth",
+                        "key": "wealthPalace",
+                        "branch": "shen",
+                        "stem": "jia",
+                        "is_body_palace": false,
+                        "major_stars": [
+                          {
+                            "name": "qishaMaj",
+                            "type": "major",
+                            "scope": "origin",
+                            "brightness": "庙",
+                            "mutagen": null
+                          }
+                        ],
+                        "minor_stars": [
+                          {
+                            "name": "lucunMin",
+                            "type": "lucun",
+                            "scope": "origin",
+                            "brightness": null,
+                            "mutagen": null
+                          },
+                          {
+                            "name": "tianmaMin",
+                            "type": "tianma",
+                            "scope": "origin",
+                            "brightness": null,
+                            "mutagen": null
+                          },
+                          {
+                            "name": "lingxingMin",
+                            "type": "tough",
+                            "scope": "origin",
+                            "brightness": "陷",
+                            "mutagen": null
+                          }
+                        ],
+                        "decadal_nominal_ages": [
+                          46,
+                          55
+                        ],
+                        "related_palace_indices": [
+                          10,
+                          2,
+                          0
+                        ]
+                      },
+                      {
+                        "index": 7,
+                        "name": "children",
+                        "key": "childrenPalace",
+                        "branch": "you",
+                        "stem": "yi",
+                        "is_body_palace": false,
+                        "major_stars": [
+                          {
+                            "name": "tiantongMaj",
+                            "type": "major",
+                            "scope": "origin",
+                            "brightness": "平",
+                            "mutagen": "忌"
+                          }
+                        ],
+                        "minor_stars": [
+                          {
+                            "name": "wenquMin",
+                            "type": "soft",
+                            "scope": "origin",
+                            "brightness": "庙",
+                            "mutagen": null
+                          },
+                          {
+                            "name": "qingyangMin",
+                            "type": "tough",
+                            "scope": "origin",
+                            "brightness": "陷",
+                            "mutagen": null
+                          }
+                        ],
+                        "decadal_nominal_ages": [
+                          36,
+                          45
+                        ],
+                        "related_palace_indices": [
+                          11,
+                          3,
+                          1
+                        ]
+                      },
+                      {
+                        "index": 8,
+                        "name": "spouse",
+                        "key": "spousePalace",
+                        "branch": "xu",
+                        "stem": "bing",
+                        "is_body_palace": true,
+                        "major_stars": [
+                          {
+                            "name": "wuquMaj",
+                            "type": "major",
+                            "scope": "origin",
+                            "brightness": "庙",
+                            "mutagen": "权"
+                          }
+                        ],
+                        "minor_stars": [],
+                        "decadal_nominal_ages": [
+                          26,
+                          35
+                        ],
+                        "related_palace_indices": [
+                          0,
+                          4,
+                          2
+                        ]
+                      },
+                      {
+                        "index": 9,
+                        "name": "siblings",
+                        "key": "siblingsPalace",
+                        "branch": "hai",
+                        "stem": "ding",
+                        "is_body_palace": false,
+                        "major_stars": [
+                          {
+                            "name": "taiyangMaj",
+                            "type": "major",
+                            "scope": "origin",
+                            "brightness": "陷",
+                            "mutagen": "禄"
+                          }
+                        ],
+                        "minor_stars": [],
+                        "decadal_nominal_ages": [
+                          16,
+                          25
+                        ],
+                        "related_palace_indices": [
+                          1,
+                          5,
+                          3
+                        ]
+                      },
+                      {
+                        "index": 10,
+                        "name": "soul",
+                        "key": "soulPalace",
+                        "branch": "zi",
+                        "stem": "wu",
+                        "is_body_palace": false,
+                        "major_stars": [
+                          {
+                            "name": "pojunMaj",
+                            "type": "major",
+                            "scope": "origin",
+                            "brightness": "庙",
+                            "mutagen": null
+                          }
+                        ],
+                        "minor_stars": [],
+                        "decadal_nominal_ages": [
+                          6,
+                          15
+                        ],
+                        "related_palace_indices": [
+                          2,
+                          6,
+                          4
+                        ]
+                      },
+                      {
+                        "index": 11,
+                        "name": "parents",
+                        "key": "parentsPalace",
+                        "branch": "chou",
+                        "stem": "ji",
+                        "is_body_palace": false,
+                        "major_stars": [
+                          {
+                            "name": "tianjiMaj",
+                            "type": "major",
+                            "scope": "origin",
+                            "brightness": "陷",
+                            "mutagen": null
+                          }
+                        ],
+                        "minor_stars": [
+                          {
+                            "name": "tiankuiMin",
+                            "type": "soft",
+                            "scope": "origin",
+                            "brightness": null,
+                            "mutagen": null
+                          }
+                        ],
+                        "decadal_nominal_ages": [
+                          116,
+                          125
+                        ],
+                        "related_palace_indices": [
+                          3,
+                          7,
+                          5
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "key": "limits",
+                    "valueArray": [
+                      "Natal placements and decadal nominal ages only; no annual/monthly Zi Wei transits computed.",
+                      "Classical reference corpus is Bazi-only; never cite it as a Zi Wei source."
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "key": "sources",
+            "valueMap": [
+              {
+                "key": "bazi_passages",
+                "valueNumber": 44.0
+              },
+              {
+                "key": "bazi_books",
+                "valueNumber": 4.0
+              },
+              {
+                "key": "ziwei_passages",
+                "valueNumber": 0.0
+              }
+            ]
+          }
+        ],
+        "path": "/data/harness"
+      }
+    }
+  },
+  {
+    "run_id": "22222222-2222-2222-2222-222222222222",
+    "fortune_id": "11111111-1111-1111-1111-111111111111",
+    "seq": 15,
+    "payload": {
+      "dataModelUpdate": {
+        "surfaceId": "fortune_main",
+        "contents": [
+          {
             "key": "items",
             "valueArray": [
               {
@@ -1422,7 +1958,7 @@
   {
     "run_id": "22222222-2222-2222-2222-222222222222",
     "fortune_id": "11111111-1111-1111-1111-111111111111",
-    "seq": 15,
+    "seq": 16,
     "payload": {
       "dataModelUpdate": {
         "surfaceId": "fortune_main",
@@ -2283,7 +2819,7 @@
   {
     "run_id": "22222222-2222-2222-2222-222222222222",
     "fortune_id": "11111111-1111-1111-1111-111111111111",
-    "seq": 16,
+    "seq": 17,
     "payload": {
       "dataModelUpdate": {
         "surfaceId": "fortune_main",
@@ -2324,7 +2860,7 @@
   {
     "run_id": "22222222-2222-2222-2222-222222222222",
     "fortune_id": "11111111-1111-1111-1111-111111111111",
-    "seq": 17,
+    "seq": 18,
     "payload": {
       "dataModelUpdate": {
         "surfaceId": "fortune_main",
@@ -2382,7 +2918,7 @@
   {
     "run_id": "22222222-2222-2222-2222-222222222222",
     "fortune_id": "11111111-1111-1111-1111-111111111111",
-    "seq": 18,
+    "seq": 19,
     "payload": {
       "dataModelUpdate": {
         "surfaceId": "fortune_main",
@@ -2519,6 +3055,19 @@
                 "timestamp": "<TIMESTAMP>",
                 "durationMs": 0,
                 "status": "success"
+              },
+              {
+                "stepId": "ts_<HASH>",
+                "stepType": "tool_call",
+                "kind": "tool_call",
+                "agentName": "foundation",
+                "toolName": "compute_ziwei_chart",
+                "label": "Computing Zi Wei Dou Shu",
+                "inputSummary": "",
+                "outputSummary": "status=computed palaces=12",
+                "timestamp": "<TIMESTAMP>",
+                "durationMs": 0,
+                "status": "success"
               }
             ]
           }
@@ -2530,7 +3079,7 @@
   {
     "run_id": "22222222-2222-2222-2222-222222222222",
     "fortune_id": "11111111-1111-1111-1111-111111111111",
-    "seq": 19,
+    "seq": 20,
     "payload": {
       "dataModelUpdate": {
         "surfaceId": "fortune_main",
@@ -2588,7 +3137,7 @@
   {
     "run_id": "22222222-2222-2222-2222-222222222222",
     "fortune_id": "11111111-1111-1111-1111-111111111111",
-    "seq": 20,
+    "seq": 21,
     "payload": {
       "dataModelUpdate": {
         "surfaceId": "fortune_main",
@@ -2646,7 +3195,7 @@
   {
     "run_id": "22222222-2222-2222-2222-222222222222",
     "fortune_id": "11111111-1111-1111-1111-111111111111",
-    "seq": 21,
+    "seq": 22,
     "payload": {
       "dataModelUpdate": {
         "surfaceId": "fortune_main",
@@ -2704,7 +3253,7 @@
   {
     "run_id": "22222222-2222-2222-2222-222222222222",
     "fortune_id": "11111111-1111-1111-1111-111111111111",
-    "seq": 22,
+    "seq": 23,
     "payload": {
       "dataModelUpdate": {
         "surfaceId": "fortune_main",
@@ -2729,7 +3278,7 @@
   {
     "run_id": "22222222-2222-2222-2222-222222222222",
     "fortune_id": "11111111-1111-1111-1111-111111111111",
-    "seq": 23,
+    "seq": 24,
     "payload": {
       "dataModelUpdate": {
         "surfaceId": "fortune_main",
@@ -2869,6 +3418,19 @@
               },
               {
                 "stepId": "ts_<HASH>",
+                "stepType": "tool_call",
+                "kind": "tool_call",
+                "agentName": "foundation",
+                "toolName": "compute_ziwei_chart",
+                "label": "Computing Zi Wei Dou Shu",
+                "inputSummary": "",
+                "outputSummary": "status=computed palaces=12",
+                "timestamp": "<TIMESTAMP>",
+                "durationMs": 0,
+                "status": "success"
+              },
+              {
+                "stepId": "ts_<HASH>",
                 "stepType": "llm_start",
                 "kind": "llm",
                 "agentName": "narrative",
@@ -2890,7 +3452,7 @@
   {
     "run_id": "22222222-2222-2222-2222-222222222222",
     "fortune_id": "11111111-1111-1111-1111-111111111111",
-    "seq": 24,
+    "seq": 25,
     "payload": {
       "dataModelUpdate": {
         "surfaceId": "fortune_main",
@@ -2948,7 +3510,543 @@
   {
     "run_id": "22222222-2222-2222-2222-222222222222",
     "fortune_id": "11111111-1111-1111-1111-111111111111",
-    "seq": 25,
+    "seq": 26,
+    "payload": {
+      "dataModelUpdate": {
+        "surfaceId": "fortune_main",
+        "contents": [
+          {
+            "key": "charts",
+            "valueMap": [
+              {
+                "key": "personA",
+                "valueMap": [
+                  {
+                    "key": "engine",
+                    "valueString": "iztro-py"
+                  },
+                  {
+                    "key": "version",
+                    "valueString": "0.5.0"
+                  },
+                  {
+                    "key": "conventions",
+                    "valueMap": [
+                      {
+                        "key": "time",
+                        "valueString": "local civil time; no longitude/true-solar correction"
+                      },
+                      {
+                        "key": "late_zi",
+                        "valueString": "23:00 uses time index 12; early Zi uses index 0"
+                      },
+                      {
+                        "key": "leap_month",
+                        "valueString": "fix_leap=True (library split-month convention)"
+                      },
+                      {
+                        "key": "decadal_age",
+                        "valueString": "traditional nominal age; not birthday age"
+                      }
+                    ]
+                  },
+                  {
+                    "key": "status",
+                    "valueString": "computed"
+                  },
+                  {
+                    "key": "time_index",
+                    "valueNumber": 5.0
+                  },
+                  {
+                    "key": "five_elements_class",
+                    "valueString": "fire 6th"
+                  },
+                  {
+                    "key": "palaces",
+                    "valueArray": [
+                      {
+                        "index": 0,
+                        "name": "spirit",
+                        "key": "spiritPalace",
+                        "branch": "yin",
+                        "stem": "wu",
+                        "is_body_palace": false,
+                        "major_stars": [
+                          {
+                            "name": "ziweiMaj",
+                            "type": "major",
+                            "scope": "origin",
+                            "brightness": "旺",
+                            "mutagen": null
+                          },
+                          {
+                            "name": "tianfuMaj",
+                            "type": "major",
+                            "scope": "origin",
+                            "brightness": "庙",
+                            "mutagen": null
+                          }
+                        ],
+                        "minor_stars": [],
+                        "decadal_nominal_ages": [
+                          106,
+                          115
+                        ],
+                        "related_palace_indices": [
+                          4,
+                          8,
+                          6
+                        ]
+                      },
+                      {
+                        "index": 1,
+                        "name": "property",
+                        "key": "propertyPalace",
+                        "branch": "mao",
+                        "stem": "ji",
+                        "is_body_palace": false,
+                        "major_stars": [
+                          {
+                            "name": "taiyinMaj",
+                            "type": "major",
+                            "scope": "origin",
+                            "brightness": "陷",
+                            "mutagen": "科"
+                          }
+                        ],
+                        "minor_stars": [],
+                        "decadal_nominal_ages": [
+                          96,
+                          105
+                        ],
+                        "related_palace_indices": [
+                          5,
+                          9,
+                          7
+                        ]
+                      },
+                      {
+                        "index": 2,
+                        "name": "career",
+                        "key": "careerPalace",
+                        "branch": "chen",
+                        "stem": "geng",
+                        "is_body_palace": false,
+                        "major_stars": [
+                          {
+                            "name": "tanlangMaj",
+                            "type": "major",
+                            "scope": "origin",
+                            "brightness": "庙",
+                            "mutagen": null
+                          }
+                        ],
+                        "minor_stars": [
+                          {
+                            "name": "dijieMin",
+                            "type": "tough",
+                            "scope": "origin",
+                            "brightness": null,
+                            "mutagen": null
+                          }
+                        ],
+                        "decadal_nominal_ages": [
+                          86,
+                          95
+                        ],
+                        "related_palace_indices": [
+                          6,
+                          10,
+                          8
+                        ]
+                      },
+                      {
+                        "index": 3,
+                        "name": "friends",
+                        "key": "friendsPalace",
+                        "branch": "si",
+                        "stem": "xin",
+                        "is_body_palace": false,
+                        "major_stars": [
+                          {
+                            "name": "jumenMaj",
+                            "type": "major",
+                            "scope": "origin",
+                            "brightness": "旺",
+                            "mutagen": null
+                          }
+                        ],
+                        "minor_stars": [
+                          {
+                            "name": "wenchangMin",
+                            "type": "soft",
+                            "scope": "origin",
+                            "brightness": "庙",
+                            "mutagen": null
+                          }
+                        ],
+                        "decadal_nominal_ages": [
+                          76,
+                          85
+                        ],
+                        "related_palace_indices": [
+                          7,
+                          11,
+                          9
+                        ]
+                      },
+                      {
+                        "index": 4,
+                        "name": "surface",
+                        "key": "surfacePalace",
+                        "branch": "woo",
+                        "stem": "ren",
+                        "is_body_palace": false,
+                        "major_stars": [
+                          {
+                            "name": "lianzhenMaj",
+                            "type": "major",
+                            "scope": "origin",
+                            "brightness": "平",
+                            "mutagen": null
+                          },
+                          {
+                            "name": "tianxiangMaj",
+                            "type": "major",
+                            "scope": "origin",
+                            "brightness": "庙",
+                            "mutagen": null
+                          }
+                        ],
+                        "minor_stars": [
+                          {
+                            "name": "dikongMin",
+                            "type": "tough",
+                            "scope": "origin",
+                            "brightness": null,
+                            "mutagen": null
+                          },
+                          {
+                            "name": "huoxingMin",
+                            "type": "tough",
+                            "scope": "origin",
+                            "brightness": "庙",
+                            "mutagen": null
+                          }
+                        ],
+                        "decadal_nominal_ages": [
+                          66,
+                          75
+                        ],
+                        "related_palace_indices": [
+                          8,
+                          0,
+                          10
+                        ]
+                      },
+                      {
+                        "index": 5,
+                        "name": "health",
+                        "key": "healthPalace",
+                        "branch": "wei",
+                        "stem": "gui",
+                        "is_body_palace": false,
+                        "major_stars": [
+                          {
+                            "name": "tianliangMaj",
+                            "type": "major",
+                            "scope": "origin",
+                            "brightness": "旺",
+                            "mutagen": null
+                          }
+                        ],
+                        "minor_stars": [
+                          {
+                            "name": "zuofuMin",
+                            "type": "soft",
+                            "scope": "origin",
+                            "brightness": null,
+                            "mutagen": null
+                          },
+                          {
+                            "name": "youbiMin",
+                            "type": "soft",
+                            "scope": "origin",
+                            "brightness": null,
+                            "mutagen": null
+                          },
+                          {
+                            "name": "tianyueMin",
+                            "type": "soft",
+                            "scope": "origin",
+                            "brightness": null,
+                            "mutagen": null
+                          },
+                          {
+                            "name": "tuoluoMin",
+                            "type": "tough",
+                            "scope": "origin",
+                            "brightness": "庙",
+                            "mutagen": null
+                          }
+                        ],
+                        "decadal_nominal_ages": [
+                          56,
+                          65
+                        ],
+                        "related_palace_indices": [
+                          9,
+                          1,
+                          11
+                        ]
+                      },
+                      {
+                        "index": 6,
+                        "name": "wealth",
+                        "key": "wealthPalace",
+                        "branch": "shen",
+                        "stem": "jia",
+                        "is_body_palace": false,
+                        "major_stars": [
+                          {
+                            "name": "qishaMaj",
+                            "type": "major",
+                            "scope": "origin",
+                            "brightness": "庙",
+                            "mutagen": null
+                          }
+                        ],
+                        "minor_stars": [
+                          {
+                            "name": "lucunMin",
+                            "type": "lucun",
+                            "scope": "origin",
+                            "brightness": null,
+                            "mutagen": null
+                          },
+                          {
+                            "name": "tianmaMin",
+                            "type": "tianma",
+                            "scope": "origin",
+                            "brightness": null,
+                            "mutagen": null
+                          },
+                          {
+                            "name": "lingxingMin",
+                            "type": "tough",
+                            "scope": "origin",
+                            "brightness": "陷",
+                            "mutagen": null
+                          }
+                        ],
+                        "decadal_nominal_ages": [
+                          46,
+                          55
+                        ],
+                        "related_palace_indices": [
+                          10,
+                          2,
+                          0
+                        ]
+                      },
+                      {
+                        "index": 7,
+                        "name": "children",
+                        "key": "childrenPalace",
+                        "branch": "you",
+                        "stem": "yi",
+                        "is_body_palace": false,
+                        "major_stars": [
+                          {
+                            "name": "tiantongMaj",
+                            "type": "major",
+                            "scope": "origin",
+                            "brightness": "平",
+                            "mutagen": "忌"
+                          }
+                        ],
+                        "minor_stars": [
+                          {
+                            "name": "wenquMin",
+                            "type": "soft",
+                            "scope": "origin",
+                            "brightness": "庙",
+                            "mutagen": null
+                          },
+                          {
+                            "name": "qingyangMin",
+                            "type": "tough",
+                            "scope": "origin",
+                            "brightness": "陷",
+                            "mutagen": null
+                          }
+                        ],
+                        "decadal_nominal_ages": [
+                          36,
+                          45
+                        ],
+                        "related_palace_indices": [
+                          11,
+                          3,
+                          1
+                        ]
+                      },
+                      {
+                        "index": 8,
+                        "name": "spouse",
+                        "key": "spousePalace",
+                        "branch": "xu",
+                        "stem": "bing",
+                        "is_body_palace": true,
+                        "major_stars": [
+                          {
+                            "name": "wuquMaj",
+                            "type": "major",
+                            "scope": "origin",
+                            "brightness": "庙",
+                            "mutagen": "权"
+                          }
+                        ],
+                        "minor_stars": [],
+                        "decadal_nominal_ages": [
+                          26,
+                          35
+                        ],
+                        "related_palace_indices": [
+                          0,
+                          4,
+                          2
+                        ]
+                      },
+                      {
+                        "index": 9,
+                        "name": "siblings",
+                        "key": "siblingsPalace",
+                        "branch": "hai",
+                        "stem": "ding",
+                        "is_body_palace": false,
+                        "major_stars": [
+                          {
+                            "name": "taiyangMaj",
+                            "type": "major",
+                            "scope": "origin",
+                            "brightness": "陷",
+                            "mutagen": "禄"
+                          }
+                        ],
+                        "minor_stars": [],
+                        "decadal_nominal_ages": [
+                          16,
+                          25
+                        ],
+                        "related_palace_indices": [
+                          1,
+                          5,
+                          3
+                        ]
+                      },
+                      {
+                        "index": 10,
+                        "name": "soul",
+                        "key": "soulPalace",
+                        "branch": "zi",
+                        "stem": "wu",
+                        "is_body_palace": false,
+                        "major_stars": [
+                          {
+                            "name": "pojunMaj",
+                            "type": "major",
+                            "scope": "origin",
+                            "brightness": "庙",
+                            "mutagen": null
+                          }
+                        ],
+                        "minor_stars": [],
+                        "decadal_nominal_ages": [
+                          6,
+                          15
+                        ],
+                        "related_palace_indices": [
+                          2,
+                          6,
+                          4
+                        ]
+                      },
+                      {
+                        "index": 11,
+                        "name": "parents",
+                        "key": "parentsPalace",
+                        "branch": "chou",
+                        "stem": "ji",
+                        "is_body_palace": false,
+                        "major_stars": [
+                          {
+                            "name": "tianjiMaj",
+                            "type": "major",
+                            "scope": "origin",
+                            "brightness": "陷",
+                            "mutagen": null
+                          }
+                        ],
+                        "minor_stars": [
+                          {
+                            "name": "tiankuiMin",
+                            "type": "soft",
+                            "scope": "origin",
+                            "brightness": null,
+                            "mutagen": null
+                          }
+                        ],
+                        "decadal_nominal_ages": [
+                          116,
+                          125
+                        ],
+                        "related_palace_indices": [
+                          3,
+                          7,
+                          5
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "key": "limits",
+                    "valueArray": [
+                      "Natal placements and decadal nominal ages only; no annual/monthly Zi Wei transits computed.",
+                      "Classical reference corpus is Bazi-only; never cite it as a Zi Wei source."
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "key": "sources",
+            "valueMap": [
+              {
+                "key": "bazi_passages",
+                "valueNumber": 44.0
+              },
+              {
+                "key": "bazi_books",
+                "valueNumber": 4.0
+              },
+              {
+                "key": "ziwei_passages",
+                "valueNumber": 0.0
+              }
+            ]
+          }
+        ],
+        "path": "/data/harness"
+      }
+    }
+  },
+  {
+    "run_id": "22222222-2222-2222-2222-222222222222",
+    "fortune_id": "11111111-1111-1111-1111-111111111111",
+    "seq": 27,
     "payload": {
       "dataModelUpdate": {
         "surfaceId": "fortune_main",
@@ -3006,7 +4104,7 @@
   {
     "run_id": "22222222-2222-2222-2222-222222222222",
     "fortune_id": "11111111-1111-1111-1111-111111111111",
-    "seq": 26,
+    "seq": 28,
     "payload": {
       "dataModelUpdate": {
         "surfaceId": "fortune_main",
@@ -3070,7 +4168,7 @@
   {
     "run_id": "22222222-2222-2222-2222-222222222222",
     "fortune_id": "11111111-1111-1111-1111-111111111111",
-    "seq": 27,
+    "seq": 29,
     "payload": {
       "dataModelUpdate": {
         "surfaceId": "fortune_main",
@@ -3095,7 +4193,7 @@
   {
     "run_id": "22222222-2222-2222-2222-222222222222",
     "fortune_id": "11111111-1111-1111-1111-111111111111",
-    "seq": 28,
+    "seq": 30,
     "payload": {
       "dataModelUpdate": {
         "surfaceId": "fortune_main",
@@ -3153,7 +4251,7 @@
   {
     "run_id": "22222222-2222-2222-2222-222222222222",
     "fortune_id": "11111111-1111-1111-1111-111111111111",
-    "seq": 29,
+    "seq": 31,
     "payload": {
       "dataModelUpdate": {
         "surfaceId": "fortune_main",
@@ -3211,7 +4309,7 @@
   {
     "run_id": "22222222-2222-2222-2222-222222222222",
     "fortune_id": "11111111-1111-1111-1111-111111111111",
-    "seq": 30,
+    "seq": 32,
     "payload": {
       "dataModelUpdate": {
         "surfaceId": "fortune_main",
@@ -3253,7 +4351,7 @@
   {
     "run_id": "22222222-2222-2222-2222-222222222222",
     "fortune_id": "11111111-1111-1111-1111-111111111111",
-    "seq": 31,
+    "seq": 33,
     "payload": {
       "dataModelUpdate": {
         "surfaceId": "fortune_main",
@@ -3387,6 +4485,19 @@
                 "label": "Consulting Classical Texts",
                 "inputSummary": "query: general",
                 "outputSummary": "4 passages matched",
+                "timestamp": "<TIMESTAMP>",
+                "durationMs": 0,
+                "status": "success"
+              },
+              {
+                "stepId": "ts_<HASH>",
+                "stepType": "tool_call",
+                "kind": "tool_call",
+                "agentName": "foundation",
+                "toolName": "compute_ziwei_chart",
+                "label": "Computing Zi Wei Dou Shu",
+                "inputSummary": "",
+                "outputSummary": "status=computed palaces=12",
                 "timestamp": "<TIMESTAMP>",
                 "durationMs": 0,
                 "status": "success"
@@ -3453,7 +4564,7 @@
   {
     "run_id": "22222222-2222-2222-2222-222222222222",
     "fortune_id": "11111111-1111-1111-1111-111111111111",
-    "seq": 32,
+    "seq": 34,
     "payload": {
       "dataModelUpdate": {
         "surfaceId": "fortune_main",
@@ -3464,7 +4575,7 @@
           },
           {
             "key": "toolCallCount",
-            "valueNumber": 10.0
+            "valueNumber": 11.0
           },
           {
             "key": "llmCallCount",
@@ -3472,7 +4583,7 @@
           },
           {
             "key": "stepCount",
-            "valueNumber": 14.0
+            "valueNumber": 15.0
           }
         ],
         "path": "/data/trace/summary"
@@ -3482,7 +4593,7 @@
   {
     "run_id": "22222222-2222-2222-2222-222222222222",
     "fortune_id": "11111111-1111-1111-1111-111111111111",
-    "seq": 33,
+    "seq": 35,
     "payload": {
       "dataModelUpdate": {
         "surfaceId": "fortune_main",
@@ -3499,7 +4610,7 @@
   {
     "run_id": "22222222-2222-2222-2222-222222222222",
     "fortune_id": "11111111-1111-1111-1111-111111111111",
-    "seq": 34,
+    "seq": 36,
     "payload": {
       "audit": {
         "event": "stream_complete",
@@ -3511,7 +4622,7 @@
   {
     "run_id": "22222222-2222-2222-2222-222222222222",
     "fortune_id": "11111111-1111-1111-1111-111111111111",
-    "seq": 35,
+    "seq": 37,
     "payload": {
       "done": true
     }

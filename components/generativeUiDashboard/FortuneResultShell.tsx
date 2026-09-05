@@ -4,7 +4,7 @@
  */
 import React, { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence } from 'framer-motion';
-import { useLocation, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useShallow } from 'zustand/react/shallow';
 import {
   FortuneAgentResultShell,
@@ -17,6 +17,8 @@ import { GlassBoxPanel } from './fortune/shared/GlassBoxPanel';
 import { MemoryPanel } from './fortune/shared/MemoryPanel';
 import { AskTab } from './fortune/shared/AskTab';
 import { WhyTab } from './fortune/shared/WhyTab';
+import { HarnessView } from './fortune/shared/HarnessView';
+import { ReadingErrorCard } from './fortune/shared/ReadingErrorCard';
 import { FLOW_ACCENTS } from './fortune/designTokens';
 import {
   FORTUNE_RESULT_CONFIG,
@@ -25,6 +27,7 @@ import {
   readModelId,
   shortFortuneId,
 } from './fortune/shell/resultConfig';
+import { detectReadingFailure } from './fortune/shell/readingStatus';
 import type { CanonicalFortuneFunction } from '../../lib/fortuneRoutes';
 import type { AskContext, AskSectionId } from './lib/fortuneTypes';
 
@@ -42,40 +45,67 @@ export interface FortuneResultShellProps {
   onBack?: () => void;
 }
 
-function renderFunctionTab(
-  functionId: CanonicalFortuneFunction,
-  activeTab: string,
-  isReplay: boolean,
-  question?: string,
-  askContext?: AskContext,
-  askReady?: boolean,
-): React.ReactNode {
+interface FunctionTabProps {
+  functionId: CanonicalFortuneFunction;
+  activeTab: string;
+  isReplay: boolean;
+  failed: boolean;
+  question?: string;
+  askContext?: AskContext;
+  askReady?: boolean;
+  askDisabledReason?: string;
+}
+
+function renderFunctionTab({
+  functionId,
+  activeTab,
+  isReplay,
+  failed,
+  question,
+  askContext,
+  askReady,
+  askDisabledReason,
+}: FunctionTabProps): React.ReactNode {
+  if (failed && activeTab === FORTUNE_RESULT_CONFIG[functionId].defaultTab) return null;
+  const ask = (id: CanonicalFortuneFunction) => (
+    <AskTab
+      functionId={id}
+      question={id === 'wish' ? question : undefined}
+      context={askContext}
+      ready={askReady}
+      disabledReason={askDisabledReason}
+    />
+  );
+  if (activeTab === 'Why') return (
+    <HarnessView accent={FLOW_ACCENTS[FORTUNE_RESULT_CONFIG[functionId].sessionFunctionId].primary}>
+      <WhyTab functionId={functionId} isReplay={isReplay} />
+    </HarnessView>
+  );
   if (functionId === 'wish') {
-    if (activeTab === 'Verdict') return <VerdictTab isReplay={isReplay} question={question} />;
+    if (activeTab === 'Verdict') return <VerdictTab isReplay={isReplay} failed={failed} />;
     if (activeTab === 'Anchor') return <AnchorTab isReplay={isReplay} />;
-    if (activeTab === 'Why') return <WhyTab functionId="wish" isReplay={isReplay} />;
-    if (activeTab === 'Ask') return <AskTab functionId="wish" question={question} context={askContext} ready={askReady} />;
+    if (activeTab === 'Ask') return ask('wish');
   }
   if (functionId === 'cycle') {
     if (activeTab === 'Now') return <NowTab isReplay={isReplay} />;
     if (activeTab === 'Timeline') return <TimelineTab isReplay={isReplay} />;
-    if (activeTab === 'Why') return <WhyTab functionId="cycle" isReplay={isReplay} />;
-    if (activeTab === 'Ask') return <AskTab functionId="cycle" context={askContext} ready={askReady} />;
+    if (activeTab === 'Ask') return ask('cycle');
   }
   if (functionId === 'compatibility') {
     if (activeTab === 'Overview') return <OverviewTab isReplay={isReplay} />;
     if (activeTab === 'Pillars') return <PillarsTab isReplay={isReplay} />;
-    if (activeTab === 'Why') return <WhyTab functionId="compatibility" isReplay={isReplay} />;
-    if (activeTab === 'Ask') return <AskTab functionId="compatibility" context={askContext} ready={askReady} />;
+    if (activeTab === 'Ask') return ask('compatibility');
   }
   if (functionId === 'occasion') {
     if (activeTab === 'TopPicks') return <TopPicksTab isReplay={isReplay} />;
     if (activeTab === 'Calendar') return <CalendarTab isReplay={isReplay} />;
-    if (activeTab === 'Why') return <WhyTab functionId="occasion" isReplay={isReplay} />;
-    if (activeTab === 'Ask') return <AskTab functionId="occasion" context={askContext} ready={askReady} />;
+    if (activeTab === 'Ask') return ask('occasion');
   }
   return null;
 }
+
+/** Explorer selection is only meaningful inside Why; drop it when leaving. */
+const EXPLORER_PARAMS = ['view', 'finding', 'palace', 'person'] as const;
 
 const TAB_SECTION_IDS: Record<string, AskSectionId> = {
   Verdict: 'verdict',
@@ -106,12 +136,10 @@ function useIsLg(): boolean {
 function resolveRunState(opts: {
   isReplay: boolean;
   status: string;
-  guardrailSeverity?: string | null;
+  failureKind?: 'failed' | 'rejected' | null;
 }): ShellRunState {
-  const sev = (opts.guardrailSeverity || '').toLowerCase();
-  if (sev === 'error' || sev === 'failed' || sev === 'reject' || sev === 'rejected') {
-    return 'guardrail_failed';
-  }
+  if (opts.failureKind === 'rejected') return 'guardrail_failed';
+  if (opts.failureKind === 'failed') return 'failed';
   if (opts.isReplay && opts.status !== 'streaming' && opts.status !== 'loading') {
     return 'replay';
   }
@@ -127,6 +155,7 @@ export const FortuneResultShell: React.FC<FortuneResultShellProps> = ({
 }) => {
   const config = FORTUNE_RESULT_CONFIG[functionId];
   const { state } = useLocation();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedTab = searchParams.get('tab');
   const initialTab = config.tabs.some((tab) => tab.id === requestedTab)
@@ -152,6 +181,11 @@ export const FortuneResultShell: React.FC<FortuneResultShellProps> = ({
     const next = new URLSearchParams(searchParams);
     if (tabId === config.defaultTab) next.delete('tab');
     else next.set('tab', tabId);
+    // Leaving Why drops the explorer selection so returning later doesn't
+    // reopen a stale finding/palace for a different part of the reading.
+    if (activeTab === 'Why' && tabId !== 'Why') {
+      EXPLORER_PARAMS.forEach((key) => next.delete(key));
+    }
     setSearchParams(next, { replace: true });
   };
 
@@ -184,11 +218,15 @@ export const FortuneResultShell: React.FC<FortuneResultShellProps> = ({
       ? `${config.cjkTitle} · ${config.functionLabel} — ${occasionType}`
       : `${config.cjkTitle} · ${config.functionLabel}`;
 
-  const guardrail = dataModel?.guardrail;
+  const failure = useMemo(
+    () => detectReadingFailure({ status, dataModel, sessionError: error }),
+    [status, dataModel, error],
+  );
+  const failed = !!failure;
   const runState = resolveRunState({
     isReplay,
     status,
-    guardrailSeverity: guardrail?.severity || guardrail?.level || null,
+    failureKind: failure?.kind ?? null,
   });
 
   const statusPath = `fortune://${config.canonicalId}/${shortFortuneId(fortuneId)}`;
@@ -197,34 +235,44 @@ export const FortuneResultShell: React.FC<FortuneResultShellProps> = ({
     sectionId: TAB_SECTION_IDS[lastContentTab] || TAB_SECTION_IDS[config.defaultTab],
     sectionLabel: config.tabs.find((tab) => tab.id === lastContentTab)?.label || lastContentTab,
   };
-  const askReady = status === 'complete';
+  const askReady = status === 'complete' && !failed;
+  const askDisabledReason = failed
+    ? 'This reading did not finish, so follow-up questions are unavailable.'
+    : undefined;
 
+  // A failed run is terminal: no pause affordance, no spinner, no "in progress".
   const pauseBar =
-    status === 'streaming' ? (
+    status === 'streaming' && !failed ? (
       <div className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2">
         <span className="text-[11px] text-slate-400">Reading in progress…</span>
         <button
           type="button"
           onClick={cancel}
           disabled={pausing}
-          className="text-[11px] font-semibold text-slate-300 hover:text-white disabled:opacity-50"
+          className="min-h-11 text-[11px] font-semibold text-slate-300 hover:text-white disabled:opacity-50"
         >
           {pausing ? 'Pausing…' : 'Pause'}
         </button>
       </div>
     ) : null;
 
-  // Single GlassBox instance — rail on ≥lg, inline drawer below.
-  const glass = !error ? (
+  const restart = () => navigate(config.baseRoute, { state: null });
+
+  const errorCard = failure ? (
+    <ReadingErrorCard
+      failure={failure}
+      onRestart={restart}
+      hasPartialContent={!!dataModel?.harness?.charts?.personA || !!dataModel?.pillars}
+    />
+  ) : null;
+
+  // Single GlassBox instance — rail on ≥lg, below the reading on mobile.
+  const glass = (
     <div className="space-y-3">
       <GlassBoxPanel accent={accent.primary} variant={isLg ? 'rail' : 'inline'} />
       <MemoryPanel />
-      {pauseBar}
     </div>
-  ) : null;
-
-  const mobileChrome = isLg ? null : glass;
-  const rail = isLg ? glass : null;
+  );
 
   return (
     <FortuneAgentResultShell
@@ -232,9 +280,9 @@ export const FortuneResultShell: React.FC<FortuneResultShellProps> = ({
       accentPrimary={accent.primary}
       glyph={config.glyph}
       kicker={kicker}
-      headline={headline}
+      headline={failed && !dataModel?.narrative?.tldr ? 'Reading not completed' : headline}
       contextLine={contextLine}
-      kpis={kpis}
+      kpis={failed ? [] : kpis}
       statusPath={statusPath}
       modelId={modelId}
       runState={runState}
@@ -242,17 +290,17 @@ export const FortuneResultShell: React.FC<FortuneResultShellProps> = ({
       activeTabId={activeTab}
       onTabChange={handleTabChange}
       onBack={onBack}
-      rail={rail}
-      mobileChrome={mobileChrome}
-    >
-      {error && (
-        <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-4 text-center text-sm text-red-400">
-          {error}
+      rail={isLg ? glass : null}
+      mobileChrome={pauseBar || errorCard ? (
+        <div className="space-y-3">
+          {errorCard}
+          {pauseBar}
         </div>
-      )}
-
-      {status === 'loading' && !session.dataModel && (
-        <div className="flex flex-col items-center gap-3 py-12">
+      ) : null}
+      telemetry={isLg ? null : glass}
+    >
+      {status === 'loading' && !session.dataModel && !failed && (
+        <div className="flex flex-col items-center gap-3 py-10">
           <div
             className={`h-8 w-8 animate-spin rounded-full border-2 ${config.spinnerClass}`}
           />
@@ -260,16 +308,19 @@ export const FortuneResultShell: React.FC<FortuneResultShellProps> = ({
         </div>
       )}
 
-      {(status !== 'loading' || session.dataModel) && !error && (
+      {/* A failure with nothing saved shows only the recovery card. */}
+      {(status !== 'loading' || session.dataModel) && (!failed || !!session.dataModel) && (
         <AnimatePresence mode="wait">
-          {renderFunctionTab(
+          {renderFunctionTab({
             functionId,
             activeTab,
             isReplay,
+            failed,
             question,
             askContext,
             askReady,
-          )}
+            askDisabledReason,
+          })}
         </AnimatePresence>
       )}
     </FortuneAgentResultShell>

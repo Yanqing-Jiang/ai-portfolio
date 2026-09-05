@@ -1,8 +1,8 @@
 import React from 'react';
 import { motion } from 'framer-motion';
 import type { Retrodiction } from '../../lib/fortuneTypes';
-import { scoreColor } from '../designTokens';
 import { staggerItem, pickVariants } from '../animations';
+import { supportBand } from './outlook';
 
 interface YearPredictionBarProps {
   item: Retrodiction;
@@ -15,8 +15,8 @@ export const YearPredictionBar: React.FC<YearPredictionBarProps> = ({
   accentColor = '#14b8a6',
   isReplay = false,
 }) => {
-  const pct = Math.min(Math.max(item.confidence * 100, 0), 100);
-  const color = scoreColor(pct);
+  const band = supportBand(item.confidence);
+  const pct = band.percent;
 
   return (
     <motion.div
@@ -25,8 +25,8 @@ export const YearPredictionBar: React.FC<YearPredictionBarProps> = ({
     >
       <div className="flex items-center justify-between mb-1">
         <span className="text-xs font-semibold text-slate-200">{item.year}</span>
-        <span className={`text-[10px] font-medium ${color}`}>
-          {Math.round(pct)}%
+        <span className="text-[10px] uppercase tracking-wide text-slate-500">
+          {band.label}
         </span>
       </div>
       <p className="text-[11px] leading-relaxed text-slate-400 mb-2">{item.prediction}</p>

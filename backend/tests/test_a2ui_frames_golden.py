@@ -181,7 +181,7 @@ def _scrub_volatile(node: Any) -> None:
         _scrub_volatile(value)
 
 
-async def _collect_pipeline_frames() -> list[dict[str, Any]]:
+async def _collect_pipeline_frames(narrative=None) -> list[dict[str, Any]]:
     reset_run_state_for_tests()
     store = get_run_state()
     session = FortuneSession(
@@ -200,7 +200,7 @@ async def _collect_pipeline_frames() -> list[dict[str, Any]]:
     )
     await store.put(session)
 
-    narrative = _fixed_narrative()
+    narrative = narrative or _fixed_narrative()
     guardrail = _fixed_guardrail()
 
     fake_repo = MagicMock()
@@ -256,3 +256,16 @@ async def test_pipeline_frame_envelope_shape():
     for i, env in enumerate(frames, start=1):
         assert set(env.keys()) >= {"run_id", "fortune_id", "seq", "payload"}
         assert env["seq"] == i or isinstance(env["seq"], int)
+
+
+@pytest.mark.asyncio
+async def test_streamed_writer_cannot_publish_a_year_outside_computed_horizon():
+    from fortune.agents import YearPrediction
+    narrative = _fixed_narrative()
+    narrative.year_predictions = [YearPrediction(year=2099, prediction="Unsupported event.", confidence=0.99)]
+    frames = await _collect_pipeline_frames(narrative)
+    updates = [(frame.get("payload") or {}).get("dataModelUpdate") or {} for frame in frames]
+    narratives = [update for update in updates if update.get("path") == "/data/narrative"]
+    assert narratives
+    assert "Unsupported event." not in json.dumps(narratives)
+    assert "2099" not in json.dumps(narratives)

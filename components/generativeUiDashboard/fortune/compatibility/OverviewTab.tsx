@@ -1,21 +1,27 @@
-import React, { useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import React, { useMemo } from 'react';
+import { motion } from 'framer-motion';
 import { useShallow } from 'zustand/react/shallow';
-import { ChevronDown, ArrowDown, ShieldCheck, AlertCircle } from 'lucide-react';
+import { ArrowDown, ShieldCheck, AlertCircle } from 'lucide-react';
 import { useFortuneStore } from '../../stores/fortuneStore';
 import { DualRingGauge, StreamingText, GuardrailBanner } from '../shared';
+import { OutlookSection } from '../shared/OutlookSection';
+import { buildOutlook } from '../shared/outlook';
 import { FLOW_ACCENTS, OBSERVATORY_SERIF, OBSERVATORY_MONO, observatoryAccent } from '../designTokens';
-import { tabContentVariants, slideDown } from '../animations';
+import { tabContentVariants } from '../animations';
 
 const ACCENT = FLOW_ACCENTS.compatibility;
 
 export const OverviewTab: React.FC<{ isReplay?: boolean }> = ({ isReplay = false }) => {
   const { dataModel } = useFortuneStore(useShallow((s) => ({ dataModel: s.dataModel })));
-  const [expandedIndex, setExpandedIndex] = useState<string | null>(null);
 
   const compat = dataModel?.compatibility;
   const overview = compat?.overview;
   const guardrail = dataModel?.guardrail;
+  // Birthday ages in the brief are Person A's; say so rather than leaving it open.
+  const outlook = useMemo(
+    () => buildOutlook(dataModel, { personLabel: compat?.personA?.name || 'Person A' }),
+    [dataModel, compat?.personA?.name],
+  );
 
   if (!overview) return null;
 
@@ -103,13 +109,7 @@ export const OverviewTab: React.FC<{ isReplay?: boolean }> = ({ isReplay = false
                 <span className="text-[10px] font-bold uppercase tracking-tighter text-green-400/80">Strengths</span>
               </div>
               {overview.strengths.map((s, i) => (
-                <SplitItem
-                  key={`s-${i}`}
-                  label={s}
-                  type="strength"
-                  isExpanded={expandedIndex === `s-${i}`}
-                  onToggle={() => setExpandedIndex(expandedIndex === `s-${i}` ? null : `s-${i}`)}
-                />
+                <SplitItem key={`s-${i}`} label={s} type="strength" />
               ))}
             </div>
 
@@ -120,64 +120,35 @@ export const OverviewTab: React.FC<{ isReplay?: boolean }> = ({ isReplay = false
                 <AlertCircle size={12} className="text-rose-400" />
               </div>
               {overview.frictions.map((f, i) => (
-                <SplitItem
-                  key={`f-${i}`}
-                  label={f}
-                  type="friction"
-                  isExpanded={expandedIndex === `f-${i}`}
-                  onToggle={() => setExpandedIndex(expandedIndex === `f-${i}` ? null : `f-${i}`)}
-                />
+                <SplitItem key={`f-${i}`} label={f} type="friction" />
               ))}
             </div>
           </div>
         </div>
       </div>
 
+      <OutlookSection entries={outlook} accentColor={ACCENT.primary} isReplay={isReplay} />
+
       {guardrail && <GuardrailBanner guardrail={guardrail} />}
     </motion.div>
   );
 };
 
+/** Plain list item: these labels carry no stored detail, so nothing expands. */
 const SplitItem: React.FC<{
   label: string;
   type: 'strength' | 'friction';
-  isExpanded: boolean;
-  onToggle: () => void;
-}> = ({ label, type, isExpanded, onToggle }) => {
+}> = ({ label, type }) => {
   const isStrength = type === 'strength';
   return (
-    <div className="relative">
-      <button
-        onClick={onToggle}
-        className={`w-full p-3 text-left rounded-xl transition-all duration-300 ${
-          isExpanded
-            ? (isStrength ? 'bg-green-500/20' : 'bg-rose-500/20')
-            : 'bg-white/5 hover:bg-white/10'
+    <div className="rounded-xl bg-white/5 p-3">
+      <span
+        className={`text-[11px] font-medium leading-tight ${
+          isStrength ? 'text-green-100' : 'text-rose-100'
         }`}
       >
-        <div className="flex items-center justify-between gap-2">
-          <span className={`text-[11px] font-medium leading-tight ${isStrength ? 'text-green-100' : 'text-rose-100'}`}>
-            {label}
-          </span>
-          <ChevronDown
-            size={10}
-            className={`transition-transform duration-300 ${isExpanded ? 'rotate-180' : ''} ${isStrength ? 'text-green-500' : 'text-rose-500'}`}
-          />
-        </div>
-        <AnimatePresence>
-          {isExpanded && (
-            <motion.div
-              variants={slideDown}
-              initial="hidden"
-              animate="visible"
-              exit="hidden"
-              className="mt-2 text-[10px] text-slate-400 leading-normal border-t border-white/5 pt-2"
-            >
-              The {label.toLowerCase()} indicates a positive flow of {isStrength ? 'supportive' : 'clashing'} energy between your charts.
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </button>
+        {label}
+      </span>
     </div>
   );
 };

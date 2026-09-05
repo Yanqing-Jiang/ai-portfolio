@@ -83,6 +83,9 @@ def _snapshot_pillars(session: FortuneSession, foundation: dict[str, Any]) -> di
     payload = {
         "pillars": _to_jsonable(foundation.get("pillars")),
         "elements": _to_jsonable(foundation.get("elements")),
+        "ziwei": _to_jsonable(foundation.get("ziwei")),
+        "birth_year": foundation.get("birth_year"),
+        "reading_brief": _to_jsonable(foundation.get("reading_brief")),
     }
     person_b = foundation.get("person_b")
     if person_b:
@@ -90,6 +93,8 @@ def _snapshot_pillars(session: FortuneSession, foundation: dict[str, Any]) -> di
         payload["person_b"] = {
             "pillars": _to_jsonable(person_b.get("pillars")),
             "elements": _to_jsonable(person_b.get("elements")),
+            "ziwei": _to_jsonable(person_b.get("ziwei")),
+            "birth_year": person_b.get("birth_year"),
             "mechanics": _snapshot_mechanics(session, analysis_b),
         }
     if get_settings().snapshot_schema_versions_enabled:

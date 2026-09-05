@@ -85,6 +85,16 @@ Refine or qualify earlier claims; do not silently contradict them. Ground every
 answer in specific computed stems/elements/animals, ten gods, seasonal strength,
 or branch interactions from the foundation.
 
+Use the stored reading_brief and computed Zi Wei chart when present. Legacy
+readings without Zi Wei data cannot support palace/star claims. Keep the two
+systems' evidence distinct and preserve disagreement. No invented chart facts.
+Main prose must describe life opportunities, possible turning points and actions,
+not technical terms. Lead with supported years/ages when relevant, using only
+stored age_at_birthday values (Person A; age turning during each calendar year).
+Do not infer an exact event, new age, or unsupported timing from nominal Zi Wei ages.
+Technical terms belong only in a requested explanation of the chart or sources.
+Do not present a past prediction as an observed fact about the user's life.
+
 Write English only, at an 8th-grade reading level. Never emit CJK characters.
 Use English BaZi terms (Day Master, Direct Officer, Seven Killings, Direct or
 Indirect Wealth/Resource, Eating God, Hurt Officer, Rob Wealth; Wood, Fire,
@@ -296,6 +306,6 @@ async def run_triage(
             ASK_AGENT, max_turns=NARRATIVE_MAX_TURNS, **kwargs,
         )
         sh.attach_result(result)
-    if isinstance(result.final_output, EnrichedNarrativeOutput):
-        return result.final_output
-    return EnrichedNarrativeOutput.model_validate(result.final_output)
+    from .insight_harness import validate_narrative_years
+    narrative = EnrichedNarrativeOutput.model_validate(result.final_output)
+    return validate_narrative_years(ctx, foundation, narrative)

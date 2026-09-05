@@ -560,6 +560,8 @@ describe('fortune Ask state', () => {
     );
     act(() => useFortuneStore.getState().setFortune('fortune-a', 'run-a'));
     render(<GlassBoxPanel />);
+    // The trace only loads once the drawer is opened.
+    fireEvent.click(screen.getByRole('button', { expanded: false }));
 
     await waitFor(() => expect(getTrace).toHaveBeenCalledOnce());
     act(() => useFortuneStore.getState().beginAsk({

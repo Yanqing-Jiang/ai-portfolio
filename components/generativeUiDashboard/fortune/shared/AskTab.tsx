@@ -97,9 +97,17 @@ export interface AskTabProps {
   question?: string;
   context?: AskContext;
   ready?: boolean;
+  /** Overrides the default "not ready yet" copy, e.g. after a failed run. */
+  disabledReason?: string;
 }
 
-export const AskTab: React.FC<AskTabProps> = ({ functionId, question, context, ready = false }) => {
+export const AskTab: React.FC<AskTabProps> = ({
+  functionId,
+  question,
+  context,
+  ready = false,
+  disabledReason,
+}) => {
   const sessionId = SESSION_ID[functionId];
   const accent = FLOW_ACCENTS[sessionId];
   const header = HEADERS[functionId];
@@ -173,7 +181,11 @@ export const AskTab: React.FC<AskTabProps> = ({ functionId, question, context, r
         isLoading={loading}
         memoryDegraded={memoryDegraded}
         disabled={!fortuneId || !ready}
-        disabledReason={!ready ? 'Ask becomes available when the reading is complete.' : undefined}
+        disabledReason={
+          ready
+            ? undefined
+            : disabledReason || 'Ask becomes available when the reading is complete.'
+        }
         contextLabel={context?.sectionLabel}
       />
     </div>

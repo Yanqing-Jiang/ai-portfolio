@@ -145,9 +145,12 @@ export const OBS_KPI_LABEL =
 export const OBS_QUIET_CARD =
   'flex items-center gap-4 rounded-2xl border border-white/[0.08] bg-white/[0.02] p-4';
 
-/** Pill tab base — mock A `.tab` */
+/**
+ * Tab base — icon-led 44px segment on mobile, mock A `.tab` pill from sm up.
+ * Padding lives here so callers never have to override a conflicting utility.
+ */
 export const OBS_TAB =
-  'relative rounded-full border border-transparent px-4 py-2.5 font-mono text-[11px] font-semibold uppercase tracking-[0.15em] text-[#8a8f98] transition-colors';
+  'relative flex min-h-11 flex-col items-center justify-center gap-1 rounded-xl border border-transparent px-1.5 py-2 font-mono text-[10px] font-semibold uppercase tracking-[0.08em] text-[#8a8f98] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 sm:flex-row sm:gap-2 sm:rounded-full sm:px-4 sm:py-2.5 sm:text-[11px] sm:tracking-[0.15em]';
 
 /** Ledger / execution-trace mono strip */
 export const OBS_LEDGER =

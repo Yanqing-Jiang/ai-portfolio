@@ -35,6 +35,7 @@ import {
     Target,
 } from 'lucide-react';
 import { CITATION_GOLD, GLASS } from '../designTokens';
+import { supportBand } from './outlook';
 import type { AskContext } from '../../lib/fortuneTypes';
 
 // ---------------------------------------------------------------------------
@@ -373,7 +374,7 @@ const AgentBubble: React.FC<AgentBubbleProps> = ({
                                         </span>
                                         {typeof yp.confidence === 'number' && (
                                             <span className="text-[10px] text-slate-500">
-                                                {Math.round(yp.confidence * 100)}%
+                                                {supportBand(yp.confidence).label}
                                             </span>
                                         )}
                                     </div>

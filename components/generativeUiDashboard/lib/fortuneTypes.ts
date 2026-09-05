@@ -160,6 +160,16 @@ export interface AskTurn {
 // ---------------------------------------------------------------------------
 
 export interface FortuneDataModel {
+  harness?: {
+    sources?: { bazi_passages: number; bazi_books: number; ziwei_passages: number };
+    charts?: { personA?: ZiweiChart | null; personB?: ZiweiChart | null };
+    brief?: {
+      findings: FortuneFinding[];
+      limitations: string[];
+      withheld_findings?: Array<{ topic: string; reason: string }>;
+      validation?: { status: string; repairs: number; checks: string[] };
+    };
+  };
   meta?: {
     status?: string;
     progress?: { stage?: string; message?: string; percent?: number };
@@ -185,6 +195,48 @@ export interface FortuneDataModel {
   luckCycle?: LuckCycleModel;
   compatibility?: CompatibilityModel;
   occasion?: OccasionModel;
+}
+
+export interface FortuneFinding {
+  topic: string;
+  opportunity: string;
+  risk: string;
+  action: string;
+  alternative: string;
+  technical_basis: string;
+  evidence_paths: string[];
+  agreement: 'bazi_only' | 'ziwei_only' | 'convergent' | 'mixed';
+  start_year: number | null;
+  end_year: number | null;
+  age_at_birthday?: number[] | null;
+}
+
+export interface ZiweiChart {
+  status: 'computed' | 'unavailable';
+  reason?: string;
+  engine: string;
+  version: string;
+  five_elements_class?: string;
+  conventions: Record<string, string>;
+  limits?: string[];
+  palaces: Array<{
+    index: number;
+    key: string;
+    name: string;
+    branch: string;
+    stem: string;
+    is_body_palace: boolean;
+    major_stars: ZiweiStar[];
+    minor_stars: ZiweiStar[];
+    decadal_nominal_ages: number[];
+    related_palace_indices: number[];
+  }>;
+}
+
+export interface ZiweiStar {
+  name: string;
+  brightness: string | null;
+  mutagen: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -337,9 +389,9 @@ export interface Retrodiction {
 export interface GuardrailPayload {
   message: string;
   /** Frontend convention */
-  severity?: 'info' | 'warning' | 'error';
-  /** Backend emits `level` — normalized to `severity` on ingest */
-  level?: 'info' | 'warning' | 'error';
+  severity?: 'info' | 'warning' | 'error' | 'critical';
+  /** Backend emits `level`; readers accept it alongside legacy `severity`. */
+  level?: 'info' | 'warning' | 'error' | 'critical';
 }
 
 // ---------------------------------------------------------------------------

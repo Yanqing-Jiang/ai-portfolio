@@ -2,6 +2,18 @@
  * Per-function result-page config keyed by canonical ids from lib/fortuneRoutes.ts.
  * Phase 5: Observatory chrome metadata + KPI extractors (no new backend fields).
  */
+import {
+  CalendarDays,
+  CalendarRange,
+  Compass,
+  Gauge,
+  HeartHandshake,
+  Layers,
+  MessageCircle,
+  Microscope,
+  Sparkles,
+  Star,
+} from 'lucide-react';
 import type { CanonicalFortuneFunction } from '../../../../lib/fortuneRoutes';
 import { fortuneIntakeRoute } from '../../../../lib/fortuneRoutes';
 import type { FortunePurposeId } from '../../fortuneAgentTheme';
@@ -55,10 +67,10 @@ export const FORTUNE_RESULT_CONFIG: Record<
     cjkTitle: '問卜',
     functionLabel: 'Custom Wish',
     tabs: [
-      { id: 'Verdict', label: 'Verdict' },
-      { id: 'Anchor', label: 'Anchor' },
-      { id: 'Why', label: 'Why' },
-      { id: 'Ask', label: 'Ask' },
+      { id: 'Verdict', label: 'Outlook', icon: Compass },
+      { id: 'Anchor', label: 'Chart', icon: Sparkles },
+      { id: 'Why', label: 'Why', icon: Microscope },
+      { id: 'Ask', label: 'Ask', icon: MessageCircle },
     ],
     defaultTab: 'Verdict',
     loadingMessage: 'Preparing your reading...',
@@ -75,10 +87,10 @@ export const FORTUNE_RESULT_CONFIG: Record<
     cjkTitle: '運勢',
     functionLabel: 'Cycle Reading',
     tabs: [
-      { id: 'Now', label: 'Now' },
-      { id: 'Timeline', label: 'Timeline' },
-      { id: 'Why', label: 'Why' },
-      { id: 'Ask', label: 'Ask' },
+      { id: 'Now', label: 'Now', icon: Gauge },
+      { id: 'Timeline', label: 'Years', icon: CalendarRange },
+      { id: 'Why', label: 'Why', icon: Microscope },
+      { id: 'Ask', label: 'Ask', icon: MessageCircle },
     ],
     defaultTab: 'Now',
     loadingMessage: 'Calculating your cycles...',
@@ -95,10 +107,10 @@ export const FORTUNE_RESULT_CONFIG: Record<
     cjkTitle: '兩命',
     functionLabel: 'Compatibility',
     tabs: [
-      { id: 'Overview', label: 'Overview' },
-      { id: 'Pillars', label: 'Pillars' },
-      { id: 'Why', label: 'Why' },
-      { id: 'Ask', label: 'Ask' },
+      { id: 'Overview', label: 'Match', icon: HeartHandshake },
+      { id: 'Pillars', label: 'Charts', icon: Layers },
+      { id: 'Why', label: 'Why', icon: Microscope },
+      { id: 'Ask', label: 'Ask', icon: MessageCircle },
     ],
     defaultTab: 'Overview',
     loadingMessage: 'Comparing your charts...',
@@ -115,10 +127,10 @@ export const FORTUNE_RESULT_CONFIG: Record<
     cjkTitle: '擇日',
     functionLabel: 'Auspicious Date',
     tabs: [
-      { id: 'TopPicks', label: 'Top Picks' },
-      { id: 'Calendar', label: 'Calendar' },
-      { id: 'Why', label: 'Why' },
-      { id: 'Ask', label: 'Ask' },
+      { id: 'TopPicks', label: 'Best days', icon: Star },
+      { id: 'Calendar', label: 'Calendar', icon: CalendarDays },
+      { id: 'Why', label: 'Why', icon: Microscope },
+      { id: 'Ask', label: 'Ask', icon: MessageCircle },
     ],
     defaultTab: 'TopPicks',
     loadingMessage: 'Finding auspicious dates...',
@@ -135,24 +147,8 @@ function asKpi(model: FortuneDataModel | null | undefined): Record<string, unkno
   return (model?.kpi as Record<string, unknown> | undefined) || {};
 }
 
-const ELEMENT_CJK: Record<string, string> = {
-  Wood: '木',
-  Fire: '火',
-  Earth: '土',
-  Metal: '金',
-  Water: '水',
-};
-
-function dayMasterLabel(model: FortuneDataModel | null | undefined): string {
-  const kpi = asKpi(model);
-  const chinese = kpi.dayMasterChinese as string | undefined;
-  const element = (kpi.dayMasterElement as string | undefined) || '';
-  const latin = (kpi.dayMaster as string | undefined) || model?.pillars?.day?.stem || '';
-  const elCjk = ELEMENT_CJK[element] || '';
-  if (chinese && elCjk) return `${chinese} ${elCjk}`;
-  if (chinese) return chinese;
-  if (latin && element) return `${latin}`;
-  return dash(latin || chinese);
+function birthElementLabel(model: FortuneDataModel | null | undefined): string {
+  return dash(asKpi(model).dayMasterElement);
 }
 
 function formatHours(hours?: string[]): string {
@@ -160,7 +156,7 @@ function formatHours(hours?: string[]): string {
   return hours.slice(0, 2).join(' · ');
 }
 
-function nextPeakYear(model: FortuneDataModel | null | undefined): string {
+function spotlightYear(model: FortuneDataModel | null | undefined): string {
   const years =
     model?.narrative?.yearPredictions ||
     model?.luckCycle?.timeline?.years ||
@@ -182,18 +178,22 @@ function nextPeakYear(model: FortuneDataModel | null | undefined): string {
   return best ? String(best.year) : '—';
 }
 
-function wishConfidence(model: FortuneDataModel | null | undefined): string {
+/**
+ * Interpretive support for the dated guidance — how much chart evidence backs
+ * it, on a 0–100 scale. Deliberately not a percentage or a likelihood.
+ */
+function wishSupportScore(model: FortuneDataModel | null | undefined): string {
   const preds = model?.narrative?.yearPredictions;
   if (preds && preds.length > 0) {
     const avg =
       preds.reduce((s, p) => s + (typeof p.confidence === 'number' ? p.confidence : 0), 0) /
       preds.length;
-    if (avg > 0) return `${Math.round(avg * 100)}%`;
+    if (avg > 0) return `${Math.round(avg * 100)}/100`;
   }
   const seasonal = asKpi(model).seasonalScore;
-  if (typeof seasonal === 'number') return `${Math.round(seasonal)}%`;
+  if (typeof seasonal === 'number') return `${Math.round(seasonal)}/100`;
   const score = model?.wish?.verdict?.score ?? asKpi(model).harmonyScore;
-  if (typeof score === 'number') return `${Math.round(score)}`;
+  if (typeof score === 'number') return `${Math.round(score)}/100`;
   return '—';
 }
 
@@ -210,7 +210,7 @@ export function buildResultKpis(
     const top = picks[0];
     return [
       { value: dash(top?.score), label: 'Top score' },
-      { value: dayMasterLabel(dataModel), label: 'Day master' },
+      { value: birthElementLabel(dataModel), label: 'Birth element' },
       {
         value:
           windowDays && picks.length
@@ -236,9 +236,9 @@ export function buildResultKpis(
         value: dash(window?.score ?? kpi.harmonyScore),
         label: 'Vitality score',
       },
-      { value: dayMasterLabel(dataModel), label: 'Day master' },
+      { value: birthElementLabel(dataModel), label: 'Birth element' },
       { value: dash(current), label: 'Current decade' },
-      { value: nextPeakYear(dataModel), label: 'Next peak year' },
+      { value: spotlightYear(dataModel), label: 'Year spotlight' },
     ];
   }
 
@@ -253,7 +253,7 @@ export function buildResultKpis(
   }
 
   // wish
-  const insights =
+  const themes =
     dataModel?.narrative?.insights?.length ??
     dataModel?.wish?.anchors?.length ??
     dataModel?.wish?.mechanisms?.length ??
@@ -263,9 +263,9 @@ export function buildResultKpis(
       value: dash(dataModel?.wish?.verdict?.score ?? kpi.harmonyScore),
       label: 'Harmony score',
     },
-    { value: dayMasterLabel(dataModel), label: 'Day master' },
-    { value: dash(insights || undefined), label: 'Insight count' },
-    { value: wishConfidence(dataModel), label: 'Confidence' },
+    { value: birthElementLabel(dataModel), label: 'Birth element' },
+    { value: dash(themes || undefined), label: 'Themes found' },
+    { value: wishSupportScore(dataModel), label: 'Support score' },
   ];
 }
 

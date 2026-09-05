@@ -979,9 +979,18 @@ class FortuneRepository:
                 s.latest_references,
                 s.latest_retrodictions,
                 s.data_model,
-                s.updated_at        AS snapshot_updated_at
+                s.updated_at        AS snapshot_updated_at,
+                reading_run.id      AS latest_reading_run_id,
+                reading_run.status  AS latest_reading_run_status
             FROM fortune f
             LEFT JOIN fortune_snapshot s ON s.fortune_id = f.id
+            LEFT JOIN LATERAL (
+                SELECT id, status
+                FROM fortune_run
+                WHERE fortune_id = f.id AND run_kind IN ('initial', 'action')
+                ORDER BY created_at DESC
+                LIMIT 1
+            ) reading_run ON true
             WHERE f.id = $1
             """,
             fortune_id,

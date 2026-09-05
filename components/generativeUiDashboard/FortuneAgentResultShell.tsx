@@ -11,7 +11,7 @@
 
 import React from 'react';
 import { motion, useReducedMotion } from 'framer-motion';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, type LucideIcon } from 'lucide-react';
 import type { FortunePurposeId } from './fortuneAgentTheme';
 import type { ResultKpi } from './fortune/shell/resultConfig';
 import {
@@ -26,11 +26,14 @@ import {
 } from './fortune/designTokens';
 
 export interface FortuneTab {
+  /** Stable internal id — also the ?tab= value. Never localise this. */
   id: string;
+  /** Short audience label. */
   label: string;
+  icon?: LucideIcon;
 }
 
-export type ShellRunState = 'live' | 'replay' | 'guardrail_failed';
+export type ShellRunState = 'live' | 'replay' | 'guardrail_failed' | 'failed';
 
 interface FortuneAgentResultShellProps {
   purpose: FortunePurposeId;
@@ -50,8 +53,10 @@ interface FortuneAgentResultShellProps {
   onBack?: () => void;
   /** Desktop (≥lg) sticky execution-trace rail. */
   rail?: React.ReactNode;
-  /** Mobile / compact chrome above main (Glass Box + pause). */
+  /** Run controls rendered directly above the reading (pause, recovery). */
   mobileChrome?: React.ReactNode;
+  /** Developer telemetry — below the reading on mobile, in the rail on ≥lg. */
+  telemetry?: React.ReactNode;
   children: React.ReactNode;
 }
 
@@ -66,8 +71,15 @@ function StateChip({
 }) {
   if (runState === 'guardrail_failed') {
     return (
+      <span className="inline-flex items-center gap-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.2em] text-amber-400">
+        Withheld
+      </span>
+    );
+  }
+  if (runState === 'failed') {
+    return (
       <span className="inline-flex items-center gap-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.2em] text-rose-400">
-        Guardrail Failed
+        Stopped
       </span>
     );
   }
@@ -112,6 +124,7 @@ export const FortuneAgentResultShell: React.FC<FortuneAgentResultShellProps> = (
   onBack,
   rail,
   mobileChrome,
+  telemetry,
   children,
 }) => {
   const reduceMotion = useReducedMotion();
@@ -178,7 +191,7 @@ export const FortuneAgentResultShell: React.FC<FortuneAgentResultShellProps> = (
                 type="button"
                 onClick={onBack}
                 aria-label="Back"
-                className="inline-flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-[10px] font-bold uppercase tracking-[0.16em] transition-colors"
+                className="inline-flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-full border px-2.5 text-[10px] font-bold uppercase tracking-[0.16em] transition-colors"
                 style={{
                   borderColor: obs.softBorder,
                   color: obs.primary,
@@ -226,7 +239,7 @@ export const FortuneAgentResultShell: React.FC<FortuneAgentResultShellProps> = (
           {/* KPI band — 2×2 on mobile, 4-col on sm+ */}
           {kpis.length > 0 && (
             <motion.div
-              className="mt-7 grid grid-cols-2 gap-3 sm:grid-cols-4"
+              className="mt-5 grid grid-cols-2 gap-3 sm:mt-7 sm:grid-cols-4"
               initial={reduceMotion ? false : { opacity: 0, y: 12 }}
               animate={{ opacity: 1, y: 0 }}
               transition={
@@ -249,14 +262,15 @@ export const FortuneAgentResultShell: React.FC<FortuneAgentResultShellProps> = (
             </motion.div>
           )}
 
-          {/* Pill tabs */}
+          {/* Tabs — one 44px icon segment per section on mobile, pills from sm up */}
           <nav
             role="tablist"
             aria-label={`${purpose} sections`}
-            className="mt-7 flex flex-wrap gap-1 border-t border-white/[0.06] pt-4"
+            className="mt-6 grid grid-cols-4 gap-1 border-t border-white/[0.06] pt-4 sm:flex sm:flex-wrap"
           >
             {tabs.map((t, index) => {
               const active = activeTabId === t.id;
+              const Icon = t.icon;
               return (
                 <button
                   key={t.id}
@@ -280,14 +294,18 @@ export const FortuneAgentResultShell: React.FC<FortuneAgentResultShellProps> = (
                       : { fontFamily: OBSERVATORY_MONO }
                   }
                 >
-                  {t.label}
+                  {Icon && <Icon size={15} aria-hidden className="flex-none" />}
+                  {/* Wrap rather than truncate: a clipped label is not a label. */}
+                  <span className="max-w-full text-center leading-tight sm:whitespace-nowrap">
+                    {t.label}
+                  </span>
                 </button>
               );
             })}
           </nav>
 
-          {/* Mobile glass / pause chrome */}
-          {mobileChrome && <div className="mt-5 lg:hidden">{mobileChrome}</div>}
+          {/* Run controls stay above the reading; telemetry goes below it. */}
+          {mobileChrome && <div className="mt-5">{mobileChrome}</div>}
 
           <div
             id={panelDomId}
@@ -298,6 +316,8 @@ export const FortuneAgentResultShell: React.FC<FortuneAgentResultShellProps> = (
           >
             {children}
           </div>
+
+          {telemetry && <div className="mt-8 lg:hidden">{telemetry}</div>}
         </main>
 
         {/* Desktop execution-trace rail */}
