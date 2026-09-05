@@ -204,7 +204,7 @@ the grounded brief.
 * Existing customer-facing modes stay at their established low/medium effort
   settings so ordinary readings remain bounded.
 * The interpretation brief runs before the writer under `asyncio.timeout(240)` for max effort (`120` seconds for other efforts)
-  and a 10,000-token model cap; it is not stored in the Ask conversation.
+  and a 20,000-token model cap; it is not stored in the Ask conversation.
 * Foundation + classics retrieval are deterministic — 0 model cost.
 * Guardrail kept at `low` reasoning intentionally to bound stream tail.
 

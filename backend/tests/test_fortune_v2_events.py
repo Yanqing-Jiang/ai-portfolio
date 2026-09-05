@@ -326,6 +326,55 @@ async def test_cancelled_background_run_terminalizes_sql_and_redis(monkeypatch):
     store.release_lock.assert_awaited_once_with(session.fortune_id, "owned")
 
 
+@pytest.mark.asyncio
+async def test_user_pause_publishes_terminal_frames(monkeypatch):
+    from fortune import pipeline
+    from fortune.state import RuntimeStatus
+
+    session = FortuneSession(
+        fortune_id="11111111-1111-1111-1111-111111111111",
+        run_id="22222222-2222-2222-2222-222222222222",
+        surface_id="fortune_main",
+        request=CreateFortuneRequest(birth_iso="1990-01-01T00:00:00"),
+    )
+    store = MagicMock()
+    store.release_lock = AsyncMock()
+
+    async def paused_frames(*args, **kwargs):
+        session.touch(RuntimeStatus.interrupted)
+        if False:
+            yield ""
+
+    monkeypatch.setattr(pipeline, "iter_fortune_sse_frames", paused_frames)
+    monkeypatch.setattr(fortune_events, "set_run_record", AsyncMock())
+    terminal = AsyncMock(return_value=True)
+    monkeypatch.setattr(fortune_events, "publish_interrupted_terminal", terminal)
+    await pipeline.run_and_publish(session, store=store, lock_token="owned")
+    terminal.assert_awaited_once_with(
+        session.run_id, fortune_id=session.fortune_id,
+        message="Reading paused by user",
+    )
+    assert fortune_events.set_run_record.await_args.kwargs["status"] == "interrupted"
+
+
+def test_session_serialization_excludes_live_trace_before_dump():
+    from fortune.state import _session_to_jsonable
+
+    session = FortuneSession(
+        fortune_id="test", surface_id="fortune_main",
+        request=CreateFortuneRequest(birth_iso="1990-01-01T00:00:00"),
+        latest_foundation={
+            "trace": object(), "analysis": object(), "pillars": {"day": "甲子"},
+            "person_b": {"analysis": object(), "trace": object(), "pillars": {}},
+        },
+    )
+    dumped = _session_to_jsonable(session)
+    assert dumped["latest_foundation"] == {
+        "pillars": {"day": "甲子"}, "person_b": {"pillars": {}},
+    }
+    assert "trace" in session.latest_foundation
+
+
 def test_migration_runner_uses_transaction_scoped_lock() -> None:
     source = (
         Path(__file__).resolve().parent.parent / "scripts" / "apply_migration.py"

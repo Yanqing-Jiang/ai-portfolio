@@ -156,7 +156,7 @@ async def close_state_redis() -> None:
 
 def _session_to_jsonable(session: FortuneSession) -> dict[str, Any]:
     """Dump session for Redis. Drops non-JSON foundation analysis object."""
-    data = session.model_dump(mode="json")
+    data = session.model_dump(mode="json", exclude={"latest_foundation"})
     foundation = session.latest_foundation or {}
     # analysis / trace are live objects — keep only JSON-safe siblings in Redis;
     # the owning worker still holds the full in-proc overlay (see RunStateStore).

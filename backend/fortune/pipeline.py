@@ -211,6 +211,10 @@ async def run_and_publish(session, *, store=None, lock_token: str | None = None)
                         error_message="redis_publish_failed",
                     )
                     return
+        if session.status is RuntimeStatus.interrupted:
+            await fortune_events.publish_interrupted_terminal(
+                run_id, fortune_id=fortune_id, message="Reading paused by user",
+            )
         status_map = {
             RuntimeStatus.complete: "complete",
             RuntimeStatus.failed_guardrail: "failed_guardrail",
