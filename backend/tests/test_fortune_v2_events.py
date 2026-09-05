@@ -359,18 +359,23 @@ async def test_user_pause_publishes_terminal_frames(monkeypatch):
 
 def test_session_serialization_excludes_live_trace_before_dump():
     from fortune.state import _session_to_jsonable
+    from pydantic import BaseModel
+
+    class Balance(BaseModel):
+        wood: float
 
     session = FortuneSession(
         fortune_id="test", surface_id="fortune_main",
         request=CreateFortuneRequest(birth_iso="1990-01-01T00:00:00"),
         latest_foundation={
             "trace": object(), "analysis": object(), "pillars": {"day": "甲子"},
+            "elements": Balance(wood=1.5),
             "person_b": {"analysis": object(), "trace": object(), "pillars": {}},
         },
     )
     dumped = _session_to_jsonable(session)
     assert dumped["latest_foundation"] == {
-        "pillars": {"day": "甲子"}, "person_b": {"pillars": {}},
+        "pillars": {"day": "甲子"}, "elements": {"wood": 1.5}, "person_b": {"pillars": {}},
     }
     assert "trace" in session.latest_foundation
 

@@ -175,12 +175,12 @@ export const FortuneAgentResultShell: React.FC<FortuneAgentResultShellProps> = (
         <div className="mx-auto flex w-full max-w-[1100px] items-center justify-between gap-3 px-4 py-2.5">
           <div className="min-w-0 flex-1 items-center gap-2 sm:flex">
             <span
-              className="truncate text-[11px] font-medium text-[#9fb3a8] sm:text-[12px]"
+              className="block text-[11px] font-medium leading-snug text-[#9fb3a8] sm:truncate sm:text-[12px]"
             >
               {readerLine || 'Read from your chart'}
             </span>
           </div>
-          <div className="flex flex-1 items-center justify-end gap-3 sm:flex-none">
+          <div className="flex shrink-0 items-center justify-end gap-3">
             <StateChip runState={runState} accent={obs.primary} reduceMotion={reduceMotion} />
             {onBack && (
               <button

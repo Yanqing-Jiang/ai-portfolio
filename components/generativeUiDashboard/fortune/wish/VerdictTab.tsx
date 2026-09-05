@@ -85,7 +85,7 @@ export const VerdictTab: React.FC<{
             aria-hidden
           />
 
-          {!isComplete && !failed && (
+          {!isComplete && !failed && verdict && (
             <VerdictProgressiveGauge
               finalScore={score}
               streamedFraction={streamedFraction}
@@ -95,7 +95,11 @@ export const VerdictTab: React.FC<{
           )}
 
           <div className="z-10 space-y-1">
-            <VerdictBadge score={score} isReplay={isReplay} />
+            {verdict ? (
+              <VerdictBadge score={score} isReplay={isReplay} />
+            ) : (
+              <p className="text-sm text-slate-300">Reading your chart…</p>
+            )}
             {!failed && (
               <WeighingTicker
                 currentMechanism={currentMechanismName}
