@@ -39,7 +39,7 @@ The landing page shows the problem and the answer as two short films. The repo i
         serviceTags: ['Metric Governance', 'Semantic Layer', 'Data Leadership'],
         statHighlights: [
           'One score metric per business question, companions and diagnostics beside it',
-          'Linter with ten finding codes checks every claim before a report ships',
+          'Linter checks every claim against the standard before a report ships, one finding code per rule',
           'Agent runbook stands it up on Azure Databricks with human-approved owners and fingerprints',
         ],
       },
