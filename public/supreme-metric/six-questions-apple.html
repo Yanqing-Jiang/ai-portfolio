@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Six Questions</title>
+<style>
+:root{--bg:#fff;--bg2:#f5f5f7;--bg3:#fff;--ink:#1d1d1f;--ink2:#6e6e73;--ink3:#86868b;--line:#d2d2d7;--line2:#e8e8ed;--hot:#ff3b30;--cool:#0071e3;--ok:#34c759;--sans:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display","Helvetica Neue",Helvetica,Arial,sans-serif;--mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15px;-webkit-font-smoothing:antialiased;letter-spacing:-.01em}
+.serif{font-family:var(--sans);font-weight:600}
+button{font:inherit;color:inherit;cursor:pointer}
+button:focus-visible{outline:2px solid var(--cool);outline-offset:2px}
+.wrap{max-width:1180px;margin:0 auto;padding:22px 22px 50px}
+.top{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:14px}
+.k{font-size:12px;letter-spacing:-.01em;color:var(--ink2);font-weight:500}
+.tabs{display:flex;gap:2px;padding:2px;border-radius:99px;background:var(--line2)}
+.tabs button{border:0;background:transparent;padding:7px 14px;border-radius:99px;font-weight:500;color:var(--ink);font-size:13px;transition:background .25s,color .25s}
+.tabs button[aria-selected="true"]{background:#fff;color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.12),0 3px 8px rgba(0,0,0,.06)}
+.stage{position:relative;border:1px solid var(--line2);border-radius:20px;background:var(--bg2);height:700px;overflow:hidden}
+.replay{position:absolute;left:18px;bottom:16px;z-index:9;border:1px solid var(--line);background:rgba(255,255,255,.8);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);color:var(--ink);padding:6px 12px;border-radius:99px;font-size:12px;font-weight:500}
+/* the question and its call to action sit in the middle of the stage */
+.finale{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:6;display:flex;flex-direction:column;align-items:center;gap:24px;pointer-events:none}
+.finale .scrim{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:820px;height:440px;border-radius:50%;background:radial-gradient(closest-side,rgba(245,245,247,.97),rgba(245,245,247,.86) 46%,rgba(245,245,247,0));opacity:0;transition:opacity .5s;z-index:-1}
+.finale.in .scrim{opacity:1}
+.go{border:0;background:var(--cool);color:#fff;font-weight:400;padding:12px 24px;border-radius:99px;font-size:15px;letter-spacing:-.01em;opacity:0;pointer-events:none;transition:.4s;box-shadow:0 8px 24px rgba(0,113,227,.25)}
+.go.in{opacity:1;pointer-events:auto}
+.go:hover{background:#0077ed;transform:scale(1.03)}
+.cap{text-align:center;color:var(--ink);font-size:34px;line-height:1.12;font-weight:600;letter-spacing:-.02em;max-width:16ch;transition:.4s;font-family:var(--sans)}
+.cap.out{opacity:0}
+/* claims step back so the question reads over them */
+#f1.quiet .claim,#f2.quiet .claim,#f3.quiet .orb .claim{opacity:.35;filter:saturate(.6)}
+
+.film{position:absolute;inset:0;display:none;transition:opacity .6s}
+.film.on{display:block}
+.film.gone{opacity:0;pointer-events:none}
+
+/* ---------- bobblehead figurine ---------- */
+.fig{position:absolute;width:122px;height:172px;--c:#fff}
+.fig .torso{position:absolute;top:90px;left:50%;transform:translateX(-50%);width:38px;height:44px;background:var(--c);filter:saturate(.8) brightness(.8);border-radius:12px}
+.fig .legs{position:absolute;top:130px;left:50%;transform:translateX(-50%);display:flex;gap:10px}
+.fig .legs span{display:block;width:9px;height:30px;background:var(--c);filter:saturate(.7) brightness(.65);border-radius:4px;transform-origin:50% 4px}
+.fig.walk .legs span:nth-child(1){animation:step .38s linear infinite}
+.fig.walk .legs span:nth-child(2){animation:step .38s .19s linear infinite}
+@keyframes step{0%,100%{transform:rotate(20deg)}50%{transform:rotate(-20deg)}}
+.fig .head{position:absolute;left:50%;top:0;width:122px;height:92px;background:var(--c);border-radius:28px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;transform:translateX(-50%);transform-origin:50% 108%;animation:bobble 2.4s ease-in-out infinite;box-shadow:0 10px 24px rgba(0,0,0,.18);z-index:2}
+@keyframes bobble{0%,100%{transform:translateX(-50%) rotate(-3.5deg)}50%{transform:translateX(-50%) rotate(3.5deg)}}
+.fig .nm{font:700 17px var(--sans);letter-spacing:.02em;color:#fff;text-align:center;line-height:1.08;padding:0 10px;text-shadow:0 1px 2px rgba(0,0,0,.18)}
+.fig .face{display:flex;align-items:center;gap:9px}
+.fig .face i{width:7px;height:7px;border-radius:50%;background:#fff}
+.fig.talk .head{animation-duration:.5s;filter:brightness(1.08)}
+
+/* ---------- claims ---------- */
+.claim{position:absolute;--cc:#fff;font-family:var(--sans);font-weight:600;font-size:19px;line-height:1.18;letter-spacing:-.015em;padding:10px 16px;border-radius:14px;background:#fff;border:1px solid var(--line2);border-left:4px solid var(--cc);color:var(--ink);width:max-content;max-width:22ch;text-align:center;opacity:0;transform:translateX(-50%) rotate(var(--rot,0deg)) scale(.55);transition:.34s cubic-bezier(.2,.9,.3,1.35);z-index:5;box-shadow:0 6px 18px rgba(0,0,0,.08)}
+.claim.in{opacity:1;transform:translateX(-50%) rotate(var(--rot,0deg)) scale(1)}
+.claim.alarm{box-shadow:0 0 0 2px rgba(255,59,48,.35),0 14px 34px rgba(255,59,48,.18)}
+@keyframes mad{0%,100%{margin-left:0}25%{margin-left:-4px}75%{margin-left:4px}}
+
+/* ---------- film 1 · the walk-out ---------- */
+#f1 .glow{position:absolute;left:50%;top:47%;transform:translate(-50%,-50%);width:640px;height:420px;background:radial-gradient(closest-side,rgba(0,113,227,.06),transparent);pointer-events:none}
+#f1.mad .claim{animation:mad .3s linear infinite}
+
+/* ---------- film 2 · the press conference ---------- */
+#f2 .backdrop{position:absolute;left:8%;right:8%;top:64px;bottom:200px;border-radius:14px;background:repeating-linear-gradient(45deg,#ececf0 0 44px,#f2f2f5 44px 88px);border:1px solid var(--line2);opacity:.9}
+#f2 .pod{position:absolute;bottom:86px;width:140px;height:100px;background:linear-gradient(#ffffff,#e8e8ed);border:1px solid var(--line);clip-path:polygon(7% 0,93% 0,100% 100%,0 100%);z-index:3}
+#f2 .mic{position:absolute;bottom:186px;width:2px;height:26px;background:var(--ink3);z-index:3}
+#f2 .mic::before{content:"";position:absolute;left:50%;top:-9px;transform:translateX(-50%);width:9px;height:9px;border-radius:50%;background:var(--ink2)}
+#f2 .fig{bottom:104px;z-index:2;opacity:0;transform:translateY(96px);transition:.55s cubic-bezier(.2,.8,.2,1)}
+#f2 .fig.up{opacity:1;transform:none}
+#f2 .flash{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none;z-index:7}
+#f2 .claim{left:50%;top:33%;font-size:22px;max-width:24ch;border-left:5px solid var(--cc);border-radius:8px;box-shadow:0 16px 44px rgba(0,0,0,.14);transform:translate(-50%,-50%) translate(var(--dx,0px),var(--dy,0px)) rotate(var(--rot,0deg)) scale(1.55)}
+#f2 .claim.in{transform:translate(-50%,-50%) translate(var(--dx,0px),var(--dy,0px)) rotate(var(--rot,0deg)) scale(1)}
+#f2.mad .claim{animation:mad .3s linear infinite}
+
+/* ---------- film 3 · the orbit ---------- */
+#f3 .sky{position:absolute;top:0;left:0;width:2px;height:2px;border-radius:50%}
+#f3 .planet{position:absolute;left:50%;top:46%;transform:translate(-50%,-50%);width:158px;height:158px;border-radius:50%;background:radial-gradient(circle at 36% 30%,#ffffff,#e3e3e8 72%);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;box-shadow:0 0 60px rgba(0,113,227,.14),0 10px 30px rgba(0,0,0,.08);z-index:1}
+#f3 .planet b{font:600 11px var(--sans);letter-spacing:.14em;color:var(--cool)}
+#f3 .ring{position:absolute;left:50%;top:46%;transform:translate(-50%,-50%);border:1px dashed #c7c7cc;border-radius:50%;z-index:0}
+#f3 .fig{transform:scale(.74);animation:floaty 5s ease-in-out infinite;z-index:2}
+@keyframes floaty{50%{margin-top:-14px}}
+#f3 .warn{position:absolute;left:50%;top:60px;transform:translateX(-50%);color:var(--hot);font:600 12px var(--mono);letter-spacing:.2em;opacity:0;z-index:4}
+#f3 .warn.on{animation:blink 1s steps(2) infinite}
+@keyframes blink{50%{opacity:1}}
+#f3 .orb{position:absolute;left:50%;top:46%;width:0;height:0;opacity:0;transition:opacity .5s;animation:orbit var(--dur) linear infinite;z-index:3}
+#f3 .orb.in{opacity:1}
+@keyframes orbit{from{transform:rotate(var(--a0))}to{transform:rotate(calc(var(--a0) + 360deg))}}
+#f3 .orb .claim{opacity:1;transition:none;font-size:13px;padding:7px 12px;max-width:19ch;left:0;top:0;animation:orbitR var(--dur) linear infinite}
+@keyframes orbitR{from{transform:translateX(var(--r)) translate(-50%,-50%) rotate(calc(0deg - var(--a0)))}to{transform:translateX(var(--r)) translate(-50%,-50%) rotate(calc(-360deg - var(--a0)))}}
+
+/* ---------- shards (claims in flight) ---------- */
+.shard{position:absolute;left:0;top:0;--cc:#fff;font-family:var(--sans);font-weight:600;font-size:18px;line-height:1.2;letter-spacing:-.015em;padding:9px 14px;border-radius:12px;background:#fff;border:1px solid var(--line2);border-left:4px solid var(--cc);color:var(--ink);width:max-content;max-width:24ch;transition:transform 1s cubic-bezier(.25,.8,.25,1),width 1s,min-height 1s,opacity .45s,font-size .8s,padding .8s;will-change:transform;z-index:8;box-shadow:0 8px 24px rgba(0,0,0,.1)}
+.shard.land{font-size:11px;font-weight:600;padding:8px 9px;text-align:left;line-height:1.25;border-radius:8px;color:var(--ink);border-left-width:1px;border-color:var(--cc)}
+.shard.land small{display:block;font:500 9px var(--sans);color:var(--ink2);letter-spacing:.02em;margin-top:2px}
+.shard.land em{display:block;font:700 9px var(--sans);font-style:normal;color:var(--cc);letter-spacing:.1em;margin-top:3px}
+
+/* ---------- governed topology ---------- */
+.topo{position:absolute;inset:0;z-index:7;display:none;background:var(--bg2);padding:26px 32px 22px;flex-direction:column;justify-content:center}
+.topo.in{display:flex}
+svg.links{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;fill:none}
+.links .g0{stroke:var(--line);stroke-width:1.5;stroke-dasharray:2 7;stroke-linecap:round}
+.links .g1{stroke-width:1.8;stroke-dasharray:2 7;stroke-linecap:round;animation:march 1.4s linear infinite}
+@keyframes march{to{stroke-dashoffset:-18}}
+.topo .ttl{position:absolute;right:32px;top:20px;font:600 10px var(--sans);letter-spacing:.14em;color:var(--ink3)}
+.topo .mrow{display:grid;grid-template-columns:112px 1fr;gap:16px;position:relative}
+.topo .mrow+.mrow{margin-top:52px}
+.topo .lv{display:flex;flex-direction:column;justify-content:center;gap:2px}
+.topo .lv b{font:700 10px var(--sans);letter-spacing:.14em;color:var(--cool)}
+.topo .lv span{font:400 14px var(--sans);color:var(--ink2);line-height:1.15}
+.topo .master{background:#fff;border:1px solid var(--line2);border-radius:14px;padding:16px 26px;display:flex;align-items:center;gap:22px;box-shadow:0 0 0 4px rgba(0,113,227,.08),0 8px 24px rgba(0,0,0,.06)}
+.topo .master .w{font:600 36px var(--sans);letter-spacing:-.025em;line-height:1}
+.topo .master .o{margin-left:auto;font:700 11px var(--sans);letter-spacing:.14em;color:var(--cool);white-space:nowrap}
+.topo .cols{display:grid;grid-template-columns:repeat(7,1fr);gap:10px}
+.topo .q{--cc:#fff;background:#fff;border:1px solid var(--line2);border-top:3px solid var(--cc);border-radius:12px;padding:10px 11px;min-height:78px;display:flex;align-items:flex-start;box-shadow:0 4px 14px rgba(0,0,0,.05)}
+.topo .qq{font:600 14.5px var(--sans);letter-spacing:-.015em;line-height:1.16;text-wrap:balance}
+.topo .mcell{display:flex;flex-direction:column;gap:8px}
+.topo .m{--cc:#fff;position:relative;background:#fff;border:1px solid var(--line2);border-left:3px solid var(--cc);border-radius:10px;padding:8px 9px;font-size:10.5px;font-weight:600;display:flex;flex-direction:column;gap:2px;min-height:60px;line-height:1.25;box-shadow:0 4px 14px rgba(0,0,0,.05)}
+.topo .m small{font:500 9px var(--sans);color:var(--ink2);letter-spacing:.02em}
+.topo .m em{font:700 9px var(--sans);font-style:normal;color:var(--cc);letter-spacing:.1em;margin-top:2px}
+.topo .m.ghost{visibility:hidden}
+.topo .fade{opacity:0;animation:rise .55s forwards}
+@keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+
+.notes{margin-top:18px;display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.note{border:1px solid var(--line2);border-radius:14px;padding:14px 16px;background:var(--bg2);font-size:13px;line-height:1.45;color:var(--ink2)}
+.note b{color:var(--ink);display:block;margin-bottom:3px;font-weight:600}
+@media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}.claim,#f2 .fig{opacity:1}}
+@media (max-width:800px){.topo .master .w{font-size:26px}.notes{grid-template-columns:1fr}}
+.wrap{padding:0;max-width:none}.stage{border:0;border-radius:0}.notes{display:none}
+.topo .ttl{display:none}
+.claim{font-size:24px;padding:12px 20px;max-width:20ch;border-radius:16px}
+.go{font-size:20px;padding:16px 36px;box-shadow:0 12px 32px rgba(0,113,227,.3)}
+.cap{font-size:42px}
+.topo .qq{font-size:16px}
+.topo .m{font-size:11.5px;min-height:64px}
+.topo .m small{font-size:9.5px}
+.qtop{position:absolute;left:0;right:0;top:30px;text-align:center;font:700 44px var(--sans);letter-spacing:-.025em;color:var(--ink);z-index:6;pointer-events:none;opacity:0;animation:qin .8s .3s forwards}
+@keyframes qin{to{opacity:1}}
+.cap{display:none}
+.stage{background:#fff}
+.qtop{top:44px}
+.topo{padding:22px 40px 18px}
+.topo .mrow{grid-template-columns:136px 1fr}
+.topo .mrow+.mrow{margin-top:46px}
+.topo .lv b{font-size:12px}
+.topo .lv span{font-size:18px}
+.topo .master{padding:18px 30px}
+.topo .master .w{font-size:50px}
+.topo .cols{gap:12px}
+.topo .q{padding:12px 13px;min-height:92px}
+.topo .qq{font-size:20px;line-height:1.12}
+.topo .m{font-size:14px;min-height:88px;padding:10px 11px;line-height:1.22}
+.topo .m small{font-size:11px}
+.topo .m em{font-size:11px}
+.shard.land{font-size:14px}
+.replay{left:44px;bottom:40px}
+/* Film 1 uses the iframe viewport, without shrinking its typography. */
+.stage:has(#f1.on){height:100dvh}
+#f1{left:max(0px,calc((100% - 1520px)/2));right:max(0px,calc((100% - 1520px)/2));
+ --fig-left:5%;--fig-right:calc(95% - 122px);--row-top:calc(22.857143% - 86px);--row-bottom:calc(77.142857% - 86px);
+ --claim-left:31%;--claim-right:69%;--claim-left2:34%;--claim-right2:66%;
+ --claim-top:22.285714%;--claim-top2:33.714286%;
+ --claim-bottom:60.571429%;--claim-bottom2:72%}
+.film-area{display:contents}
+/* Wide: reference proportions within the area below the title. Figure centers
+   sit 190/700 of its height either side of the centered finale. */
+@media (min-width:1101px){
+ /* Film 1 plays on the reference 1180x700 canvas (the artifact's Walk-Out geometry);
+    fitZoom() centers it under the title and scales it to the viewport. */
+ .stage:has(#f1.on) .film-area{display:block;position:absolute;left:50%;top:0;width:1180px;height:700px;transform-origin:50% 0;transform:translateX(-50%)}
+ .stage:has(#f1.on) #f1{left:0;right:0}
+ #f1 .claim{font-size:22px;line-height:1.15;padding:9px 16px;max-width:22ch;border:1px solid var(--line2);border-left:4px solid var(--cc)}
+ #f1.quiet .claim{opacity:.4}
+ .stage:has(#f1.on) .go{font-size:20px;padding:16px 38px;font-weight:600;letter-spacing:-.01em}
+ .stage:has(#f1.on) .go:hover{transform:scale(1.04);background:#0077ed}
+}
+.stage:has(#f1.on) .qtop{top:clamp(24px,5vh,54px);padding:0 20px;font-size:clamp(32px,3.6vw,54px);line-height:1.1;text-wrap:balance}
+.stage:has(#f1.on) .topo{background:#fff;padding:40px max(32px,calc((100% - 1600px)/2));overflow-y:auto;scrollbar-width:thin}
+.stage:has(#f1.on) .topo .cols{grid-template-columns:repeat(7,minmax(0,1fr))}
+.stage:has(#f1.on) .topo .mrow{grid-template-columns:120px minmax(0,1fr)}
+.stage:has(#f1.on) .topo .qq{font-size:clamp(16px,1.3vw,22px)}
+.stage:has(#f1.on) .topo .m{font-size:clamp(14px,1vw,17px)}
+.stage:has(#f1.on) .topo .m small,.stage:has(#f1.on) .topo .m em{font-size:13px}
+.stage:has(#f1.on) .replay{font-size:14px;left:24px;bottom:16px;min-height:36px}
+@media (max-width:1100px){
+ #f1{--fig-left:calc(25% - 61px);--fig-right:calc(75% - 61px);
+  --row-top:clamp(96px,15vh,154px);--row-bottom:51%;
+  --claim-left:25%;--claim-right:75%;--claim-left2:25%;--claim-right2:75%;
+  --claim-top:calc(var(--row-top) + 138px);--claim-top2:calc(var(--row-top) + 200px);
+  --claim-bottom:calc(var(--row-bottom) + 138px);--claim-bottom2:calc(var(--row-bottom) + 200px)}
+ #f1 .fig{height:130px}
+ #f1 .head{height:82px}
+ #f1 .torso{top:78px;height:30px}
+ #f1 .legs{top:104px}
+ #f1 .legs span{height:24px}
+ #f1 .nm{font-size:16px}
+ #f1 .claim{font-size:18px;padding:10px 12px;width:calc(50% - 32px);max-width:290px;--rot:0deg!important}
+ #f1.quiet .claim{opacity:1;filter:none}
+ .stage:has(#f1.on) .finale{top:auto;bottom:16px;transform:translateX(-50%);gap:0;width:100%}
+ .stage:has(#f1.on) .scrim{display:none}
+ .stage:has(#f1.on) .go{font-size:18px;padding:13px 26px}
+ /* Reflow the same question/metric nodes into seven readable groups. */
+ .stage:has(#f1.on) .topo{padding:24px 24px 68px;display:none;grid-template-columns:1fr 1fr;grid-auto-rows:max-content;gap:12px;align-content:start;justify-content:normal}
+ .stage:has(#f1.on) .topo.in{display:grid}
+ .stage:has(#f1.on) .topo .links{display:none}
+ .stage:has(#f1.on) .topo .mrow{display:contents}
+ .stage:has(#f1.on) .topo .mrow+.mrow{margin:0}
+ .stage:has(#f1.on) .topo .lv{grid-column:1/-1;flex-direction:row;align-items:baseline;justify-content:flex-start;gap:8px}
+ .stage:has(#f1.on) .topo .mrow:nth-last-child(2) .lv{grid-column:1;grid-row:3;flex-direction:column;gap:3px}
+ .stage:has(#f1.on) .topo .mrow:last-child .lv{grid-column:2;grid-row:3;flex-direction:column;gap:3px}
+ .stage:has(#f1.on) .topo .master{grid-column:1/-1;padding:14px 18px;box-shadow:none}
+ .stage:has(#f1.on) .topo .master .w{font-size:clamp(28px,4vw,40px)}
+ .stage:has(#f1.on) .topo .cols,.stage:has(#f1.on) .topo .mcell{display:contents}
+ .stage:has(#f1.on) .topo .q{grid-column:1/-1;grid-row:calc(4 + var(--order)*2);min-height:0;padding:12px 0 0;border:0;border-top:2px solid var(--cc);border-radius:0;box-shadow:none;margin-top:8px}
+ .stage:has(#f1.on) .topo .qq{font-size:18px;line-height:1.2}
+ .stage:has(#f1.on) .topo .m{grid-row:calc(5 + var(--order)*2);min-width:0;min-height:0;font-size:15px;padding:10px;line-height:1.25;box-shadow:none}
+ .stage:has(#f1.on) .topo .m:nth-child(1){grid-column:1}
+ .stage:has(#f1.on) .topo .m:nth-child(2){grid-column:2}
+}
+@media (min-width:601px) and (max-width:1100px){
+ .stage:has(#f1.on) .topo{grid-template-columns:repeat(3,minmax(0,1fr))}
+ .stage:has(#f1.on) .topo .mrow:last-child .lv{grid-column:2/-1}
+ .stage:has(#f1.on) .topo .q{grid-column:1;grid-row:calc(4 + var(--order));margin:0;padding:12px 8px 0 0}
+ .stage:has(#f1.on) .topo .m{grid-row:calc(4 + var(--order))}
+ .stage:has(#f1.on) .topo .m:nth-child(1){grid-column:2}
+ .stage:has(#f1.on) .topo .m:nth-child(2){grid-column:3}
+}
+@media (max-width:500px){
+ #f1{--claim-top2:calc(var(--row-top) + 224px);--claim-bottom2:calc(var(--row-bottom) + 224px)}
+ #f1 .claim{font-size:16px;width:calc(50% - 28px);padding:9px 10px;line-height:1.2}
+ .stage:has(#f1.on) .finale{bottom:52px}
+ .stage:has(#f1.on) .qtop{font-size:32px;top:24px;padding:0 18px}
+ .stage:has(#f1.on) .topo{padding:20px 18px 68px;gap:10px}
+ .stage:has(#f1.on) .topo .lv span{font-size:16px}
+}
+@media (max-width:1100px) and (max-height:740px){
+ #f1{--row-top:92px;--row-bottom:49%;--claim-top2:calc(var(--row-top) + 194px);--claim-bottom2:calc(var(--row-bottom) + 194px)}
+ .stage:has(#f1.on) .qtop{font-size:32px;top:22px}
+}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <div class="stage" id="stage">
+    <div class="qtop">“How’s my business performance?”</div>
+    <button class="replay" id="replay">↻ Replay</button>
+    <div class="film" id="f2"></div>
+    <div class="film" id="f3"></div>
+    <div id="shards"></div>
+    <div class="film-area">
+      <div class="film" id="f1"></div>
+      <div class="finale" id="fin"><div class="scrim"></div>
+        <div class="cap" id="cap"></div>
+        <button class="go" id="go">Govern the metrics</button>
+      </div>
+    </div>
+    <div class="topo" id="tp"></div>
+  </div>
+  <div class="notes" id="notes"></div>
+</div>
+
+<script>
+const $=s=>document.querySelector(s);const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+let token=0,cur='1';
+
+const TEAMS=[
+ {name:'SALES',c:'#34c759'},
+ {name:'FINANCE',c:'#ff9500'},
+ {name:'MARKETING',c:'#007aff'},
+ {name:'LOGISTICS',c:'#ff3b30'},
+];
+// claim k belongs to team t; k = team*2 + j
+const CLAIMS=[
+ {t:0,txt:'Sales are up 14%.'},
+ {t:0,txt:'Share is up 1.8 pts.'},
+ {t:1,txt:'Margin is flat.'},
+ {t:1,txt:'Forecast says a softer Q4.'},
+ {t:2,txt:'Impression share is 5.4 pts down.'},
+ {t:2,txt:'New shoppers are up.'},
+ {t:3,txt:'Inventory is piling up.'},
+ {t:3,txt:'Shipped items are blocked.'},
+];
+// governed metrics: 0–7 are what the spoken claims become; 8–13 are the
+// sibling metrics added under governance so every question has at least two.
+// [name, sub, owning team]
+const MET=[
+ ['Net sales — consumption','P4W · FYTD',0],
+ ['Market share','panel · P4W',0],
+ ['Contribution margin','P4W · mix-adjusted',1],
+ ['Sales forecast vs. target','next quarter',1],
+ ['Search impression share','generic queries · P4W',2],
+ ['New-to-brand customers','P4W',2],
+ ['Inventory weeks of cover','point in time',3],
+ ['Shipped units — fill rate','this week',3],
+ ['Net sales — shipped','units × ASP',1],
+ ['Share of category growth','panel · P13W',2],
+ ['Cost to serve','per unit',3],
+ ['Open order backlog','vs. last quarter',0],
+ ['Search click share','generic queries · P4W',2],
+ ['New shopper rate','of category shoppers',0],
+];
+// one column per business question; ks = metric ids in it (claims land, siblings reveal)
+const COLS=[
+ {q:'Are we growing?',ks:[0,8]},
+ {q:'Are we winning?',ks:[1,9]},
+ {q:'Are we growing profitably?',ks:[2,10]},
+ {q:'Will it hold next quarter?',ks:[3,11]},
+ {q:'Are we capturing search demand?',ks:[4,12]},
+ {q:'Are we recruiting customers?',ks:[5,13]},
+ {q:'Can we serve the demand?',ks:[6,7]},
+];
+const teamK=k=>k<CLAIMS.length?CLAIMS[k].t:MET[k][2];
+const colorK=k=>TEAMS[teamK(k)].c;
+
+const notes={
+ 1:[['The film','A voice asks “How’s my business performance?” — and four big-headed teams march out of the four corners. Their answers pile into the middle, two per team, each in its owner’s color.'],
+    ['Spare lines','“Eight claims walk into a meeting.” · “Everyone is right. That’s the problem.” · “Big heads, bigger numbers.”'],
+    ['Why it works','Character comedy makes the politics safe to name — every exec recognizes their own team’s walk-out.']],
+ 2:[['The film','One stage, four podiums, eight official statements. The flashbulbs love everybody; the headlines pile up until none of them can be read.'],
+    ['Spare lines','“You can’t lose if you write your own headline.” · “Four spokespeople, one business, zero shared facts.”'],
+    ['Why it works','Reads silent in the feed — press-room theatre turns metric sprawl into spin, and governance into the editor-in-chief.']],
+ 3:[['The film','Four crews orbit the same business. Every claim gets its own orbit, none of them share a plane, and nobody is flying ground control.'],
+    ['Spare lines','“Eight satellites, no ground control.” · “Everything is up — depending on where you’re standing.”'],
+    ['Why it works','Raises the stakes to collision — so the governed topology lands as mission control, not bureaucracy.']]
+};
+
+function figHTML(i,style){const tm=TEAMS[i];
+ return `<div class="fig" data-t="${i}" style="--c:${tm.c};${style}">
+  <div class="torso"></div>
+  <div class="legs"><span></span><span></span></div>
+  <div class="head"><span class="nm">${tm.name}</span><span class="face"><i></i><i></i></span></div>
+ </div>`;}
+
+function pop(f,k,styles,alarm){const c=CLAIMS[k];const d=document.createElement('div');
+ d.className='claim'+(alarm?' alarm':'');d.dataset.k=k;d.style.setProperty('--cc',TEAMS[c.t].c);
+ d.textContent=c.txt;
+ for(const key in styles){key.startsWith('--')?d.style.setProperty(key,styles[key]):d.style[key]=styles[key];}
+ f.appendChild(d);
+ requestAnimationFrame(()=>requestAnimationFrame(()=>d.classList.add('in')));
+ return d;}
+
+function finale(t,text){if(t!==token)return;
+ $('#cap').textContent=text;$('#cap').classList.remove('out');
+ $('#fin').classList.add('in');$('#f'+cur).classList.add('quiet');
+ const go=$('#go');go.classList.add('in');
+ go.onclick=()=>{if(t!==token)return;go.onclick=null;govern(t);};}
+
+/* ---------- show / reset ---------- */
+function show(f){
+ token++;const t=token;cur=f;
+ document.querySelectorAll('.tabs button').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.f===f)));
+ document.querySelectorAll('.film').forEach(p=>{p.classList.remove('on','gone','mad','quiet');p.innerHTML='';});
+ $('#tp').classList.remove('in');$('#tp').innerHTML='';
+ $('#tp').scrollTop=0;
+ $('#fin').classList.remove('in');
+ $('#go').classList.remove('in');$('#go').onclick=null;$('#shards').innerHTML='';
+ $('#cap').textContent='';$('#cap').classList.remove('out');
+ $('#notes').innerHTML=notes[f].map(n=>`<div class="note"><b>${n[0]}</b>${n[1]}</div>`).join('');
+ $('#f'+f).classList.add('on');
+ ({1:play1,2:play2,3:play3})[f](t);
+}
+document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>show(b.dataset.f));
+$('#replay').onclick=()=>show(cur);
+
+/* ---------- film 1 · the walk-out (four corners) ---------- */
+const WIDE=matchMedia('(min-width:1101px)');
+/* Wide: the artifact's 1180x700 Walk-Out geometry — figures in the corners, two claims beside each. */
+const CORN_W=[
+ {x:'5%',y:'82px',from:'-200px'},
+ {x:'calc(95% - 122px)',y:'82px',from:'calc(100% + 80px)'},
+ {x:'5%',y:'462px',from:'-200px'},
+ {x:'calc(95% - 122px)',y:'462px',from:'calc(100% + 80px)'},
+];
+const CPOS_W=[
+ ['31%','156px',0],['34%','236px',-3],
+ ['69%','156px',0],['66%','236px',3],
+ ['31%','424px',0],['34%','504px',-3],
+ ['69%','424px',0],['66%','504px',2],
+];
+/* Narrow: responsive positions from the CSS custom properties on #f1. */
+const CORN_N=[
+ {x:'var(--fig-left)',y:'var(--row-top)',from:'-200px'},
+ {x:'var(--fig-right)',y:'var(--row-top)',from:'calc(100% + 80px)'},
+ {x:'var(--fig-left)',y:'var(--row-bottom)',from:'-200px'},
+ {x:'var(--fig-right)',y:'var(--row-bottom)',from:'calc(100% + 80px)'},
+];
+const CPOS_N=[
+ ['var(--claim-left)','var(--claim-top)',0],['var(--claim-left2)','var(--claim-top2)',-3],
+ ['var(--claim-right)','var(--claim-top)',0],['var(--claim-right2)','var(--claim-top2)',3],
+ ['var(--claim-left)','var(--claim-bottom)',0],['var(--claim-left2)','var(--claim-bottom2)',-3],
+ ['var(--claim-right)','var(--claim-bottom)',0],['var(--claim-right2)','var(--claim-bottom2)',2],
+];
+let CORN=CORN_N,CPOS=CPOS_N;
+function pickLayout(){const w=WIDE.matches;CORN=w?CORN_W:CORN_N;CPOS=w?CPOS_W:CPOS_N;}
+pickLayout();
+WIDE.addEventListener('change',()=>{pickLayout();fitZoom();if(cur==='1')show('1');});
+async function play1(t){
+ const f=$('#f1');
+ f.innerHTML='<div class="glow"></div>'+CORN.map((c,i)=>figHTML(i,`left:${c.from};top:${c.y};`)).join('');
+ const figs=[...f.querySelectorAll('.fig')];
+ await sleep(400);if(t!==token)return;
+ for(let i=0;i<4;i++){
+  const el=figs[i];el.classList.add('walk');
+  el.style.transition='left 1.25s linear';el.style.left=CORN[i].x;
+  await sleep(1250);if(t!==token)return;
+  el.classList.remove('walk');el.classList.add('talk');
+  for(const j of [0,1]){const k=i*2+j;const p=CPOS[k];
+   pop(f,k,{left:p[0],top:p[1],'--rot':p[2]+'deg'},k===7);
+   await sleep(680);if(t!==token)return;}
+  el.classList.remove('talk');
+  await sleep(220);if(t!==token)return;
+ }
+ f.classList.add('mad');await sleep(1200);if(t!==token)return;f.classList.remove('mad');
+ finale(t,'“How’s my business performance?”');
+}
+
+/* ---------- film 2 · the press conference ---------- */
+const SLOT2=[13,37,61,85];
+const STAMP=[[-160,-72,-5],[150,-92,4],[-100,48,-2],[130,62,6],[-40,-138,2],[64,-28,-4],[-150,112,3],[0,6,-3]];
+const ORDER2=[0,2,4,6,1,3,5,7];
+async function play2(t){
+ const f=$('#f2');
+ f.innerHTML='<div class="backdrop"></div><div class="flash"></div>'+
+  SLOT2.map((p,i)=>figHTML(i,`left:calc(${p}% - 61px);`)).join('')+
+  SLOT2.map(p=>`<div class="pod" style="left:calc(${p}% - 70px)"></div><div class="mic" style="left:${p}%"></div>`).join('');
+ const figs=[...f.querySelectorAll('.fig')];const fl=f.querySelector('.flash');const up=new Set();
+ const flash=async()=>{fl.style.opacity=.85;await sleep(70);fl.style.opacity=0;await sleep(90);
+   fl.style.opacity=.5;await sleep(60);fl.style.opacity=0;};
+ await sleep(500);if(t!==token)return;
+ for(const k of ORDER2){
+   const tm=CLAIMS[k].t;
+   if(!up.has(tm)){figs[tm].classList.add('up');up.add(tm);await sleep(620);if(t!==token)return;}
+   figs.forEach(g=>g.classList.remove('talk'));figs[tm].classList.add('talk');
+   await flash();if(t!==token)return;
+   pop(f,k,{'--dx':STAMP[k][0]+'px','--dy':STAMP[k][1]+'px','--rot':STAMP[k][2]+'deg'},k===7);
+   await sleep(k===7?500:820);if(t!==token)return;
+ }
+ figs.forEach(g=>g.classList.remove('talk'));
+ f.classList.add('mad');await sleep(1100);if(t!==token)return;f.classList.remove('mad');
+ finale(t,'“How’s my business performance?”');
+}
+
+/* ---------- film 3 · the orbit ---------- */
+async function play3(t){
+ const f=$('#f3');
+ let stars='';for(let i=0;i<70;i++){stars+=`${(Math.random()*1160)|0}px ${(Math.random()*690)|0}px 0 ${Math.random()>.8?1:0}px rgba(29,29,31,${(.10+Math.random()*.3).toFixed(2)})${i<69?',':''}`;}
+ const FP=[[8,10],[78,7],[5,62],[80,64]];
+ f.innerHTML=`<div class="sky" style="box-shadow:${stars}"></div>
+  <div class="warn">⚠ ORBITAL CONGESTION</div>
+  ${[300,390,480].map(w=>`<div class="ring" style="width:${w}px;height:${w}px"></div>`).join('')}
+  <div class="planet"><b>THE BUSINESS</b></div>`+
+  FP.map((p,i)=>figHTML(i,`left:${p[0]}%;top:${p[1]}%;animation-delay:${i*.7}s;`)).join('');
+ const figs=[...f.querySelectorAll('.fig')];
+ await sleep(700);if(t!==token)return;
+ for(let k=0;k<8;k++){
+   const tm=CLAIMS[k].t;
+   figs.forEach(g=>g.classList.remove('talk'));figs[tm].classList.add('talk');
+   const o=document.createElement('div');o.className='orb';
+   o.style.setProperty('--r',(140+(k%3)*46)+'px');
+   o.style.setProperty('--a0',(k*47+10)+'deg');
+   o.style.setProperty('--dur',(24+k*3)+'s');
+   const d=document.createElement('div');d.className='claim'+(k===7?' alarm':'');d.dataset.k=k;
+   d.style.setProperty('--cc',TEAMS[tm].c);d.textContent=CLAIMS[k].txt;
+   o.appendChild(d);f.appendChild(o);
+   requestAnimationFrame(()=>o.classList.add('in'));
+   await sleep(820);if(t!==token)return;
+ }
+ figs.forEach(g=>g.classList.remove('talk'));
+ f.querySelector('.warn').classList.add('on');
+ await sleep(1500);if(t!==token)return;
+ finale(t,'“How’s my business performance?”');
+}
+
+/* ---------- govern → aligned topology with dotted guides ---------- */
+function topoHTML(){
+ const qs=COLS.map((c,i)=>`<div class="q fade" data-q="${i}" style="--order:${i};--cc:${colorK(c.ks[0])};animation-delay:${.35+i*.06}s"><div class="qq">${c.q}</div></div>`).join('');
+ const ms=COLS.map((c,i)=>`<div class="mcell" data-col="${i}" style="--order:${i}">${c.ks.map(k=>
+   `<div class="m ghost" data-slot="${k}" style="--cc:${colorK(k)}"><span>${MET[k][0]}</span><small>${MET[k][1]}</small><em>${TEAMS[teamK(k)].name}</em></div>`).join('')}</div>`).join('');
+ return `<svg class="links" id="links"></svg><div class="ttl">METRIC TOPOLOGY · GOVERNED</div>
+ <div class="mrow"><div class="lv fade"><b>LEVEL 1</b><span>Leading topic</span></div><div class="master fade"><span class="w">Business performance</span></div></div>
+ <div class="mrow"><div class="lv fade" style="animation-delay:.2s"><b>LEVEL 2</b><span>Business questions</span></div><div class="cols">${qs}</div></div>
+ <div class="mrow"><div class="lv fade" style="animation-delay:.4s"><b>LEVEL 3</b><span>Governed metrics</span></div><div class="cols">${ms}</div></div>`;
+}
+
+async function govern(t){
+ const f=$('#f'+cur),go=$('#go'),cap=$('#cap'),tp=$('#tp'),stage=$('#stage'),sh=$('#shards');
+ go.classList.remove('in');cap.classList.add('out');$('#fin').classList.remove('in');f.classList.remove('quiet');
+ const s=stage.getBoundingClientRect();const els=[];
+ f.querySelectorAll('.claim').forEach(el=>{const k=+el.dataset.k;const r=el.getBoundingClientRect();
+  const d=document.createElement('div');d.className='shard';d.dataset.k=k;
+  d.style.setProperty('--cc',colorK(k));d.textContent=CLAIMS[k].txt;
+  d.style.transform=`translate(${r.left-s.left}px,${r.top-s.top}px)`;
+  sh.appendChild(d);els.push(d);});
+ f.classList.add('gone');
+ await sleep(450);if(t!==token)return;
+ tp.innerHTML=topoHTML();tp.classList.add('in');
+ await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));if(t!==token)return;
+ els.forEach(d=>{const k=+d.dataset.k;
+  const slot=tp.querySelector(`[data-slot="${k}"]`);const r=slot.getBoundingClientRect();
+  d.classList.add('land');
+  d.style.width=r.width+'px';d.style.minHeight=r.height+'px';d.style.maxWidth='none';
+  d.style.transform=`translate(${r.left-s.left}px,${r.top-s.top}px)`;
+  setTimeout(()=>{d.innerHTML=slot.innerHTML;},550);});
+ await sleep(1250);if(t!==token)return;
+ tp.querySelectorAll('.m.ghost').forEach(m=>m.classList.remove('ghost'));
+ els.forEach(d=>d.style.opacity='0');
+ setTimeout(()=>{sh.innerHTML='';},450);
+ await sleep(300);if(t!==token)return;
+ drawGuides(tp);
+}
+
+function drawGuides(tp){
+ const svg=$('#links');if(!svg)return;
+ if(cur==='1' && innerWidth<=1100){svg.innerHTML='';return;}
+ const tr=tp.getBoundingClientRect();
+ svg.setAttribute('viewBox',`0 0 ${tr.width} ${tr.height}`);
+ const mrect=tp.querySelector('.master').getBoundingClientRect();
+ let html='';
+ COLS.forEach((c,i)=>{
+  const q=tp.querySelector(`[data-q="${i}"]`).getBoundingClientRect();
+  const m=tp.querySelector(`[data-col="${i}"]`).getBoundingClientRect();
+  const x=q.left-tr.left+q.width/2;const col=colorK(c.ks[0]);
+  // guide lines float free of the boxes — an 8px gap at each end
+  html+=`<path class="g0" d="M ${x} ${mrect.bottom-tr.top+8} L ${x} ${q.top-tr.top-8}"/>`;
+  html+=`<path class="g1" style="stroke:${col}" d="M ${x} ${q.bottom-tr.top+8} L ${x} ${m.top-tr.top-8}"/>`;
+  html+=`<circle cx="${x}" cy="${q.bottom-tr.top+8}" r="2.5" fill="${col}"/>`;
+  html+=`<circle cx="${x}" cy="${m.top-tr.top-8}" r="2.5" fill="${col}"/>`;
+ });
+ svg.innerHTML=html;
+ svg.querySelectorAll('path,circle').forEach((p,i)=>{p.style.opacity=0;
+  setTimeout(()=>{p.style.transition='opacity .5s';p.style.opacity=1;},i*50);});
+}
+addEventListener('resize',()=>{
+ if(cur==='1' && $('#tp').classList.contains('in'))requestAnimationFrame(()=>drawGuides($('#tp')));
+},{passive:true});
+/* Wide screens: center the 1180x700 canvas under the title and scale it to the viewport, without cropping. */
+function fitZoom(){
+ const fa=document.querySelector('.film-area');if(!fa)return;
+ if(!WIDE.matches){fa.style.transform='';fa.style.top='';return;}
+ const titleH=Math.min(120,Math.max(96,innerHeight*.11));
+ const z=Math.min(1.7,Math.max(.6,Math.min((innerWidth-48)/1180,(innerHeight-titleH-16)/700)));
+ fa.style.transform=`translateX(-50%) scale(${z})`;
+ fa.style.top=(titleH+Math.max(0,(innerHeight-titleH-700*z)/2))+'px';
+}
+addEventListener('resize',fitZoom,{passive:true});
+fitZoom();
+show('1');
+</script>
+
+
+</body></html>

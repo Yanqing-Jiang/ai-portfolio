@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Supreme Metric · three steps</title>
+<style>
+:root{--bg:#f5f5f7;--ink:#1d1d1f;--ink2:#6e6e73;--ink3:#86868b;--line:#d2d2d7;--line2:#e8e8ed;--blue:#0071e3;--green:#34c759;--okt:#248a3d;--red:#ff3b30;--sales:#34c759;--finance:#ff9500;
+ --sans:-apple-system,BlinkMacSystemFont,"SF Pro Display","SF Pro Text","Helvetica Neue",Helvetica,Arial,sans-serif;--ease:cubic-bezier(.2,.8,.2,1)}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased;letter-spacing:-.01em;user-select:none;-webkit-user-select:none}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+.stage{position:relative;width:1180px;height:700px;overflow:hidden;margin:0 auto}
+
+/* ---------- steps ---------- */
+.steps{position:absolute;top:28px;left:0;right:0;display:flex;justify-content:center;gap:16px}
+.step{display:flex;align-items:center;gap:12px;padding:9px 24px 9px 9px;border-radius:99px;background:#fff;border:1px solid var(--line2);color:var(--ink3);font-size:23px;letter-spacing:-.015em;font-weight:600;transition:.4s var(--ease);box-shadow:0 2px 8px rgba(0,0,0,.04)}
+.step i{width:38px;height:38px;border-radius:50%;background:var(--line2);color:var(--ink2);display:flex;align-items:center;justify-content:center;font-style:normal;font-size:17px;font-weight:700;transition:.4s}
+.step.on{color:var(--ink);border-color:var(--ink);box-shadow:0 8px 24px rgba(0,0,0,.08)}
+.step.on i{background:var(--ink);color:#fff}
+.step.done{color:var(--okt);border-color:rgba(52,199,89,.5)}
+.step.done i{background:var(--green);color:#fff}
+
+/* ---------- question + slots ---------- */
+.q{position:absolute;left:50%;top:128px;transform:translateX(-50%);background:#fff;border-radius:16px;padding:14px 30px;font-size:34px;font-weight:700;letter-spacing:-.025em;box-shadow:0 6px 20px rgba(0,0,0,.06);display:flex;align-items:center;gap:14px;opacity:0;animation:rise .6s .1s var(--ease) forwards}
+.q .chk{width:30px;height:30px;border-radius:50%;background:var(--green);color:#fff;display:none;align-items:center;justify-content:center;font-size:17px;font-weight:700}
+.q.ok .chk{display:flex}
+@keyframes rise{from{opacity:0;transform:translateX(-50%) translateY(14px)}to{opacity:1;transform:translateX(-50%)}}
+
+.slots{position:absolute;top:222px;left:50%;transform:translateX(-50%);display:flex;gap:60px}
+.slot{width:320px;height:170px;border:2px dashed #c7c7cc;border-radius:20px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;color:var(--ink3);position:relative;transition:.35s;background:rgba(255,255,255,.4)}
+.slot b{font-size:13px;letter-spacing:.18em;font-weight:700}
+.slot small{font-size:15px;color:var(--ink3);font-weight:500}
+.slot.no{border-color:var(--red);background:rgba(255,59,48,.08);animation:mad .3s linear 2}
+.slot.full{border-style:solid;border-color:var(--green);background:#fff;box-shadow:0 0 0 5px rgba(52,199,89,.14)}
+.slot.full>b,.slot.full>small{opacity:0}
+@keyframes mad{0%,100%{margin-left:0}25%{margin-left:-5px}75%{margin-left:5px}}
+.why{position:absolute;left:50%;top:14px;transform:translate(-50%,0) translateY(6px);background:#fff;border:1.5px solid var(--red);color:var(--red);border-radius:12px;padding:9px 14px;font-size:15px;font-weight:600;white-space:nowrap;opacity:0;transition:.3s;box-shadow:0 10px 30px rgba(0,0,0,.12)}
+.why.in{opacity:1;transform:translate(-50%,0)}
+.owner{position:absolute;left:50%;bottom:-48px;transform:translateX(-50%) translateY(8px);display:flex;align-items:center;gap:8px;font-size:15px;font-weight:600;color:var(--ink2);opacity:0;transition:.5s var(--ease)}
+.owner.in{opacity:1;transform:translateX(-50%)}
+.owner i{width:10px;height:10px;border-radius:50%;background:var(--c)}
+
+/* ---------- cards ---------- */
+.bench{position:absolute;left:50%;bottom:74px;transform:translateX(-50%);display:flex;gap:30px}
+.spot{width:270px;height:96px;border-radius:16px;border:1.5px dashed var(--line2)}
+.card{--c:#fff;position:absolute;left:0;top:0;width:270px;height:96px;background:#fff;border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,.04),0 12px 30px rgba(0,0,0,.1);display:flex;align-items:center;gap:14px;padding:0 16px;transition:transform .65s var(--ease),opacity .4s,filter .4s;will-change:transform;z-index:5}
+.card::before{content:"";position:absolute;left:0;top:16px;bottom:16px;width:3px;border-radius:3px;background:var(--c)}
+.card .hd{width:64px;height:48px;border-radius:15px;background:var(--c);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;flex:none;box-shadow:0 6px 14px rgba(0,0,0,.16);animation:bobble 2.4s ease-in-out infinite;transform-origin:50% 110%}
+.card .hd b{font-size:9.5px;letter-spacing:.04em;color:#fff}
+.card .hd i{display:flex;gap:6px}.card .hd i u{display:block;width:4px;height:4px;border-radius:50%;background:#fff}
+@keyframes bobble{0%,100%{transform:rotate(-4deg)}50%{transform:rotate(4deg)}}
+.card .nm{font-size:19px;font-weight:600;letter-spacing:-.015em;line-height:1.15}
+.card .ok{position:absolute;right:-10px;top:-10px;width:28px;height:28px;border-radius:50%;background:var(--green);color:#fff;font-size:15px;font-weight:700;display:none;align-items:center;justify-content:center;box-shadow:0 4px 10px rgba(0,0,0,.15)}
+.card.ok .ok{display:flex}
+.card.lift{z-index:20;box-shadow:0 26px 60px rgba(0,0,0,.2)}
+.card.shake{animation:mad .25s linear 3}
+.card.ctx{opacity:.45;filter:saturate(.2)}
+.card.ctx .hd{animation:none}
+.card .tag{position:absolute;right:-8px;top:-12px;transform:rotate(6deg);border:1.5px solid var(--red);color:var(--red);background:#fff;font-size:10px;letter-spacing:.16em;font-weight:700;padding:3px 8px;border-radius:6px;display:none}
+.card.ctx .tag{display:block}
+
+/* ---------- finale ---------- */
+.fin{display:none;position:absolute;left:0;right:0;bottom:22px;text-align:center;font-size:24px;font-weight:600;letter-spacing:-.02em;color:var(--okt);opacity:0;transform:translateY(8px);transition:.6s var(--ease)}
+.fin.in{opacity:1;transform:none}
+.replay{position:absolute;left:18px;bottom:16px;z-index:9;border:1px solid var(--line);background:rgba(255,255,255,.8);color:var(--ink);padding:6px 12px;border-radius:99px;font-size:12px;font-weight:500}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}.q{opacity:1}}
+</style>
+</head>
+<body>
+<div class="stage" id="stage">
+  <div class="steps">
+    <div class="step" data-s="1"><i>1</i>One score</div>
+    <div class="step" data-s="2"><i>2</i>One answer</div>
+    <div class="step" data-s="3"><i>3</i>One owner</div>
+  </div>
+
+  <div class="q" id="q">Are we growing? <span class="chk">✓</span></div>
+
+  <div class="slots">
+    <div class="slot" data-role="score"><b>SCORE</b><small>answers the question</small><div class="why"></div><div class="owner" style="--c:var(--sales)"><i></i>Owned by Sales</div></div>
+    <div class="slot" data-role="companion"><b>COMPANION</b><small>qualifies the score</small><div class="why"></div><div class="owner" style="--c:var(--sales)"><i></i>Owned by Sales</div></div>
+  </div>
+
+  <div class="bench">
+    <div class="spot" data-m="shipped"></div>
+    <div class="spot" data-m="sales"></div>
+    <div class="spot" data-m="share"></div>
+  </div>
+
+  <button class="replay" id="replay">↻ Replay</button>
+</div>
+
+<script>
+const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
+const RM=matchMedia('(prefers-reduced-motion: reduce)').matches;
+const stage=$('#stage');
+const CARDS={
+ shipped:{team:'FINANCE',c:'var(--finance)',nm:'Shipped revenue growth'},
+ sales:{team:'SALES',c:'var(--sales)',nm:'Sales growth'},
+ share:{team:'SALES',c:'var(--sales)',nm:'Market share growth'}
+};
+let run=0,cards={};
+const wait=ms=>new Promise(r=>setTimeout(r,RM?Math.min(ms,60):ms));
+const rect=el=>{const r=el.getBoundingClientRect(),s=stage.getBoundingClientRect();return {x:r.left-s.left,y:r.top-s.top,w:r.width,h:r.height};};
+function place(c,el){const r=rect(el);c.style.transform=`translate(${r.x+(r.w-c.offsetWidth)/2}px,${r.y+(r.h-c.offsetHeight)/2}px)`;}
+const slot=r=>$(`.slot[data-role="${r}"]`),spot=m=>$(`.spot[data-m="${m}"]`);
+function setStep(n){$$('.step').forEach(s=>{const k=+s.dataset.s;s.classList.toggle('on',k===n);s.classList.toggle('done',k<n);});}
+
+function build(){
+ Object.values(cards).forEach(c=>c.remove());cards={};
+ for(const id in CARDS){const d=CARDS[id],c=document.createElement('div');c.className='card';c.style.setProperty('--c',d.c);
+  c.innerHTML=`<span class="hd"><b>${d.team}</b><i><u></u><u></u></i></span><div class="nm">${d.nm}</div><span class="ok">✓</span><span class="tag">CONTEXT</span>`;
+  stage.appendChild(c);cards[id]=c;c.style.transition='none';place(c,spot(id));c.offsetHeight;c.style.transition='';}
+ $$('.slot').forEach(s=>{s.classList.remove('no','full');s.querySelector('.why').classList.remove('in');s.querySelector('.owner').classList.remove('in');});
+ $('#q').classList.remove('ok');setStep(0);
+}
+
+async function carry(id,role,t){const c=cards[id];c.classList.add('lift');place(c,slot(role));await wait(700);if(t!==run)return;c.classList.remove('lift');}
+
+async function play(){
+ const t=++run;build();
+ await wait(1000);if(t!==run)return;
+ setStep(1);
+ await wait(700);if(t!==run)return;
+ /* step 1a · the wrong number is refused */
+ await carry('shipped','score',t);if(t!==run)return;
+ const s1=slot('score'),why=s1.querySelector('.why');
+ s1.classList.add('no');cards.shipped.classList.add('shake');why.textContent='Shipments are not growth';why.classList.add('in');
+ await wait(700);if(t!==run)return;
+ s1.classList.remove('no');cards.shipped.classList.remove('shake');cards.shipped.classList.add('ctx');place(cards.shipped,spot('shipped'));
+ await wait(1600);if(t!==run)return;why.classList.remove('in');
+ /* step 1b · the score lands */
+ await carry('sales','score',t);if(t!==run)return;
+ s1.classList.add('full');cards.sales.classList.add('ok');
+ await wait(1400);if(t!==run)return;
+ /* step 2 · the companion lands */
+ setStep(2);await wait(600);if(t!==run)return;
+ await carry('share','companion',t);if(t!==run)return;
+ slot('companion').classList.add('full');cards.share.classList.add('ok');
+ await wait(1400);if(t!==run)return;
+ /* step 3 · owners sign */
+ setStep(3);await wait(500);if(t!==run)return;
+ s1.querySelector('.owner').classList.add('in');
+ await wait(450);if(t!==run)return;
+ slot('companion').querySelector('.owner').classList.add('in');
+ await wait(700);if(t!==run)return;
+ $('#q').classList.add('ok');$$('.step').forEach(s=>{s.classList.remove('on');s.classList.add('done');});
+
+}
+$('#replay').onclick=play;
+addEventListener('resize',()=>{for(const id in cards){const c=cards[id];const r=c.classList.contains('ok')?slot(id==='share'?'companion':'score'):spot(id);c.style.transition='none';place(c,r);c.offsetHeight;c.style.transition='';}});
+play();
+</script>
+</body>
+</html>

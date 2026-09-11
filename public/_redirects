@@ -1,2 +1,4 @@
+/supreme-metric    /supreme-metric/index.html   200
+/supreme-metric/*  /supreme-metric/:splat       200
 /project/*    /project/:splat/index.html   200
 /*            /index.html                  200

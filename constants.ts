@@ -6,6 +6,44 @@ export const PROJECT_DATA: ProjectYear[] = [
     subtitle: '(Generative UI & Agent Harness)',
     projects: [
       {
+        id: 'supreme-metric',
+        title: 'Supreme Metric',
+        description: `Supreme Metric is a spec and a linter for governed metric topology. Every business question gets exactly one metric that carries the verdict, the score. Every other number is a companion or a diagnostic. Owners, windows, benchmarks, and the pairs that must never be compared are written once, in YAML, in git, and a linter checks every number a report wants to show before it reaches the page.
+
+It never computes a number. It decides whether a number is allowed to speak.
+
+Built for the moment when eight true claims from four teams arrive from an AI assistant in one second, and nobody can answer "How's my business performance?" The registry is the standard; Databricks stays the semantic layer that computes; a coding agent can stand the whole thing up from the repo's AGENTS.md with a human approving owners and fingerprints.
+
+The landing page shows the problem and the answer as two short films. The repo is public under Apache-2.0.`,
+        cardDescription: 'One metric per question sits above the rest. A spec and linter that decides which number may answer a business question, with an owner behind it.',
+        technologies: ['Metric Governance', 'Semantic Layer', 'Azure Databricks', 'JSON Schema', 'Agent Runbook'],
+        systemInstruction: '',
+        defaultPrompts: [],
+        link: 'https://yanqing.app/supreme-metric',
+        linkText: 'Open the landing page',
+        coverUrl: '/supreme-metric/cover.png',
+        imageUrl: '/supreme-metric/cover.png',
+        ogImage: 'https://yanqing.app/supreme-metric/cover.png',
+        seoTitle: 'Supreme Metric — Governed Metric Topology for Business Questions | Yanqing Jiang',
+        seoDescription: 'A spec and linter that gives every business question one score metric, one owner, and a review before any number ships. Databricks stays the semantic layer; Supreme Metric governs the topology.',
+        seoKeywords: [
+          'metric governance',
+          'semantic layer',
+          'metric topology',
+          'Databricks metric views',
+          'Unity Catalog',
+          'data governance linter',
+          'business questions',
+        ],
+        datePublished: '2026-09-11',
+        serviceTags: ['Metric Governance', 'Semantic Layer', 'Data Leadership'],
+        statHighlights: [
+          'One score metric per business question, companions and diagnostics beside it',
+          'Linter with ten finding codes checks every claim before a report ships',
+          'Agent runbook stands it up on Azure Databricks with human-approved owners and fingerprints',
+        ],
+      },
+      {
         id: 'homer',
         title: 'Homer — Personal AI OS',
         description: `Homer is my personal AI operating system. It runs autonomously on a Mac Mini, manages a SQLite-backed memory layer, orchestrates five different CLI agents (Claude, Codex, Gemini, Kimi, OpenCode), and runs a launchd-based scheduler that handles dozens of recurring jobs.
