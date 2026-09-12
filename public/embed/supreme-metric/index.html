@@ -50,6 +50,7 @@ a:hover{text-decoration:underline}
 .chapter.dark .lede{color:var(--ink2-d)}
 .chapter.fill{min-height:100vh;display:flex;flex-direction:column;justify-content:center;padding:60px 0}
 #question{padding:0;min-height:0;display:block;background:var(--white);overflow:hidden}
+#question.dark-film{background:#07090D}
 #question .iframe-scaler{width:100%}
 #question .wide{max-width:none;padding:0}
 #question .stage-frame{background:transparent;border:0;border-radius:0;box-shadow:none}
@@ -133,7 +134,7 @@ a:hover{text-decoration:underline}
   <div class="wide">
     <div class="stage-frame" data-reveal="scale">
       <div class="iframe-scaler" data-height="700" data-reserve="0">
-        <iframe data-file="six-questions-apple.html" title="How’s my business performance?" loading="lazy"></iframe>
+        <iframe data-file="six-questions-apple.html" data-wide-file="walk-out.html" title="How’s my business performance?" loading="lazy"></iframe>
       </div>
     </div>
   </div>
@@ -198,10 +199,22 @@ a:hover{text-decoration:underline}
   const RM = matchMedia('(prefers-reduced-motion: reduce)').matches;
   const $$ = s => [...document.querySelectorAll(s)];
 
-  $$('iframe[data-file]').forEach(f => {
-    /* cache-bust the film documents so edits show on a plain reload */
-    f.src = (location.pathname.includes('/variants/') ? '../' : '') + f.dataset.file + '?v=' + Date.now();
-  });
+  /* The question film: the artifact's Walk-Out (dark, 1180x700 stage) on wide screens,
+     the responsive light layout on phones and tablets where that stage cannot read. */
+  const WIDE_FILM = matchMedia('(min-width:1101px)');
+  function loadFilms(){
+    $$('iframe[data-file]').forEach(f => {
+      let file = f.dataset.file;
+      if (f.dataset.wideFile) file = WIDE_FILM.matches ? f.dataset.wideFile : f.dataset.file;
+      if (f.dataset.loaded === file) return;
+      f.dataset.loaded = file;
+      /* cache-bust the film documents so edits show on a plain reload */
+      f.src = (location.pathname.includes('/variants/') ? '../' : '') + file + '?v=' + Date.now();
+    });
+    document.getElementById('question').classList.toggle('dark-film', WIDE_FILM.matches);
+  }
+  loadFilms();
+  WIDE_FILM.addEventListener('change', loadFilms);
 
   /* The question film lays out in its own viewport; the answer keeps its fixed canvas. */
   function scaleFrames(){

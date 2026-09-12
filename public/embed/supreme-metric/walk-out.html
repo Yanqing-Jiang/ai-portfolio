@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The Walk-Out</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Space+Mono:wght@700&family=Manrope:wght@600;800&display=swap">
+<style>
+/* The Walk-Out, copied from the Six Questions artifact (film 1 only). The 1180x700
+   stage is scaled to fit whatever viewport embeds it; nothing inside is restyled. */
+:root{--bg:#07090D;--bg2:#0E1218;--bg3:#141A22;--ink:#F2EFE8;--ink2:#A8A59C;--ink3:#5E5C55;--line:#222834;--hot:#FF4D2E;--cool:#7DE0C8}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:Manrope,system-ui,sans-serif;font-size:15px;-webkit-font-smoothing:antialiased;overflow:hidden}
+button{font:inherit;color:inherit;cursor:pointer}
+button:focus-visible{outline:2px solid var(--cool);outline-offset:2px}
+.canvas{position:absolute;left:50%;top:50%;width:1180px;height:700px;transform:translate(-50%,-50%)}
+.stage{position:relative;border:1px solid var(--line);border-radius:16px;background:var(--bg2);height:700px;overflow:hidden}
+.replay{position:absolute;left:18px;bottom:16px;z-index:9;border:1px solid var(--line);background:rgba(0,0,0,.35);color:var(--ink2);padding:6px 12px;border-radius:99px;font-size:12px;font-weight:800}
+/* the question and its call to action sit in the middle of the stage */
+.finale{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:6;display:flex;flex-direction:column;align-items:center;gap:24px;pointer-events:none}
+.finale .scrim{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:820px;height:440px;border-radius:50%;background:radial-gradient(closest-side,rgba(7,9,13,.95),rgba(7,9,13,.82) 46%,rgba(7,9,13,0));opacity:0;transition:opacity .5s;z-index:-1}
+.finale.in .scrim{opacity:1}
+.go{border:0;background:var(--cool);color:#07090D;font-weight:800;padding:14px 30px;border-radius:99px;font-size:15px;letter-spacing:.04em;opacity:0;pointer-events:none;transition:.4s;box-shadow:0 10px 30px rgba(125,224,200,.25)}
+.go.in{opacity:1;pointer-events:auto}
+.go:hover{transform:scale(1.04)}
+.cap{text-align:center;color:var(--cool);font-size:34px;line-height:1.15;font-style:italic;max-width:16ch;transition:.4s;font-family:"Instrument Serif",serif}
+.cap.out{opacity:0}
+/* claims step back so the question reads over them */
+#f1.quiet .claim{opacity:.4;filter:saturate(.6)}
+
+.film{position:absolute;inset:0;display:none;transition:opacity .6s}
+.film.on{display:block}
+.film.gone{opacity:0;pointer-events:none}
+
+/* ---------- bobblehead figurine ---------- */
+.fig{position:absolute;width:122px;height:172px;--c:#fff}
+.fig .torso{position:absolute;top:90px;left:50%;transform:translateX(-50%);width:38px;height:44px;background:var(--c);filter:brightness(.55);border-radius:12px}
+.fig .legs{position:absolute;top:130px;left:50%;transform:translateX(-50%);display:flex;gap:10px}
+.fig .legs span{display:block;width:9px;height:30px;background:var(--c);filter:brightness(.4);border-radius:4px;transform-origin:50% 4px}
+.fig.walk .legs span:nth-child(1){animation:step .38s linear infinite}
+.fig.walk .legs span:nth-child(2){animation:step .38s .19s linear infinite}
+@keyframes step{0%,100%{transform:rotate(20deg)}50%{transform:rotate(-20deg)}}
+.fig .head{position:absolute;left:50%;top:0;width:122px;height:92px;background:var(--c);border-radius:28px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;transform:translateX(-50%);transform-origin:50% 108%;animation:bobble 2.4s ease-in-out infinite;box-shadow:0 6px 18px rgba(0,0,0,.45);z-index:2}
+@keyframes bobble{0%,100%{transform:translateX(-50%) rotate(-3.5deg)}50%{transform:translateX(-50%) rotate(3.5deg)}}
+.fig .nm{font:800 18px Manrope;letter-spacing:.03em;color:#0B0D11;text-align:center;line-height:1.08;padding:0 10px}
+.fig .face{display:flex;align-items:center;gap:9px}
+.fig .face i{width:7px;height:7px;border-radius:50%;background:#0B0D11}
+.fig.talk .head{animation-duration:.5s;filter:brightness(1.12)}
+
+/* ---------- claims ---------- */
+.claim{position:absolute;--cc:#fff;font-family:"Instrument Serif",serif;font-size:21px;line-height:1.18;padding:10px 16px;border-radius:14px;background:var(--bg3);border:1px solid var(--cc);color:var(--cc);width:max-content;max-width:22ch;text-align:center;opacity:0;transform:translateX(-50%) rotate(var(--rot,0deg)) scale(.55);transition:.34s cubic-bezier(.2,.9,.3,1.35);z-index:5}
+.claim.in{opacity:1;transform:translateX(-50%) rotate(var(--rot,0deg)) scale(1)}
+.claim.alarm{box-shadow:0 0 0 2px rgba(255,77,46,.4),0 14px 34px rgba(255,77,46,.22)}
+@keyframes mad{0%,100%{margin-left:0}25%{margin-left:-4px}75%{margin-left:4px}}
+
+/* ---------- film 1 · the walk-out ---------- */
+#f1 .glow{position:absolute;left:50%;top:47%;transform:translate(-50%,-50%);width:640px;height:420px;background:radial-gradient(closest-side,rgba(125,224,200,.06),transparent);pointer-events:none}
+#f1.mad .claim{animation:mad .3s linear infinite}
+
+/* ---------- shards (claims in flight) ---------- */
+.shard{position:absolute;left:0;top:0;--cc:#fff;font-family:"Instrument Serif",serif;font-size:19px;line-height:1.2;padding:9px 14px;border-radius:12px;background:var(--bg3);border:1px solid var(--cc);color:var(--cc);width:max-content;max-width:24ch;transition:transform 1s cubic-bezier(.25,.8,.25,1),width 1s,min-height 1s,opacity .45s,font-size .8s,padding .8s;will-change:transform;z-index:8}
+.shard.land{font-family:Manrope;font-size:11px;font-weight:800;padding:8px 9px;text-align:left;line-height:1.25;border-radius:8px;color:var(--ink)}
+.shard.land small{display:block;font:600 9px Manrope;color:var(--ink2);letter-spacing:.04em;margin-top:2px}
+.shard.land em{display:block;font:800 9px Manrope;font-style:normal;color:var(--cc);letter-spacing:.1em;margin-top:3px}
+
+/* ---------- governed topology ---------- */
+.topo{position:absolute;inset:0;z-index:7;display:none;background:var(--bg2);padding:26px 32px 22px;flex-direction:column;justify-content:center}
+.topo.in{display:flex}
+svg.links{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;fill:none}
+.links .g0{stroke:var(--line);stroke-width:1.5;stroke-dasharray:2 7;stroke-linecap:round}
+.links .g1{stroke-width:1.8;stroke-dasharray:2 7;stroke-linecap:round;animation:march 1.4s linear infinite}
+@keyframes march{to{stroke-dashoffset:-18}}
+.topo .ttl{position:absolute;right:32px;top:20px;font:800 10px Manrope;letter-spacing:.18em;color:var(--ink3)}
+.topo .mrow{display:grid;grid-template-columns:112px 1fr;gap:16px;position:relative}
+.topo .mrow+.mrow{margin-top:52px}
+.topo .lv{display:flex;flex-direction:column;justify-content:center;gap:2px}
+.topo .lv b{font:800 10px Manrope;letter-spacing:.18em;color:var(--cool)}
+.topo .lv span{font:400 15px "Instrument Serif",serif;color:var(--ink2);line-height:1.1}
+.topo .master{background:var(--bg3);border:1px solid var(--cool);border-radius:12px;padding:16px 26px;display:flex;align-items:center;gap:22px;box-shadow:0 0 0 6px rgba(125,224,200,.06)}
+.topo .master .w{font:400 42px "Instrument Serif",serif;line-height:1}
+.topo .master .o{margin-left:auto;font:800 11px Manrope;letter-spacing:.16em;color:var(--cool);white-space:nowrap}
+.topo .cols{display:grid;grid-template-columns:repeat(7,1fr);gap:10px}
+.topo .q{--cc:#fff;background:var(--bg3);border:1px solid var(--line);border-top:2px solid var(--cc);border-radius:10px;padding:10px 11px;min-height:78px;display:flex;align-items:flex-start}
+.topo .qq{font:400 16px "Instrument Serif",serif;line-height:1.16;text-wrap:balance}
+.topo .mcell{display:flex;flex-direction:column;gap:8px}
+.topo .m{--cc:#fff;position:relative;background:var(--bg3);border:1px solid var(--cc);border-radius:8px;padding:8px 9px;font-size:10.5px;font-weight:800;display:flex;flex-direction:column;gap:2px;min-height:60px;line-height:1.25}
+.topo .m small{font:600 9px Manrope;color:var(--ink2);letter-spacing:.04em}
+.topo .m em{font:800 9px Manrope;font-style:normal;color:var(--cc);letter-spacing:.1em;margin-top:2px}
+.topo .m.ghost{visibility:hidden}
+.topo .fade{opacity:0;animation:rise .55s forwards}
+@keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}.claim{opacity:1}}
+</style>
+</head>
+<body>
+
+<div class="canvas" id="canvas">
+  <div class="stage" id="stage">
+    <button class="replay" id="replay">↻ Replay</button>
+    <div class="film" id="f1"></div>
+    <div id="shards"></div>
+    <div class="finale" id="fin"><div class="scrim"></div>
+      <div class="cap" id="cap"></div>
+      <button class="go" id="go">Govern the metrics</button>
+    </div>
+    <div class="topo" id="tp"></div>
+  </div>
+</div>
+
+<script>
+const $=s=>document.querySelector(s);const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+let token=0;
+
+const TEAMS=[
+ {name:'SALES',c:'#B8F27D'},
+ {name:'FINANCE',c:'#F5C542'},
+ {name:'MARKETING',c:'#8AB4FF'},
+ {name:'LOGISTICS',c:'#FF4D2E'},
+];
+// claim k belongs to team t; k = team*2 + j
+const CLAIMS=[
+ {t:0,txt:'Sales are up 14%.'},
+ {t:0,txt:'Share is up 1.8 pts.'},
+ {t:1,txt:'Margin is flat.'},
+ {t:1,txt:'Forecast says a softer Q4.'},
+ {t:2,txt:'Impression share is 5.4 pts down.'},
+ {t:2,txt:'New shoppers are up.'},
+ {t:3,txt:'Inventory is piling up.'},
+ {t:3,txt:'Shipped items are blocked.'},
+];
+// governed metrics: 0–7 are what the spoken claims become; 8–13 are the
+// sibling metrics added under governance so every question has at least two.
+// [name, sub, owning team]
+const MET=[
+ ['Net sales — consumption','P4W · FYTD',0],
+ ['Market share','panel · P4W',0],
+ ['Contribution margin','P4W · mix-adjusted',1],
+ ['Sales forecast vs. target','next quarter',1],
+ ['Search impression share','generic queries · P4W',2],
+ ['New-to-brand customers','P4W',2],
+ ['Inventory weeks of cover','point in time',3],
+ ['Shipped units — fill rate','this week',3],
+ ['Net sales — shipped','units × ASP',1],
+ ['Share of category growth','panel · P13W',2],
+ ['Cost to serve','per unit',3],
+ ['Open order backlog','vs. last quarter',0],
+ ['Search click share','generic queries · P4W',2],
+ ['New shopper rate','of category shoppers',0],
+];
+// one column per business question; ks = metric ids in it (claims land, siblings reveal)
+const COLS=[
+ {q:'Are we growing?',ks:[0,8]},
+ {q:'Are we winning?',ks:[1,9]},
+ {q:'Are we growing profitably?',ks:[2,10]},
+ {q:'Will it hold next quarter?',ks:[3,11]},
+ {q:'Are we capturing search demand?',ks:[4,12]},
+ {q:'Are we recruiting customers?',ks:[5,13]},
+ {q:'Can we serve the demand?',ks:[6,7]},
+];
+const teamK=k=>k<CLAIMS.length?CLAIMS[k].t:MET[k][2];
+const colorK=k=>TEAMS[teamK(k)].c;
+
+function figHTML(i,style){const tm=TEAMS[i];
+ return `<div class="fig" data-t="${i}" style="--c:${tm.c};${style}">
+  <div class="torso"></div>
+  <div class="legs"><span></span><span></span></div>
+  <div class="head"><span class="nm">${tm.name}</span><span class="face"><i></i><i></i></span></div>
+ </div>`;}
+
+function pop(f,k,styles,alarm){const c=CLAIMS[k];const d=document.createElement('div');
+ d.className='claim'+(alarm?' alarm':'');d.dataset.k=k;d.style.setProperty('--cc',TEAMS[c.t].c);
+ d.textContent=c.txt;
+ for(const key in styles){key.startsWith('--')?d.style.setProperty(key,styles[key]):d.style[key]=styles[key];}
+ f.appendChild(d);
+ requestAnimationFrame(()=>requestAnimationFrame(()=>d.classList.add('in')));
+ return d;}
+
+function finale(t,text){if(t!==token)return;
+ $('#cap').textContent=text;$('#cap').classList.remove('out');
+ $('#fin').classList.add('in');$('#f1').classList.add('quiet');
+ const go=$('#go');go.classList.add('in');
+ go.onclick=()=>{if(t!==token)return;go.onclick=null;govern(t);};}
+
+/* ---------- show / reset ---------- */
+function show(){
+ token++;const t=token;
+ const f=$('#f1');f.classList.remove('on','gone','mad','quiet');f.innerHTML='';
+ $('#tp').classList.remove('in');$('#tp').innerHTML='';
+ $('#fin').classList.remove('in');
+ $('#go').classList.remove('in');$('#go').onclick=null;$('#shards').innerHTML='';
+ $('#cap').textContent='';$('#cap').classList.remove('out');
+ f.classList.add('on');
+ play1(t);
+}
+$('#replay').onclick=()=>show();
+
+/* ---------- film 1 · the walk-out (four corners) ---------- */
+const CORN=[
+ {x:'5%',y:'82px',from:'-200px'},
+ {x:'calc(95% - 122px)',y:'82px',from:'calc(100% + 80px)'},
+ {x:'5%',y:'462px',from:'-200px'},
+ {x:'calc(95% - 122px)',y:'462px',from:'calc(100% + 80px)'},
+];
+const CPOS=[
+ ['31%','156px',0],['34%','236px',-3],
+ ['69%','156px',0],['66%','236px',3],
+ ['31%','424px',0],['34%','504px',-3],
+ ['69%','424px',0],['66%','504px',2],
+];
+async function play1(t){
+ const f=$('#f1');
+ f.innerHTML='<div class="glow"></div>'+CORN.map((c,i)=>figHTML(i,`left:${c.from};top:${c.y};`)).join('');
+ const figs=[...f.querySelectorAll('.fig')];
+ await sleep(400);if(t!==token)return;
+ for(let i=0;i<4;i++){
+  const el=figs[i];el.classList.add('walk');
+  el.style.transition='left 1.25s linear';el.style.left=CORN[i].x;
+  await sleep(1250);if(t!==token)return;
+  el.classList.remove('walk');el.classList.add('talk');
+  for(const j of [0,1]){const k=i*2+j;const p=CPOS[k];
+   pop(f,k,{left:p[0],top:p[1],'--rot':p[2]+'deg'},k===7);
+   await sleep(680);if(t!==token)return;}
+  el.classList.remove('talk');
+  await sleep(220);if(t!==token)return;
+ }
+ f.classList.add('mad');await sleep(1200);if(t!==token)return;f.classList.remove('mad');
+ finale(t,'“How’s my business performance?”');
+}
+
+/* ---------- govern → aligned topology with dotted guides ---------- */
+function topoHTML(){
+ const qs=COLS.map((c,i)=>`<div class="q fade" data-q="${i}" style="--cc:${colorK(c.ks[0])};animation-delay:${.35+i*.06}s"><div class="qq">${c.q}</div></div>`).join('');
+ const ms=COLS.map((c,i)=>`<div class="mcell" data-col="${i}">${c.ks.map(k=>
+   `<div class="m ghost" data-slot="${k}" style="--cc:${colorK(k)}"><span>${MET[k][0]}</span><small>${MET[k][1]}</small><em>${TEAMS[teamK(k)].name}</em></div>`).join('')}</div>`).join('');
+ return `<svg class="links" id="links"></svg><div class="ttl">METRIC TOPOLOGY · GOVERNED</div>
+ <div class="mrow"><div class="lv fade"><b>LEVEL 1</b><span>Leading topic</span></div><div class="master fade"><span class="w">Business performance</span></div></div>
+ <div class="mrow"><div class="lv fade" style="animation-delay:.2s"><b>LEVEL 2</b><span>Business questions</span></div><div class="cols">${qs}</div></div>
+ <div class="mrow"><div class="lv fade" style="animation-delay:.4s"><b>LEVEL 3</b><span>Governed metrics</span></div><div class="cols">${ms}</div></div>`;
+}
+
+/* The stage is scaled with a CSS transform, so screen rects are divided by the
+   current scale to land shards in stage coordinates. */
+function scaleNow(){return $('#stage').getBoundingClientRect().width/1180;}
+
+async function govern(t){
+ const f=$('#f1'),go=$('#go'),cap=$('#cap'),tp=$('#tp'),stage=$('#stage'),sh=$('#shards');
+ go.classList.remove('in');cap.classList.add('out');$('#fin').classList.remove('in');f.classList.remove('quiet');
+ const s=stage.getBoundingClientRect();const z=scaleNow();const els=[];
+ f.querySelectorAll('.claim').forEach(el=>{const k=+el.dataset.k;const r=el.getBoundingClientRect();
+  const d=document.createElement('div');d.className='shard';d.dataset.k=k;
+  d.style.setProperty('--cc',colorK(k));d.textContent=CLAIMS[k].txt;
+  d.style.transform=`translate(${(r.left-s.left)/z}px,${(r.top-s.top)/z}px)`;
+  sh.appendChild(d);els.push(d);});
+ f.classList.add('gone');
+ await sleep(450);if(t!==token)return;
+ tp.innerHTML=topoHTML();tp.classList.add('in');
+ await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));if(t!==token)return;
+ els.forEach(d=>{const k=+d.dataset.k;
+  const slot=tp.querySelector(`[data-slot="${k}"]`);const r=slot.getBoundingClientRect();
+  d.classList.add('land');
+  d.style.width=r.width/z+'px';d.style.minHeight=r.height/z+'px';d.style.maxWidth='none';
+  d.style.transform=`translate(${(r.left-s.left)/z}px,${(r.top-s.top)/z}px)`;
+  setTimeout(()=>{d.innerHTML=slot.innerHTML;},550);});
+ await sleep(1250);if(t!==token)return;
+ tp.querySelectorAll('.m.ghost').forEach(m=>m.classList.remove('ghost'));
+ els.forEach(d=>d.style.opacity='0');
+ setTimeout(()=>{sh.innerHTML='';},450);
+ await sleep(300);if(t!==token)return;
+ drawGuides(tp);
+}
+
+function drawGuides(tp){
+ const svg=$('#links');if(!svg)return;
+ const z=scaleNow();
+ const tr=tp.getBoundingClientRect();
+ svg.setAttribute('viewBox',`0 0 ${tr.width/z} ${tr.height/z}`);
+ const mrect=tp.querySelector('.master').getBoundingClientRect();
+ let html='';
+ COLS.forEach((c,i)=>{
+  const q=tp.querySelector(`[data-q="${i}"]`).getBoundingClientRect();
+  const m=tp.querySelector(`[data-col="${i}"]`).getBoundingClientRect();
+  const x=(q.left-tr.left+q.width/2)/z;const col=colorK(c.ks[0]);
+  // guide lines float free of the boxes — an 8px gap at each end
+  html+=`<path class="g0" d="M ${x} ${(mrect.bottom-tr.top)/z+8} L ${x} ${(q.top-tr.top)/z-8}"/>`;
+  html+=`<path class="g1" style="stroke:${col}" d="M ${x} ${(q.bottom-tr.top)/z+8} L ${x} ${(m.top-tr.top)/z-8}"/>`;
+  html+=`<circle cx="${x}" cy="${(q.bottom-tr.top)/z+8}" r="2.5" fill="${col}"/>`;
+  html+=`<circle cx="${x}" cy="${(m.top-tr.top)/z-8}" r="2.5" fill="${col}"/>`;
+ });
+ svg.innerHTML=html;
+ svg.querySelectorAll('path,circle').forEach((p,i)=>{p.style.opacity=0;
+  setTimeout(()=>{p.style.transition='opacity .5s';p.style.opacity=1;},i*50);});
+}
+
+/* Fit the 1180x700 stage to the embedding viewport. */
+function fit(){
+ const z=Math.min(innerWidth/1180,innerHeight/700)*0.97;
+ $('#canvas').style.transform=`translate(-50%,-50%) scale(${z})`;
+}
+addEventListener('resize',fit,{passive:true});
+fit();
+show();
+</script>
+</body>
+</html>
