@@ -15,6 +15,7 @@ export const getRoutes = (): string[] => [
   '/',
   '/consult',
   '/homer',
+  '/supreme-metric',
   ...PROJECT_DATA.flatMap((year) => year.projects.map((project) => `/project/${project.id}`)),
   '/blog',
   ...allPosts.map((post) => `/blog/${post.slug}`),
@@ -62,6 +63,12 @@ export const getSitemapEntries = (): { pages: SitemapUrl[]; projects: SitemapUrl
       lastModified: toIsoDate('2026-07-06T00:00:00Z'),
       changefreq: 'monthly',
       priority: 0.92,
+    },
+    {
+      loc: `${SITE_BASE_URL}/supreme-metric`,
+      lastModified: toIsoDate('2026-09-11T00:00:00Z'),
+      changefreq: 'monthly',
+      priority: 0.9,
     },
     {
       loc: `${SITE_BASE_URL}/blog`,

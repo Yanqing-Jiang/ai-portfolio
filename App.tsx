@@ -28,6 +28,7 @@ import { MeetPage } from './components/consulting/MeetPage';
 import BlogIndexPage from './components/blog/BlogIndexPage';
 import BlogPostPage from './components/blog/BlogPostPage';
 import HomerLitePage from './components/homer-lite/HomerLitePage';
+import SupremeMetricPage from './components/SupremeMetricPage';
 
 import { PROJECT_DATA } from './constants';
 import type { Project } from './types';
@@ -296,6 +297,8 @@ const Layout: React.FC = () => {
 
             {/* Homer Lite case study (target: 2026-05-16) */}
             <Route path="/homer" element={<HomerLitePage />} />
+            {/* Supreme Metric landing page, framed inside the shell so the menu stays on top */}
+            <Route path="/supreme-metric" element={<SupremeMetricPage />} />
 
             <Route path="/auth/callback" element={<AuthCallback />} />
           </Routes>
