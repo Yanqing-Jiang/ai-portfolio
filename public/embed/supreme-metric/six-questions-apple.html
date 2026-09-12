@@ -218,6 +218,13 @@ svg.links{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;f
  .stage:has(#f1.on) .topo .m:nth-child(1){grid-column:1}
  .stage:has(#f1.on) .topo .m:nth-child(2){grid-column:2}
 }
+/* Mid-size windows: heading at the top, animated button and halo in the middle. */
+@media (min-width:501px) and (max-width:1100px){
+ .stage:has(#f1.on) .finale{inset:0;width:auto;transform:none;display:grid;place-items:center;gap:0}
+ .stage:has(#f1.on) .qtop{position:absolute;left:18px;right:18px;top:clamp(12px,3vh,28px)}
+ .stage:has(#f1.on) .scrim,#f1 .glow{opacity:0}
+ .stage:has(#f1.on) .finale.in .scrim,#f1.quiet .glow{opacity:1}
+}
 @media (min-width:601px) and (max-width:1100px){
  .stage:has(#f1.on) .topo{grid-template-columns:repeat(3,minmax(0,1fr))}
  .stage:has(#f1.on) .topo .mrow:last-child .lv{grid-column:2/-1}
