@@ -9,6 +9,7 @@ import { authService, type AuthState } from '../services/auth';
 import { AuthModal } from './AuthModal';
 import { allPosts, formatPostDateShort } from '../lib/blog/mdx';
 import type { BlogPost } from '../lib/blog/mdx';
+import { isFullPageLink } from '../lib/utils';
 
 interface SidebarV2Props {
     projectData: ProjectYear[];
@@ -268,6 +269,7 @@ const SidebarV2: React.FC<SidebarV2Props> = ({
                                                                     >
                                                                         <Link
                                                                             to={project.link ?? `/project/${project.id}`}
+                                                                            reloadDocument={isFullPageLink(project.link)}
                                                                             onClick={() => handleProjectClick(project)}
                                                                             onMouseEnter={() => setHoveredProject(project)}
                                                                             onMouseLeave={() => setHoveredProject(null)}

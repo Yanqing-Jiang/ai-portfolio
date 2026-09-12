@@ -14,6 +14,7 @@ import {
     SITE_NAME,
 } from '../constants/seo';
 import { buildLandingSchemas, buildPersonSchema } from '../constants/structuredData';
+import { isFullPageLink } from '../lib/utils';
 
 /*
  * Landing refactor Phase 1 — the commercial front door.
@@ -505,6 +506,7 @@ const ProjectCard: React.FC<{
                 </p>
                 <Link
                     to={to}
+                    reloadDocument={isFullPageLink(to)}
                     onClick={() => onSelect(project)}
                     className={`mt-3 inline-flex items-center gap-2 text-[13px] font-semibold text-[#A8A096] transition-colors group-hover:text-[#F1EADF] ${litText}`}
                 >
@@ -583,6 +585,7 @@ const WorkRow: React.FC<{
                     desktop 44% column — no gigantic full-bleed covers at tablet widths. */}
                 <Link
                     to={to}
+                    reloadDocument={isFullPageLink(to)}
                     onClick={() => onSelect(project)}
                     aria-label={`View ${project.title}`}
                     className={`block w-full max-w-[600px] shrink-0 overflow-hidden rounded-[6px] border border-[#37332E] transition-[transform,border-color,box-shadow] duration-300 ease-out group-hover:-translate-y-1 group-hover:border-[#F04A32]/60 group-hover:shadow-[0_16px_40px_rgba(0,0,0,0.35)] lg:w-[44%] lg:max-w-none ${litMedia}`}
@@ -604,6 +607,7 @@ const WorkRow: React.FC<{
                     </p>
                     <Link
                         to={to}
+                        reloadDocument={isFullPageLink(to)}
                         onClick={() => onSelect(project)}
                         className={`mt-3 inline-flex items-center gap-2 text-[13px] font-semibold text-[#A8A096] transition-colors group-hover:text-[#F1EADF] ${litText} ${
                             right ? 'lg:flex-row-reverse' : ''

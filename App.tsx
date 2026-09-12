@@ -35,6 +35,7 @@ import { supabase } from './services/auth';
 import { fortuneIntakeRoute, fortuneResultRoute } from './lib/fortuneRoutes';
 // @ts-ignore
 import { HelmetProvider } from 'react-helmet-async';
+import { isFullPageLink } from './lib/utils';
 
 
 // Function: findProject - called from ProjectRoute and Layout to resolve a Project by id; forwards the Project into ProjectView for rendering and into SidebarV2 for active highlighting; exists to centralize project lookup for routing.
@@ -205,6 +206,10 @@ const Layout: React.FC = () => {
   // Honors `project.link` override so a project (e.g. Homer) can route to a custom path like `/homer`.
   const goProject = (p: Project) => {
     const targetPath = p.link ?? `/project/${p.id}`;
+    if (isFullPageLink(targetPath)) {
+      window.location.assign(targetPath); // static or external page: leave the SPA
+      return;
+    }
     const isCurrent = location.pathname === targetPath;
     setActiveProject(findProject(p.id) ?? p);
 
