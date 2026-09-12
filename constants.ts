@@ -15,12 +15,12 @@ It never computes a number. It decides whether a number is allowed to speak.
 Built for the moment when eight true claims from four teams arrive from an AI assistant in one second, and nobody can answer "How's my business performance?" The registry is the standard; Databricks stays the semantic layer that computes; a coding agent can stand the whole thing up from the repo's AGENTS.md with a human approving owners and fingerprints.
 
 The landing page shows the problem and the answer as two short films. The repo is public under Apache-2.0.`,
-        cardDescription: 'One metric per question sits above the rest. A spec and linter that decides which number may answer a business question, with an owner behind it.',
-        technologies: ['Metric Governance', 'Semantic Layer', 'Azure Databricks', 'JSON Schema', 'Agent Runbook'],
+        cardDescription: 'Content management for AI-native companies, with a standard and an owner behind every metric.',
+        technologies: ['Metric Governance', 'Semantic Layer', 'LLM Topology', 'JSON Schema', 'Agent Runbook'],
         systemInstruction: '',
         defaultPrompts: [],
         link: '/supreme-metric',
-        linkText: 'Open the landing page',
+        linkText: 'Try Supreme Metric',
         coverUrl: '/embed/supreme-metric/cover.png',
         imageUrl: '/embed/supreme-metric/cover.png',
         ogImage: 'https://yanqing.app/embed/supreme-metric/cover.png',
