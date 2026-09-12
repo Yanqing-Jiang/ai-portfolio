@@ -170,7 +170,10 @@ svg.links{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;f
  .stage:has(#f1.on) .film-area{display:block;position:absolute;left:50%;top:0;width:1180px;height:700px;transform-origin:50% 0;transform:translateX(-50%)}
  .stage:has(#f1.on) #f1{left:0;right:0}
  #f1 .claim{font-size:22px;line-height:1.15;padding:9px 16px;max-width:22ch;border:1px solid var(--line2);border-left:4px solid var(--cc)}
- #f1.quiet .claim{opacity:.4}
+ /* Claims stay fully legible when the call to action appears: no dimming, no scrim. */
+ #f1.quiet .claim{opacity:1;filter:none}
+ .stage:has(#f1.on) .finale{top:auto;bottom:14px;transform:translateX(-50%);gap:0}
+ .stage:has(#f1.on) .scrim{display:none}
  .stage:has(#f1.on) .go{font-size:20px;padding:16px 38px;font-weight:600;letter-spacing:-.01em}
  .stage:has(#f1.on) .go:hover{transform:scale(1.04);background:#0077ed}
 }
@@ -379,17 +382,19 @@ $('#replay').onclick=()=>show(cur);
 /* ---------- film 1 · the walk-out (four corners) ---------- */
 const WIDE=matchMedia('(min-width:1101px)');
 /* Wide: the artifact's 1180x700 Walk-Out geometry — figures in the corners, two claims beside each. */
+/* Rows sit 20px inboard of the artifact's positions: with the call to action at the
+   bottom instead of a central caption, the composition balances around the middle. */
 const CORN_W=[
- {x:'5%',y:'82px',from:'-200px'},
- {x:'calc(95% - 122px)',y:'82px',from:'calc(100% + 80px)'},
- {x:'5%',y:'462px',from:'-200px'},
- {x:'calc(95% - 122px)',y:'462px',from:'calc(100% + 80px)'},
+ {x:'5%',y:'102px',from:'-200px'},
+ {x:'calc(95% - 122px)',y:'102px',from:'calc(100% + 80px)'},
+ {x:'5%',y:'442px',from:'-200px'},
+ {x:'calc(95% - 122px)',y:'442px',from:'calc(100% + 80px)'},
 ];
 const CPOS_W=[
- ['31%','156px',0],['34%','236px',-3],
- ['69%','156px',0],['66%','236px',3],
- ['31%','424px',0],['34%','504px',-3],
- ['69%','424px',0],['66%','504px',2],
+ ['31%','176px',0],['34%','256px',-3],
+ ['69%','176px',0],['66%','256px',3],
+ ['31%','404px',0],['34%','484px',-3],
+ ['69%','404px',0],['66%','484px',2],
 ];
 /* Narrow: responsive positions from the CSS custom properties on #f1. */
 const CORN_N=[
