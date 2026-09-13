@@ -18,7 +18,7 @@ const SupremeMetricPage: React.FC = () => (
       <title>{TITLE}</title>
       <meta name="description" content={DESCRIPTION} />
       <link rel="canonical" href={PAGE_URL} />
-      <meta property="og:title" content="Supreme Metric — One metric per question sits above the rest" />
+      <meta property="og:title" content="Supreme Metric — Metric governance for AI agents" />
       <meta property="og:description" content={DESCRIPTION} />
       <meta property="og:type" content="website" />
       <meta property="og:url" content={PAGE_URL} />
